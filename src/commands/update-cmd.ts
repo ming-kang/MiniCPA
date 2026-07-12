@@ -13,8 +13,10 @@ export async function runUpdateCheck(opts: { home?: string }): Promise<void> {
     }`,
   );
 
+  let panelUpToDate = true;
   try {
     const panel = await checkPanelUpdate(ctx.home);
+    panelUpToDate = panel.upToDate;
     console.log(
       `Panel       current=${panel.current ?? "-"}  latest=${panel.latest}  ${
         panel.upToDate ? "up-to-date" : "update available"
@@ -23,6 +25,8 @@ export async function runUpdateCheck(opts: { home?: string }): Promise<void> {
   } catch (err) {
     console.log(`Panel       skipped (${(err as Error).message})`);
   }
+
+  process.exitCode = binary.upToDate && panelUpToDate ? 0 : 1;
 }
 
 export async function runUpdate(opts: {
@@ -32,28 +36,45 @@ export async function runUpdate(opts: {
   /** Binary only (skip panel). Default is binary + panel. */
   binaryOnly?: boolean;
   version?: string;
+  /** Re-download even if already latest. */
   force?: boolean;
 }): Promise<void> {
   const ctx = createContext(opts);
   printHome(ctx);
 
+  if (opts.panelOnly && opts.binaryOnly) {
+    throw new Error("Use only one of --panel or --binary");
+  }
+
   if (opts.panelOnly) {
-    const result = await updatePanel(ctx.home);
-    console.log(`Panel updated to ${result.version}`);
+    const result = await updatePanel(ctx.home, { force: opts.force });
+    console.log(
+      result.skipped
+        ? `Panel already ${result.version} (use --force to reinstall)`
+        : `Panel updated to ${result.version}`,
+    );
     return;
   }
 
-  // Default: replace binary + panel (full update).
+  // Default: replace binary + panel. Running CPA is stopped/restarted automatically.
   const binary = await updateBinary(ctx.home, { version: opts.version, force: opts.force });
-  console.log(
-    `CPA updated to ${binary.version}${binary.restarted ? " (restarted)" : ""}`,
-  );
+  if (binary.skipped) {
+    console.log(`CPA already ${binary.version} (use --force to reinstall)`);
+  } else {
+    console.log(
+      `CPA updated to ${binary.version}${binary.restarted ? " (restarted)" : ""}`,
+    );
+  }
 
   if (opts.binaryOnly) {
-    console.log("Panel skipped (--binary). Use default update or --panel for the UI.");
+    console.log("Panel skipped (--binary).");
     return;
   }
 
-  const panel = await updatePanel(ctx.home);
-  console.log(`Panel updated to ${panel.version}`);
+  const panel = await updatePanel(ctx.home, { force: opts.force });
+  console.log(
+    panel.skipped
+      ? `Panel already ${panel.version} (use --force to reinstall)`
+      : `Panel updated to ${panel.version}`,
+  );
 }

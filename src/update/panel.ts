@@ -11,6 +11,12 @@ import {
   repoFromPanelUrl,
 } from "./github.js";
 
+export type PanelUpdateResult = {
+  version: string;
+  changed: boolean;
+  skipped: boolean;
+};
+
 export async function checkPanelUpdate(home: string): Promise<{
   current?: string;
   latest: string;
@@ -30,12 +36,21 @@ export async function checkPanelUpdate(home: string): Promise<{
   };
 }
 
-export async function updatePanel(home: string): Promise<{ version: string }> {
+/** Replace management.html. Skips when already latest unless force. */
+export async function updatePanel(
+  home: string,
+  options?: { force?: boolean },
+): Promise<PanelUpdateResult> {
   const layout = cpaLayout(home);
   const cfg = readCpaConfig(layout.configFile);
   const repo = repoFromPanelUrl(getPanelRepository(cfg));
   const release = await fetchLatestRelease(repo);
   const version = normalizeTagVersion(release.tag_name);
+  const state = readInstallState(home);
+
+  if (state.panelVersion === version && !options?.force) {
+    return { version, changed: false, skipped: true };
+  }
 
   const asset = release.assets.find((a) => a.name === "management.html");
   if (!asset) throw new Error(`management.html not found in ${repo} ${release.tag_name}`);
@@ -56,15 +71,14 @@ export async function updatePanel(home: string): Promise<{ version: string }> {
     /* ignore */
   }
 
-  const state = readInstallState(home);
+  const next = readInstallState(home);
   writeInstallState(home, {
-    ...state,
+    ...next,
     cpaHome: home,
     panelVersion: version,
     panelSha256: sha256File(layout.managementHtml),
     lastUpdateCheck: new Date().toISOString(),
-    channel: "stable",
   });
 
-  return { version };
+  return { version, changed: true, skipped: false };
 }

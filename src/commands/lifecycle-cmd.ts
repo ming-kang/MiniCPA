@@ -40,6 +40,9 @@ export async function runStatus(opts: { home?: string }): Promise<void> {
     console.log(`Manage    ${managementUrl(ctx.home)}`);
     const reachable = await waitForHttpOk(managementUrl(ctx.home), 2000);
     console.log(`HTTP      ${reachable ? "ok" : "not reachable"}`);
+    if (!reachable) {
+      console.log("Hint     try: cpa restart   (or cpa logs --err)");
+    }
     process.exitCode = reachable ? 0 : 1;
   } else {
     console.log("Running   no");

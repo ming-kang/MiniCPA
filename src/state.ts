@@ -7,7 +7,6 @@ export type InstallState = {
   panelVersion?: string;
   panelSha256?: string;
   lastUpdateCheck?: string;
-  channel: "stable";
 };
 
 /** Process ownership record (JSON in cpa.pid). Legacy plain PID still accepted. */
@@ -21,20 +20,38 @@ export function readInstallState(home: string): InstallState {
   const layout = cpaLayout(home);
   ensureDir(layout.stateDir);
   if (!fs.existsSync(layout.installStateFile)) {
-    return { cpaHome: home, channel: "stable" };
+    return { cpaHome: home };
   }
   try {
-    const parsed = JSON.parse(fs.readFileSync(layout.installStateFile, "utf8")) as InstallState;
-    return { ...parsed, channel: parsed.channel ?? "stable", cpaHome: home };
+    const parsed = JSON.parse(fs.readFileSync(layout.installStateFile, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    return {
+      cpaHome: home,
+      runtimeVersion:
+        typeof parsed.runtimeVersion === "string" ? parsed.runtimeVersion : undefined,
+      panelVersion: typeof parsed.panelVersion === "string" ? parsed.panelVersion : undefined,
+      panelSha256: typeof parsed.panelSha256 === "string" ? parsed.panelSha256 : undefined,
+      lastUpdateCheck:
+        typeof parsed.lastUpdateCheck === "string" ? parsed.lastUpdateCheck : undefined,
+    };
   } catch {
-    return { cpaHome: home, channel: "stable" };
+    return { cpaHome: home };
   }
 }
 
 export function writeInstallState(home: string, state: InstallState): void {
   const layout = cpaLayout(home);
   ensureDir(layout.stateDir);
-  fs.writeFileSync(layout.installStateFile, JSON.stringify(state, null, 2) + "\n", "utf8");
+  const clean: InstallState = {
+    cpaHome: home,
+    runtimeVersion: state.runtimeVersion,
+    panelVersion: state.panelVersion,
+    panelSha256: state.panelSha256,
+    lastUpdateCheck: state.lastUpdateCheck,
+  };
+  fs.writeFileSync(layout.installStateFile, JSON.stringify(clean, null, 2) + "\n", "utf8");
 }
 
 export function readPidRecord(home: string): PidRecord | undefined {
@@ -61,20 +78,10 @@ export function readPidRecord(home: string): PidRecord | undefined {
   return { pid, exe: "", startedAt: "" };
 }
 
-/** @deprecated prefer readPidRecord */
-export function readPid(home: string): number | undefined {
-  return readPidRecord(home)?.pid;
-}
-
 export function writePidRecord(home: string, record: PidRecord): void {
   const layout = cpaLayout(home);
   ensureDir(layout.stateDir);
   fs.writeFileSync(layout.pidFile, JSON.stringify(record) + "\n", "utf8");
-}
-
-/** @deprecated prefer writePidRecord */
-export function writePid(home: string, pid: number, exe = ""): void {
-  writePidRecord(home, { pid, exe, startedAt: new Date().toISOString() });
 }
 
 export function clearPid(home: string): void {

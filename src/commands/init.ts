@@ -14,6 +14,11 @@ export async function runInit(opts: { home?: string; force?: boolean }): Promise
   ensureDir(layout.stateDir);
 
   if (!fs.existsSync(layout.configFile) || opts.force) {
+    if (opts.force && fs.existsSync(layout.configFile)) {
+      const bak = `${layout.configFile}.bak`;
+      fs.copyFileSync(layout.configFile, bak);
+      console.log(`Backed up ${layout.configFile} → ${bak}`);
+    }
     fs.writeFileSync(layout.configFile, defaultConfigYaml(), "utf8");
     console.log(`Created  ${layout.configFile}`);
   } else {
@@ -31,7 +36,7 @@ export async function runInit(opts: { home?: string; force?: boolean }): Promise
   writeCliGlobalConfig({ home });
   console.log(`MiniCPA root  ${miniCpaRoot()}`);
   console.log(`Instance      ${home}`);
-  console.log(`Next: cpa update --all`);
+  console.log(`Next: cpa update`);
   console.log(`      cpa start`);
   console.log(`      cpa open`);
 }

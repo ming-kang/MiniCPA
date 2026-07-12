@@ -37,9 +37,3 @@ export function apiBaseUrl(home: string): string {
   const h = host === "0.0.0.0" ? "127.0.0.1" : host;
   return `http://${h}:${port}`;
 }
-
-export function listenPort(home: string): number {
-  const layout = cpaLayout(home);
-  const cfg = readCpaConfig(layout.configFile);
-  return getListenAddress(cfg).port;
-}

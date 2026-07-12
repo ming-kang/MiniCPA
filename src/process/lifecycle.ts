@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { cpaLayout, ensureDir } from "../paths.js";
@@ -25,23 +25,49 @@ function basenameLower(p: string): string {
 
 /** Best-effort: does this PID look like our CPA binary? */
 export function processLooksLikeCpa(pid: number, expectedExe: string): boolean {
-  const expected = basenameLower(expectedExe);
+  const expected = basenameLower(expectedExe).replace(/\.exe$/, "");
   if (!expected) return true;
 
   try {
     if (process.platform === "linux") {
       const comm = fs.readFileSync(`/proc/${pid}/comm`, "utf8").trim().toLowerCase();
-      if (comm && (expected.startsWith(comm) || comm.startsWith(expected.replace(/\.exe$/, "")))) {
+      if (comm && (expected.startsWith(comm) || comm.startsWith(expected))) {
         return true;
       }
       const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0")[0] ?? "";
-      return basenameLower(cmdline).includes(expected.replace(/\.exe$/, "")) || basenameLower(cmdline) === expected;
+      const base = basenameLower(cmdline).replace(/\.exe$/, "");
+      return base.includes(expected) || base === expected;
+    }
+
+    if (process.platform === "win32") {
+      // tasklist CSV: "image name","pid",...
+      const out = execFileSync(
+        "tasklist",
+        ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
+        { encoding: "utf8", windowsHide: true, timeout: 3000 },
+      ).trim();
+      if (!out || /^INFO:/i.test(out)) return false;
+      // "cli-proxy-api.exe","1234",...
+      const m = out.match(/^"([^"]+)"/);
+      const image = (m?.[1] ?? out.split(",")[0] ?? "").replace(/^"|"$/g, "").toLowerCase();
+      const imageBase = image.replace(/\.exe$/, "");
+      return imageBase === expected || imageBase.includes(expected) || expected.includes(imageBase);
+    }
+
+    if (process.platform === "darwin") {
+      const out = execFileSync("ps", ["-p", String(pid), "-o", "comm="], {
+        encoding: "utf8",
+        timeout: 3000,
+      }).trim();
+      if (!out) return false;
+      const base = basenameLower(out).replace(/\.exe$/, "");
+      return base === expected || base.includes(expected) || expected.includes(base);
     }
   } catch {
-    /* fall through */
+    // If the probe fails, keep the live PID rather than false-negative stop/status.
+    return true;
   }
 
-  // Darwin / Windows / unknown: accept live PID (we still record exe for status).
   return true;
 }
 
@@ -65,10 +91,6 @@ export function resolveRunning(home: string): RunningInfo | undefined {
     exe = resolveRunnableExecutable(home);
   } catch {
     exe = record.exe;
-  }
-
-  if (record.exe && exe && basenameLower(record.exe) !== basenameLower(exe)) {
-    // Recorded a different binary path than current install — still treat as running if alive.
   }
 
   if (!processLooksLikeCpa(record.pid, exe || record.exe)) {
@@ -108,7 +130,7 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
       const ready = await waitForHttpOk(managementUrl(home), options?.readyTimeoutMs ?? DEFAULT_READY_MS);
       if (!ready) {
         throw new Error(
-          `CPA PID=${existing.pid} is up but HTTP not reachable.${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
+          `CPA PID=${existing.pid} is up but HTTP not reachable. Try: cpa restart${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
         );
       }
     }
@@ -167,7 +189,7 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
         throw new Error(`CPA exited before becoming ready.${dumpRecentLogs(home)}\n${logPathsHint(home)}`);
       }
       throw new Error(
-        `CPA started (PID=${child.pid}) but HTTP not ready within ${readyMs}ms.${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
+        `CPA started (PID=${child.pid}) but HTTP not ready within ${readyMs}ms. Try: cpa restart${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
       );
     }
   }

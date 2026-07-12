@@ -71,6 +71,7 @@ async function verifyChecksum(
 export type BinaryUpdateResult = {
   version: string;
   changed: boolean;
+  skipped: boolean;
   /** True if process was stopped for the update and started again. */
   restarted: boolean;
 };
@@ -91,47 +92,65 @@ export async function checkBinaryUpdate(home: string): Promise<{
   };
 }
 
+/**
+ * Replace CPA binary in place.
+ * - Running process is stopped automatically, then restarted after success.
+ * - Already-latest installs are skipped unless `force` or a specific `version` is requested.
+ * - If we stopped the process and the update fails, we try to start the previous binary again.
+ */
 export async function updateBinary(
   home: string,
   options?: { version?: string; force?: boolean },
 ): Promise<BinaryUpdateResult> {
   const wasRunning = !!resolveRunning(home);
-  if (wasRunning && !options?.force) {
-    throw new Error(
-      "CPA is running. Stop it first: cpa stop  (or pass --force to stop, replace, and restart)",
-    );
-  }
-  if (wasRunning) {
-    console.log("Stopping CPA for binary replace…");
-    await stopDaemon(home);
-  }
+  const state = readInstallState(home);
 
   const release: GhRelease = options?.version
     ? await fetchCpaReleaseByTag(options.version)
     : await fetchLatestCpaRelease();
 
   const version = normalizeTagVersion(release.tag_name);
-  const { assetName, url } = pickReleaseAsset(release, process.platform, process.arch);
-  ensureDir(miniCpaTempDownloadsDir());
-  const archivePath = path.join(miniCpaTempDownloadsDir(), assetName);
+  const alreadyLatest =
+    !options?.version && !!state.runtimeVersion && state.runtimeVersion === version;
 
-  await downloadToFile(url, archivePath, { label: assetName });
-  const checksums = await fetchChecksums(release);
+  if (alreadyLatest && !options?.force) {
+    return { version, changed: false, skipped: true, restarted: false };
+  }
 
-  const staging = miniCpaTempExtractDir();
+  if (wasRunning) {
+    console.log("Stopping CPA for binary replace…");
+    await stopDaemon(home);
+  }
+
   try {
-    const extractedExe = await extractArchive(archivePath, staging);
-    await verifyChecksum(checksums, assetName, extractedExe);
-    installRuntimeBinary(home, version, extractedExe);
+    const { assetName, url } = pickReleaseAsset(release, process.platform, process.arch);
+    ensureDir(miniCpaTempDownloadsDir());
+    const archivePath = path.join(miniCpaTempDownloadsDir(), assetName);
 
-    const state = readInstallState(home);
-    writeInstallState(home, {
-      ...state,
-      cpaHome: home,
-      runtimeVersion: version,
-      lastUpdateCheck: new Date().toISOString(),
-      channel: "stable",
-    });
+    await downloadToFile(url, archivePath, { label: assetName });
+    const checksums = await fetchChecksums(release);
+
+    const staging = miniCpaTempExtractDir();
+    try {
+      const extractedExe = await extractArchive(archivePath, staging);
+      await verifyChecksum(checksums, assetName, extractedExe);
+      installRuntimeBinary(home, version, extractedExe);
+
+      const next = readInstallState(home);
+      writeInstallState(home, {
+        ...next,
+        cpaHome: home,
+        runtimeVersion: version,
+        lastUpdateCheck: new Date().toISOString(),
+      });
+    } finally {
+      fs.rmSync(staging, { recursive: true, force: true });
+      try {
+        fs.unlinkSync(archivePath);
+      } catch {
+        /* ignore */
+      }
+    }
 
     let restarted = false;
     if (wasRunning) {
@@ -140,13 +159,21 @@ export async function updateBinary(
       restarted = true;
     }
 
-    return { version, changed: true, restarted };
-  } finally {
-    fs.rmSync(staging, { recursive: true, force: true });
+    return { version, changed: true, skipped: false, restarted };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!wasRunning) throw err;
+
     try {
-      fs.unlinkSync(archivePath);
-    } catch {
-      /* ignore */
+      console.error("Update failed; attempting to restart previous CPA…");
+      await startDaemon(home);
+      throw new Error(`${msg}\nPrevious CPA was restarted after failed update.`);
+    } catch (restartErr) {
+      if (restartErr instanceof Error && restartErr.message.includes("Previous CPA was restarted")) {
+        throw restartErr;
+      }
+      const rmsg = restartErr instanceof Error ? restartErr.message : String(restartErr);
+      throw new Error(`${msg}\nAlso failed to restart CPA: ${rmsg}\nRun: cpa start`);
     }
   }
 }

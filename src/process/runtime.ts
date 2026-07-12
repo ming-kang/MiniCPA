@@ -1,9 +1,5 @@
 import fs from "node:fs";
-import {
-  activeExecutablePath,
-  ensureDir,
-  executableName,
-} from "../paths.js";
+import { activeExecutablePath, ensureDir } from "../paths.js";
 import { readInstallState } from "../state.js";
 import { readInstalledRuntimeVersion } from "../util.js";
 
@@ -47,8 +43,4 @@ export function resolveRunnableExecutable(home: string): string {
   const active = activeExecutablePath(home);
   if (fs.existsSync(active)) return active;
   throw new Error(`CPA binary not found under ${home}. Run: cpa update`);
-}
-
-export function executableBasename(): string {
-  return executableName();
 }

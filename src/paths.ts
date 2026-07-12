@@ -6,12 +6,12 @@ import path from "node:path";
 export const MINICPA_DIR_NAME = "MiniCPA";
 
 export type CliGlobalConfig = {
-  /** Managed CLIProxyAPI instance directory (config, auths, runtime). */
+  /** Managed CLIProxyAPI instance directory (config, auths, binary). */
   home?: string;
 };
 
 /**
- * MiniCPA application root (CLI config, cache, default instance).
+ * MiniCPA application root (CLI config, default instance).
  * Windows: %LOCALAPPDATA%\MiniCPA
  */
 export function miniCpaRoot(): string {
@@ -55,11 +55,6 @@ export function miniCpaTempExtractDir(prefix = "extract-"): string {
 
 export function cliConfigPath(): string {
   return path.join(miniCpaRoot(), "config.json");
-}
-
-/** Optional long-lived cache (e.g. `cpa cache clean`); updates prefer temp downloads. */
-export function cliCacheDir(): string {
-  return path.join(miniCpaRoot(), "cache");
 }
 
 export function readCliGlobalConfig(): CliGlobalConfig {
