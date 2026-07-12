@@ -26,10 +26,7 @@ export function miniCpaRoot(): string {
   return path.join(xdgData, MINICPA_DIR_NAME);
 }
 
-/**
- * Default CPA instance directory.
- * Multiple instances can live under `instances/<name>/` (see README).
- */
+/** Default (only) CPA instance directory. */
 export function defaultCpaHome(): string {
   return path.join(miniCpaRoot(), "instances", "default");
 }
@@ -105,7 +102,6 @@ export type CpaLayout = {
   staticDir: string;
   logsDir: string;
   stateDir: string;
-  runtimeDir: string;
   pidFile: string;
   installStateFile: string;
   logFile: string;
@@ -122,7 +118,6 @@ export function cpaLayout(home: string): CpaLayout {
     staticDir: path.join(home, "static"),
     logsDir: path.join(home, "logs"),
     stateDir: path.join(home, "state"),
-    runtimeDir: path.join(home, "runtime"),
     pidFile: path.join(home, "state", "cpa.pid"),
     installStateFile: path.join(home, "state", "install.json"),
     logFile: path.join(home, "logs", "cpa.log"),
@@ -135,20 +130,9 @@ export function executableName(): string {
   return process.platform === "win32" ? "cli-proxy-api.exe" : "cli-proxy-api";
 }
 
+/** Single active binary under the instance root (replaced on each update). */
 export function activeExecutablePath(home: string): string {
   return path.join(home, executableName());
-}
-
-export function runtimeVersionDir(home: string, version: string): string {
-  return path.join(home, "runtime", version);
-}
-
-export function runtimeVersionExecutable(home: string, version: string): string {
-  return path.join(runtimeVersionDir(home, version), executableName());
-}
-
-export function currentVersionPointerPath(home: string): string {
-  return path.join(home, "runtime", "current");
 }
 
 export function ensureDir(dir: string): void {

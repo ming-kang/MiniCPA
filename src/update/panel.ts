@@ -42,7 +42,9 @@ export async function updatePanel(home: string): Promise<{ version: string }> {
 
   ensureDir(miniCpaTempDownloadsDir());
   const cachePath = path.join(miniCpaTempDownloadsDir(), `management-${release.tag_name}.html`);
-  await downloadToFile(asset.browser_download_url, cachePath);
+  await downloadToFile(asset.browser_download_url, cachePath, {
+    label: "management.html",
+  });
 
   fs.mkdirSync(layout.staticDir, { recursive: true });
   const tmp = `${layout.managementHtml}.tmp`;

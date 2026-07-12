@@ -8,13 +8,14 @@ import {
   miniCpaTempDownloadsDir,
   miniCpaTempExtractDir,
 } from "../paths.js";
+import { resolveRunning, startDaemon, stopDaemon } from "../process/lifecycle.js";
+import { installRuntimeBinary } from "../process/runtime.js";
 import { readInstallState, writeInstallState } from "../state.js";
 import { sha256File } from "../util.js";
-import { installRuntimeBinary } from "../process/runtime.js";
-import { resolveRunning, stopDaemon } from "../process/lifecycle.js";
 import {
   downloadToFile,
   fetchChecksums,
+  fetchCpaReleaseByTag,
   fetchLatestCpaRelease,
   normalizeTagVersion,
   pickReleaseAsset,
@@ -43,7 +44,7 @@ async function extractArchive(archivePath: string, destDir: string): Promise<str
     const nested = fs
       .readdirSync(destDir, { recursive: true })
       .map((p) => String(p))
-      .find((p) => p.endsWith(exeName) || p === exeName);
+      .find((p) => path.basename(p) === exeName);
     if (!nested) throw new Error(`${exeName} not found in ${archivePath}`);
     return path.join(destDir, nested);
   }
@@ -70,6 +71,8 @@ async function verifyChecksum(
 export type BinaryUpdateResult = {
   version: string;
   changed: boolean;
+  /** True if process was stopped for the update and started again. */
+  restarted: boolean;
 };
 
 export async function checkBinaryUpdate(home: string): Promise<{
@@ -92,14 +95,19 @@ export async function updateBinary(
   home: string,
   options?: { version?: string; force?: boolean },
 ): Promise<BinaryUpdateResult> {
-  const running = resolveRunning(home);
-  if (running && !options?.force) {
-    throw new Error("CPA is running. Run: cpa stop   (or use --force to only stage download)");
+  const wasRunning = !!resolveRunning(home);
+  if (wasRunning && !options?.force) {
+    throw new Error(
+      "CPA is running. Stop it first: cpa stop  (or pass --force to stop, replace, and restart)",
+    );
   }
-  if (running) await stopDaemon(home);
+  if (wasRunning) {
+    console.log("Stopping CPA for binary replace…");
+    await stopDaemon(home);
+  }
 
   const release: GhRelease = options?.version
-    ? await resolveReleaseByVersion(options.version)
+    ? await fetchCpaReleaseByTag(options.version)
     : await fetchLatestCpaRelease();
 
   const version = normalizeTagVersion(release.tag_name);
@@ -107,7 +115,7 @@ export async function updateBinary(
   ensureDir(miniCpaTempDownloadsDir());
   const archivePath = path.join(miniCpaTempDownloadsDir(), assetName);
 
-  await downloadToFile(url, archivePath);
+  await downloadToFile(url, archivePath, { label: assetName });
   const checksums = await fetchChecksums(release);
 
   const staging = miniCpaTempExtractDir();
@@ -125,7 +133,14 @@ export async function updateBinary(
       channel: "stable",
     });
 
-    return { version, changed: true };
+    let restarted = false;
+    if (wasRunning) {
+      console.log("Restarting CPA…");
+      await startDaemon(home);
+      restarted = true;
+    }
+
+    return { version, changed: true, restarted };
   } finally {
     fs.rmSync(staging, { recursive: true, force: true });
     try {
@@ -134,19 +149,4 @@ export async function updateBinary(
       /* ignore */
     }
   }
-}
-
-async function resolveReleaseByVersion(version: string): Promise<GhRelease> {
-  const tag = version.startsWith("v") ? version : `v${version}`;
-  const token = process.env.GITHUB_TOKEN;
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github+json",
-    "User-Agent": "MiniCPA",
-  };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/tags/${tag}`, {
-    headers,
-  });
-  if (!res.ok) throw new Error(`Release not found: ${tag}`);
-  return (await res.json()) as GhRelease;
 }

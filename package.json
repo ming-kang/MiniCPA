@@ -13,8 +13,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.ts",
-
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsc --noEmit && node --import tsx --test src/**/*.test.ts"
   },
   "engines": {
     "node": ">=20"

@@ -44,18 +44,24 @@ program
 
 program
   .command("start")
-  .description("Start CPA in background")
-  .action(async (_opts: unknown, cmd: Command) => {
-    await runStart({ home: resolveHomeOption(cmd) });
+  .description("Start CPA in background (waits until HTTP is ready)")
+  .option("--no-wait", "Do not wait for HTTP ready")
+  .action(async (opts: { wait?: boolean }, cmd: Command) => {
+    // commander: --no-wait sets wait=false
+    await runStart({ home: resolveHomeOption(cmd), noWait: opts.wait === false });
   });
 
 program.command("stop").description("Stop CPA").action(async (_opts: unknown, cmd: Command) => {
   await runStop({ home: resolveHomeOption(cmd) });
 });
 
-program.command("restart").description("Restart CPA").action(async (_opts: unknown, cmd: Command) => {
-  await runRestart({ home: resolveHomeOption(cmd) });
-});
+program
+  .command("restart")
+  .description("Restart CPA")
+  .option("--no-wait", "Do not wait for HTTP ready")
+  .action(async (opts: { wait?: boolean }, cmd: Command) => {
+    await runRestart({ home: resolveHomeOption(cmd), noWait: opts.wait === false });
+  });
 
 program.command("status").description("Show CPA status").action(async (_opts: unknown, cmd: Command) => {
   await runStatus({ home: resolveHomeOption(cmd) });
@@ -67,14 +73,16 @@ program.command("open").description("Open management UI in browser").action(asyn
 
 program
   .command("logs")
-  .description("Show CPA logs")
+  .description("Show CPA logs (stdout + stderr by default)")
   .option("-f, --follow", "Follow log output")
-  .option("-n, --lines <n>", "Number of lines", "80")
-  .action(async (opts: { follow?: boolean; lines: string }, cmd: Command) => {
+  .option("-n, --lines <n>", "Number of lines per file", "80")
+  .option("--err", "Show error log only")
+  .action(async (opts: { follow?: boolean; lines: string; err?: boolean }, cmd: Command) => {
     await runLogs({
       home: resolveHomeOption(cmd),
       follow: opts.follow,
       lines: Number.parseInt(opts.lines, 10) || 80,
+      errOnly: opts.err,
     });
   });
 
@@ -82,26 +90,34 @@ program.command("tui").description("Open official CPA terminal UI").action(async
   await runTui({ home: resolveHomeOption(cmd) });
 });
 
-const updateCmd = program.command("update").description("Update CPA binary and/or management panel");
+const updateCmd = program
+  .command("update")
+  .description("Replace CPA binary and management panel (default: both)");
 
 updateCmd.command("check").description("Check for updates").action(async (_opts: unknown, cmd: Command) => {
   await runUpdateCheck({ home: resolveHomeOption(cmd) });
 });
 
 updateCmd
-  .option("--all", "Update CPA binary and management panel")
+  .option("--all", "Update binary and panel (default; kept for compatibility)")
+  .option("--binary", "Update CPA binary only")
   .option("--panel", "Update management panel only")
   .option("--version <ver>", "Install specific CPA version (e.g. 7.2.66)")
-  .option("--force", "Stop CPA if needed before binary update")
-  .action(async (opts: { all?: boolean; panel?: boolean; version?: string; force?: boolean }, cmd: Command) => {
-    await runUpdate({
-      home: resolveHomeOption(cmd),
-      all: opts.all,
-      panelOnly: opts.panel,
-      version: opts.version,
-      force: opts.force,
-    });
-  });
+  .option("--force", "If running: stop, replace, restart")
+  .action(
+    async (
+      opts: { all?: boolean; binary?: boolean; panel?: boolean; version?: string; force?: boolean },
+      cmd: Command,
+    ) => {
+      await runUpdate({
+        home: resolveHomeOption(cmd),
+        panelOnly: opts.panel,
+        binaryOnly: opts.binary && !opts.panel && !opts.all,
+        version: opts.version,
+        force: opts.force,
+      });
+    },
+  );
 
 program.command("doctor").description("Validate CPA_HOME and runtime").action(async (_opts: unknown, cmd: Command) => {
   await runDoctor({ home: resolveHomeOption(cmd) });
@@ -122,7 +138,7 @@ program
 
 program
   .command("home")
-  .description("Print CPA instance directory (config, auths, runtime)")
+  .description("Print CPA instance directory (config, auths, binary)")
   .action(async (_opts: unknown, cmd: Command) => {
     const ctx = createContext({ home: resolveHomeOption(cmd) });
     console.log(ctx.home);

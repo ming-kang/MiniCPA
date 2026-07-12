@@ -12,7 +12,6 @@ export async function runInit(opts: { home?: string; force?: boolean }): Promise
   ensureDir(layout.staticDir);
   ensureDir(layout.logsDir);
   ensureDir(layout.stateDir);
-  ensureDir(layout.runtimeDir);
 
   if (!fs.existsSync(layout.configFile) || opts.force) {
     fs.writeFileSync(layout.configFile, defaultConfigYaml(), "utf8");

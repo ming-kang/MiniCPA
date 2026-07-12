@@ -10,6 +10,13 @@ export type InstallState = {
   channel: "stable";
 };
 
+/** Process ownership record (JSON in cpa.pid). Legacy plain PID still accepted. */
+export type PidRecord = {
+  pid: number;
+  exe: string;
+  startedAt: string;
+};
+
 export function readInstallState(home: string): InstallState {
   const layout = cpaLayout(home);
   ensureDir(layout.stateDir);
@@ -30,18 +37,44 @@ export function writeInstallState(home: string, state: InstallState): void {
   fs.writeFileSync(layout.installStateFile, JSON.stringify(state, null, 2) + "\n", "utf8");
 }
 
-export function readPid(home: string): number | undefined {
+export function readPidRecord(home: string): PidRecord | undefined {
   const layout = cpaLayout(home);
   if (!fs.existsSync(layout.pidFile)) return undefined;
   const raw = fs.readFileSync(layout.pidFile, "utf8").trim();
+  if (!raw) return undefined;
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<PidRecord>;
+    if (typeof parsed.pid === "number" && Number.isFinite(parsed.pid)) {
+      return {
+        pid: parsed.pid,
+        exe: typeof parsed.exe === "string" ? parsed.exe : "",
+        startedAt: typeof parsed.startedAt === "string" ? parsed.startedAt : "",
+      };
+    }
+  } catch {
+    /* legacy plain PID */
+  }
+
   const pid = Number.parseInt(raw, 10);
-  return Number.isFinite(pid) ? pid : undefined;
+  if (!Number.isFinite(pid)) return undefined;
+  return { pid, exe: "", startedAt: "" };
 }
 
-export function writePid(home: string, pid: number): void {
+/** @deprecated prefer readPidRecord */
+export function readPid(home: string): number | undefined {
+  return readPidRecord(home)?.pid;
+}
+
+export function writePidRecord(home: string, record: PidRecord): void {
   const layout = cpaLayout(home);
   ensureDir(layout.stateDir);
-  fs.writeFileSync(layout.pidFile, String(pid), "utf8");
+  fs.writeFileSync(layout.pidFile, JSON.stringify(record) + "\n", "utf8");
+}
+
+/** @deprecated prefer writePidRecord */
+export function writePid(home: string, pid: number, exe = ""): void {
+  writePidRecord(home, { pid, exe, startedAt: new Date().toISOString() });
 }
 
 export function clearPid(home: string): void {
