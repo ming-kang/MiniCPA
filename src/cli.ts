@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { withCliErrors } from "./cli-errors.js";
+import { runClean } from "./commands/clean.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runInit } from "./commands/init.js";
 import {
@@ -160,6 +161,15 @@ program.command("doctor").description("Validate CPA_HOME and runtime").action(
     await runDoctor({ home: homeOf(cmd) });
   }),
 );
+
+program
+  .command("clean")
+  .description("Remove MiniCPA temp downloads/extract (never touches instance home)")
+  .action(
+    withCliErrors(async () => {
+      await runClean();
+    }),
+  );
 
 program
   .command("version")

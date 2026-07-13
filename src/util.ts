@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -10,6 +11,77 @@ export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Recursive size of files under dir (symlinks ignored / best-effort). */
+export function directorySizeBytes(dir: string): number {
+  if (!fs.existsSync(dir)) return 0;
+  let total = 0;
+  const walk = (current: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      try {
+        if (entry.isDirectory()) walk(full);
+        else if (entry.isFile()) total += fs.statSync(full).size;
+      } catch {
+        /* ignore races / permission */
+      }
+    }
+  };
+  walk(dir);
+  return total;
+}
+
+/** Default CPA log rotate threshold (50 MiB). */
+export const DEFAULT_LOG_ROTATE_BYTES = 50 * 1024 * 1024;
+
+/** Keep this many rotated siblings (file.1 .. file.N). */
+export const DEFAULT_LOG_ROTATE_KEEP = 2;
+
+/**
+ * If `file` is at least maxBytes, rotate to file.1 .. file.keep (drop oldest).
+ * Returns true when a rotation happened.
+ */
+export function rotateFileIfLarge(
+  file: string,
+  options?: { maxBytes?: number; keep?: number },
+): boolean {
+  const maxBytes = options?.maxBytes ?? DEFAULT_LOG_ROTATE_BYTES;
+  const keep = options?.keep ?? DEFAULT_LOG_ROTATE_KEEP;
+  if (keep < 1 || maxBytes < 1) return false;
+  if (!fs.existsSync(file)) return false;
+
+  let size: number;
+  try {
+    size = fs.statSync(file).size;
+  } catch {
+    return false;
+  }
+  if (size < maxBytes) return false;
+
+  tryUnlink(`${file}.${keep}`);
+  for (let i = keep - 1; i >= 1; i--) {
+    const from = `${file}.${i}`;
+    const to = `${file}.${i + 1}`;
+    if (!fs.existsSync(from)) continue;
+    try {
+      fs.renameSync(from, to);
+    } catch {
+      tryUnlink(from);
+    }
+  }
+  try {
+    fs.renameSync(file, `${file}.1`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function tailFile(file: string, maxLines = 40): string {

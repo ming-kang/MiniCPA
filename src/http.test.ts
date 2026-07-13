@@ -4,7 +4,10 @@ import {
   describeProxyEnv,
   formatNetworkError,
   hasProxyEnvConfigured,
+  isRetryableHttpStatus,
+  isRetryableNetworkError,
   redactProxyUrl,
+  retryDelayMs,
 } from "./http.js";
 
 describe("hasProxyEnvConfigured", () => {
@@ -61,5 +64,35 @@ describe("formatNetworkError", () => {
     } finally {
       if (previous !== undefined) process.env.HTTPS_PROXY = previous;
     }
+  });
+});
+
+describe("retry helpers", () => {
+  it("classifies retryable HTTP statuses", () => {
+    assert.equal(isRetryableHttpStatus(200), false);
+    assert.equal(isRetryableHttpStatus(404), false);
+    assert.equal(isRetryableHttpStatus(408), true);
+    assert.equal(isRetryableHttpStatus(429), true);
+    assert.equal(isRetryableHttpStatus(500), true);
+    assert.equal(isRetryableHttpStatus(503), true);
+  });
+
+  it("retries connect timeouts and refuses plain aborts", () => {
+    const timeout = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("Connect Timeout Error"), {
+        code: "UND_ERR_CONNECT_TIMEOUT",
+      }),
+    });
+    assert.equal(isRetryableNetworkError(timeout), true);
+
+    const abort = new Error("The operation was aborted");
+    abort.name = "AbortError";
+    assert.equal(isRetryableNetworkError(abort), false);
+  });
+
+  it("computes bounded backoff with deterministic random", () => {
+    assert.equal(retryDelayMs(0, 400, 8_000, () => 0), 400);
+    assert.equal(retryDelayMs(1, 400, 8_000, () => 0), 800);
+    assert.equal(retryDelayMs(10, 400, 1_000, () => 0), 1_000);
   });
 });

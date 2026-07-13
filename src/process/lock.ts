@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { writeFileAtomic } from "../fs-atomic.js";
 import { cpaLayout, ensureDir } from "../paths.js";
 
 export type HomeLockRecord = {
@@ -11,6 +10,8 @@ export type HomeLockRecord = {
 
 /** Per-process re-entrancy depth keyed by resolved home. */
 const lockDepthByHome = new Map<string, number>();
+
+const ACQUIRE_ATTEMPTS = 5;
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -44,6 +45,10 @@ function readLockRecord(lockPath: string): HomeLockRecord | undefined {
   }
 }
 
+/**
+ * Claim lock via exclusive create (`wx`). If the file already exists, preempt only
+ * when the holder PID is dead (or is ourselves after a crashed finally).
+ */
 function tryAcquireLock(home: string, command: string): void {
   const key = homeKey(home);
   const depth = lockDepthByHome.get(key) ?? 0;
@@ -55,42 +60,72 @@ function tryAcquireLock(home: string, command: string): void {
   const layout = cpaLayout(home);
   ensureDir(layout.stateDir);
   const lockPath = resolveLockPath(home);
-  const existing = readLockRecord(lockPath);
-  if (existing) {
-    if (existing.pid === process.pid) {
-      // Orphaned file from crashed finally — take ownership
-      try {
-        fs.unlinkSync(lockPath);
-      } catch {
-        /* continue */
-      }
-    } else if (isProcessAlive(existing.pid)) {
-      throw new Error(
-        `Another cpa ${existing.command} is running (PID=${existing.pid}). Retry after it finishes.`,
-      );
-    } else {
-      try {
-        fs.unlinkSync(lockPath);
-      } catch {
-        /* race — continue to claim */
-      }
-    }
-  }
-
   const record: HomeLockRecord = {
     pid: process.pid,
     command,
     acquiredAt: new Date().toISOString(),
   };
-  writeFileAtomic(lockPath, JSON.stringify(record) + "\n");
+  const payload = JSON.stringify(record) + "\n";
 
-  const verified = readLockRecord(lockPath);
-  if (!verified || verified.pid !== process.pid) {
-    throw new Error(
-      `Failed to acquire CPA_HOME lock (held by PID=${verified?.pid ?? "?"}). Retry.`,
-    );
+  for (let attempt = 0; attempt < ACQUIRE_ATTEMPTS; attempt++) {
+    try {
+      const fd = fs.openSync(lockPath, "wx");
+      try {
+        fs.writeFileSync(fd, payload);
+      } finally {
+        fs.closeSync(fd);
+      }
+
+      const verified = readLockRecord(lockPath);
+      if (!verified || verified.pid !== process.pid) {
+        throw new Error(
+          `Failed to acquire CPA_HOME lock (held by PID=${verified?.pid ?? "?"}). Retry.`,
+        );
+      }
+      lockDepthByHome.set(key, 1);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") throw err;
+    }
+
+    const existing = readLockRecord(lockPath);
+    if (!existing) {
+      try {
+        fs.unlinkSync(lockPath);
+      } catch {
+        /* raced with another acquirer */
+      }
+      continue;
+    }
+
+    if (existing.pid === process.pid) {
+      // Orphaned file from crashed finally — drop and retry exclusive create.
+      try {
+        fs.unlinkSync(lockPath);
+      } catch {
+        /* continue */
+      }
+      continue;
+    }
+
+    if (isProcessAlive(existing.pid)) {
+      throw new Error(
+        `Another cpa ${existing.command} is running (PID=${existing.pid}). Retry after it finishes.`,
+      );
+    }
+
+    // Stale lock (dead PID): preempt, then retry O_EXCL so only one winner remains.
+    try {
+      fs.unlinkSync(lockPath);
+    } catch {
+      /* raced with another preemptor */
+    }
   }
-  lockDepthByHome.set(key, 1);
+
+  throw new Error(
+    `Failed to acquire CPA_HOME lock after ${ACQUIRE_ATTEMPTS} attempts. Retry.`,
+  );
 }
 
 function releaseLock(home: string): void {

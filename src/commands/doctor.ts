@@ -2,10 +2,16 @@ import fs from "node:fs";
 import { getListenAddress, readCpaConfig } from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
 import { describeProxyEnv, hasProxyEnvConfigured, httpFetch } from "../http.js";
+import { backupExecutablePath, miniCpaTempRoot } from "../paths.js";
 import { managementUrl, waitForHttpOk } from "../process/health.js";
 import { resolveRunning } from "../process/lifecycle.js";
 import { readCurrentRuntimeVersion, resolveRunnableExecutable } from "../process/runtime.js";
 import { readInstallState } from "../state.js";
+import {
+  DEFAULT_LOG_ROTATE_BYTES,
+  directorySizeBytes,
+  formatBytes,
+} from "../util.js";
 
 export async function runDoctor(opts: { home?: string }): Promise<void> {
   const ctx = createContext(opts);
@@ -71,6 +77,44 @@ export async function runDoctor(opts: { home?: string }): Promise<void> {
     }
   }
 
+  for (const [label, file] of [
+    ["cpa.log", ctx.layout.logFile],
+    ["cpa.err.log", ctx.layout.errLogFile],
+  ] as const) {
+    if (!fs.existsSync(file)) continue;
+    try {
+      const size = fs.statSync(file).size;
+      if (size >= DEFAULT_LOG_ROTATE_BYTES) {
+        console.log(
+          `[warn] ${label} is ${formatBytes(size)} — will rotate on next cpa start (≥ ${formatBytes(DEFAULT_LOG_ROTATE_BYTES)})`,
+        );
+      } else if (size > 0) {
+        console.log(`[info] ${label} ${formatBytes(size)}`);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const bak = backupExecutablePath(ctx.home);
+  if (fs.existsSync(bak)) {
+    console.log(
+      `[warn] binary backup present (${bak}) — kept after incomplete update; cleared after healthy restart`,
+    );
+  }
+
+  const tempRoot = miniCpaTempRoot();
+  const tempSize = directorySizeBytes(tempRoot);
+  if (tempSize > 10 * 1024 * 1024) {
+    console.log(
+      `[warn] temp ${formatBytes(tempSize)} under ${tempRoot} — run: cpa clean`,
+    );
+  } else if (tempSize > 0) {
+    console.log(`[info] temp ${formatBytes(tempSize)} (${tempRoot})`);
+  } else {
+    console.log(`[info] temp empty (${tempRoot})`);
+  }
+
   const running = resolveRunning(ctx.home);
   if (running) {
     console.log(`[ ok ] running PID=${running.pid}`);
@@ -94,10 +138,14 @@ export async function runDoctor(opts: { home?: string }): Promise<void> {
 
   // Optional: GitHub reachability (non-fatal)
   try {
-    const res = await httpFetch("https://api.github.com/rate_limit", {
-      headers: { "User-Agent": "MiniCPA", Accept: "application/vnd.github+json" },
-      signal: AbortSignal.timeout(10_000),
-    });
+    const res = await httpFetch(
+      "https://api.github.com/rate_limit",
+      {
+        headers: { "User-Agent": "MiniCPA", Accept: "application/vnd.github+json" },
+        signal: AbortSignal.timeout(10_000),
+      },
+      { retries: 1, minDelayMs: 200, maxDelayMs: 1_000 },
+    );
     if (res.ok) {
       const body = (await res.json()) as { resources?: { core?: { remaining?: number } } };
       const remaining = body.resources?.core?.remaining;

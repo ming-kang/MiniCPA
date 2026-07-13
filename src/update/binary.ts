@@ -154,8 +154,10 @@ export async function checkBinaryUpdate(home: string): Promise<{
 
 /**
  * Replace CPA binary in place.
- * - Running process is stopped automatically, then restarted after success.
+ * - Download + checksum + extract happen **before** stopping a running CPA.
+ * - Running process is stopped only for the brief install window, then restarted.
  * - Already-latest installs are skipped unless `force` or a specific `version` is requested.
+ * - `.bak` is cleared only after a successful install (and healthy restart when it was running).
  * - If we stopped the process and the update fails, restore `.bak` and try to restart.
  */
 export async function updateBinary(
@@ -176,16 +178,13 @@ export async function updateBinary(
     return { version, changed: false, skipped: true, restarted: false };
   }
 
-  if (wasRunning) {
-    console.log("Stopping CPA for binary replace…");
-    await stopDaemon(home);
-  }
+  // Phase 1: prepare the new binary while CPA may still be serving traffic.
+  const { assetName, url } = pickReleaseAsset(release, process.platform, process.arch);
+  ensureDir(miniCpaTempDownloadsDir());
+  const archivePath = path.join(miniCpaTempDownloadsDir(), assetName);
+  const staging = miniCpaTempExtractDir();
 
   try {
-    const { assetName, url } = pickReleaseAsset(release, process.platform, process.arch);
-    ensureDir(miniCpaTempDownloadsDir());
-    const archivePath = path.join(miniCpaTempDownloadsDir(), assetName);
-
     await downloadToFile(url, archivePath, {
       label: assetName,
       apiAsset: true,
@@ -198,10 +197,16 @@ export async function updateBinary(
       console.error("Warning: --insecure skips archive integrity verification");
     }
 
-    const staging = miniCpaTempExtractDir();
+    const extractedExe = await extractArchive(archivePath, staging);
+
+    // Phase 2: brief downtime for in-place replace.
+    if (wasRunning) {
+      console.log("Stopping CPA for binary replace…");
+      await stopDaemon(home);
+    }
+
     try {
       await waitForBinaryUnlocked(home);
-      const extractedExe = await extractArchive(archivePath, staging);
       installRuntimeBinary(home, version, extractedExe);
 
       const next = readInstallState(home);
@@ -211,38 +216,39 @@ export async function updateBinary(
         runtimeVersion: version,
         lastUpdateCheck: new Date().toISOString(),
       });
-    } finally {
-      fs.rmSync(staging, { recursive: true, force: true });
+
+      let restarted = false;
+      if (wasRunning) {
+        console.log("Restarting CPA…");
+        // startDaemon waits for HTTP ready by default.
+        await startDaemon(home);
+        restarted = true;
+      }
+
+      clearRuntimeBinaryBackup(home);
+      return { version, changed: true, skipped: false, restarted };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!wasRunning) throw err;
+
+      console.error("Update failed; restoring previous binary and restarting…");
+      restoreRuntimeBinaryFromBackup(home);
       try {
-        fs.unlinkSync(archivePath);
-      } catch {
-        /* ignore */
+        await startDaemon(home);
+        throw new BinaryUpdateError(msg, true);
+      } catch (restartErr) {
+        if (restartErr instanceof BinaryUpdateError) throw restartErr;
+        const restartMessage =
+          restartErr instanceof Error ? restartErr.message : String(restartErr);
+        throw new BinaryUpdateError(`${msg}\nRestart error: ${restartMessage}`, false);
       }
     }
-
-    let restarted = false;
-    if (wasRunning) {
-      console.log("Restarting CPA…");
-      await startDaemon(home);
-      restarted = true;
-    }
-
-    clearRuntimeBinaryBackup(home);
-    return { version, changed: true, skipped: false, restarted };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!wasRunning) throw err;
-
-    console.error("Update failed; restoring previous binary and restarting…");
-    restoreRuntimeBinaryFromBackup(home);
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true });
     try {
-      await startDaemon(home);
-      throw new BinaryUpdateError(msg, true);
-    } catch (restartErr) {
-      if (restartErr instanceof BinaryUpdateError) throw restartErr;
-      const restartMessage =
-        restartErr instanceof Error ? restartErr.message : String(restartErr);
-      throw new BinaryUpdateError(`${msg}\nRestart error: ${restartMessage}`, false);
+      fs.unlinkSync(archivePath);
+    } catch {
+      /* ignore */
     }
   }
 }

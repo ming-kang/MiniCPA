@@ -2,7 +2,7 @@ import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { activeExecutablePath, cpaLayout, ensureDir } from "../paths.js";
 import { clearPid, readPidRecord, writePidRecord } from "../state.js";
-import { sleep, tailFile } from "../util.js";
+import { rotateFileIfLarge, sleep, tailFile } from "../util.js";
 import { buildCpaChildEnv } from "./child-env.js";
 import { managementUrl, waitForHttpOk } from "./health.js";
 import { imageMatchesExpectedExe, parseTasklistImageName } from "./pid-identity.js";
@@ -10,7 +10,8 @@ import { resolveRunnableExecutable } from "./runtime.js";
 
 const DEFAULT_READY_MS = 15_000;
 const STOP_GRACE_MS = 5_000;
-const FILE_UNLOCK_WAIT_MS = 5_000;
+/** Windows antivirus / explorer can hold the exe briefly after stop. */
+export const FILE_UNLOCK_WAIT_MS = 30_000;
 
 export function isProcessAlive(pid: number): boolean {
   try {
@@ -128,6 +129,7 @@ export async function waitForBinaryUnlocked(
   const target = activeExecutablePath(home);
   if (!fs.existsSync(target)) return;
   const deadline = Date.now() + timeoutMs;
+  let delay = 150;
   while (Date.now() < deadline) {
     try {
       const probe = `${target}.unlock-probe`;
@@ -135,9 +137,13 @@ export async function waitForBinaryUnlocked(
       fs.renameSync(probe, target);
       return;
     } catch {
-      await sleep(150);
+      await sleep(delay);
+      delay = Math.min(1_000, Math.floor(delay * 1.5));
     }
   }
+  throw new Error(
+    `CPA binary still locked after ${timeoutMs}ms: ${target}. Close programs using it and retry.`,
+  );
 }
 
 export type StartOptions = {
@@ -172,6 +178,9 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
   }
 
   const exe = resolveRunnableExecutable(home);
+  // Rotate oversized logs only when starting a new process (fd not yet held).
+  rotateFileIfLarge(layout.logFile);
+  rotateFileIfLarge(layout.errLogFile);
   const out = fs.openSync(layout.logFile, "a");
   const err = fs.openSync(layout.errLogFile, "a");
 
