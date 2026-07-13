@@ -42,6 +42,8 @@ Override home: `CPA_HOME`, `cpa --home <dir>`, or `cpa init --home <dir>`.
 
 Optional: set `GITHUB_TOKEN` to avoid GitHub API rate limits during updates. That token is **not** passed into the CPA process.
 
+**Proxy:** MiniCPA honors standard shell proxy env vars for update/network calls: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` (upper or lower case). Set them in PowerShell `$PROFILE`, bashrc, etc. — same as curl/git. `cpa doctor` prints whether a proxy is detected.
+
 Change the default API key (`sk-cliproxyapi`) in `config.yaml` before exposing the API.
 
 ## Develop

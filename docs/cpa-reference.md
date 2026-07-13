@@ -9,6 +9,7 @@ When MiniCPA starts CPA:
 - **Binary** = `<home>/cli-proxy-api` (or `.exe` on Windows) — replaced in place by `cpa update`
 - **Logs** = `<home>/logs/cpa.log` and `<home>/logs/cpa.err.log`
 - **Child env** = parent env minus MiniCPA secrets (`GITHUB_TOKEN`, `GH_TOKEN`, `NPM_TOKEN`, `NODE_AUTH_TOKEN`)
+- **Outbound HTTP (update / doctor GitHub probe)** honors shell proxy env: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` (case-insensitive). Local `cpa start` readiness checks stay direct to loopback and do not use the proxy.
 
 Default `config.yaml` from `cpa init` uses `auth-dir: auths` (relative to home). Optional `.env` in the same directory is loaded by CPA at startup.
 
@@ -52,6 +53,7 @@ OAuth, routing, api-keys, and management secrets: edit `config.yaml` / `.env` or
 | Update checksum / integrity error | Retry; if GitHub asset is broken, temporary `--insecure` then re-check later |
 | Update failed mid-way | `cpa status`; if not running, `cpa start`. Re-run `cpa update --force` if binary looks broken |
 | GitHub rate limit on update | Set `GITHUB_TOKEN`, then retry (token is not passed into CPA) |
+| `fetch failed` / connect timeout on update | Ensure `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` are set in the same shell (profile.ps1 / bashrc). Run `cpa doctor` to confirm proxy env. Release assets download via `api.github.com` when possible. |
 | Default api-key warning from doctor | Edit `api-keys` in `config.yaml` before exposing the API |
 | Wrong install directory | `cpa home` / `cpa root`; override with `CPA_HOME` or `--home` |
 

@@ -2,36 +2,57 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { httpFetch } from "../http.js";
 import { formatBytes } from "../util.js";
+
+export type GhAsset = {
+  id?: number;
+  name: string;
+  browser_download_url: string;
+  url?: string;
+  digest?: string;
+};
 
 export type GhRelease = {
   tag_name: string;
   name: string;
   published_at: string;
-  assets: Array<{
-    name: string;
-    browser_download_url: string;
-    digest?: string;
-  }>;
+  assets: GhAsset[];
 };
 
 const CPA_REPO = "router-for-me/CLIProxyAPI";
 const API_TIMEOUT_MS = 30_000;
 const DOWNLOAD_TIMEOUT_MS = 300_000;
 
-function githubHeaders(json = false): Record<string, string> {
+function githubHeaders(mode: "json" | "download" | "browser" = "browser"): Record<string, string> {
   const headers: Record<string, string> = {
     "User-Agent": "MiniCPA",
   };
-  if (json) headers.Accept = "application/vnd.github+json";
+  if (mode === "json") headers.Accept = "application/vnd.github+json";
+  else if (mode === "download") headers.Accept = "application/octet-stream";
   const token = process.env.GITHUB_TOKEN;
   if (token) headers.Authorization = `Bearer ${token}`;
   return headers;
 }
 
+/** Prefer API asset endpoint (works better behind some networks/proxies than github.com/releases/download). */
+export function releaseAssetDownloadUrl(repo: string, asset: GhAsset): string {
+  if (typeof asset.id === "number" && Number.isFinite(asset.id)) {
+    return `https://api.github.com/repos/${repo}/releases/assets/${asset.id}`;
+  }
+  if (asset.url && asset.url.includes("/releases/assets/")) {
+    return asset.url;
+  }
+  return asset.browser_download_url;
+}
+
+function isApiAssetUrl(url: string): boolean {
+  return /api\.github\.com\/repos\/.+\/releases\/assets\//i.test(url);
+}
+
 export async function fetchLatestRelease(repo: string): Promise<GhRelease> {
-  const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
-    headers: githubHeaders(true),
+  const res = await httpFetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+    headers: githubHeaders("json"),
     signal: AbortSignal.timeout(API_TIMEOUT_MS),
   });
   if (!res.ok) {
@@ -46,10 +67,10 @@ export async function fetchLatestCpaRelease(): Promise<GhRelease> {
 
 export async function fetchCpaReleaseByTag(tag: string): Promise<GhRelease> {
   const normalized = tag.startsWith("v") ? tag : `v${tag}`;
-  const res = await fetch(
+  const res = await httpFetch(
     `https://api.github.com/repos/${CPA_REPO}/releases/tags/${normalized}`,
     {
-      headers: githubHeaders(true),
+      headers: githubHeaders("json"),
       signal: AbortSignal.timeout(API_TIMEOUT_MS),
     },
   );
@@ -71,9 +92,11 @@ export type DownloadOptions = {
   /** Shown in progress line */
   label?: string;
   timeoutMs?: number;
+  /** Override Accept / auth for GitHub API asset downloads */
+  apiAsset?: boolean;
 };
 
-/** Stream download to disk with optional progress on stderr. */
+/** Stream download to disk with optional progress on stderr. Honors proxy env via httpFetch. */
 export async function downloadToFile(
   url: string,
   dest: string,
@@ -81,14 +104,15 @@ export async function downloadToFile(
 ): Promise<void> {
   const timeoutMs = options?.timeoutMs ?? DOWNLOAD_TIMEOUT_MS;
   const label = options?.label ?? path.basename(dest);
+  const useApiAsset = options?.apiAsset ?? isApiAssetUrl(url);
 
-  const res = await fetch(url, {
-    headers: githubHeaders(false),
+  const res = await httpFetch(url, {
+    headers: githubHeaders(useApiAsset ? "download" : "browser"),
     redirect: "follow",
     signal: AbortSignal.timeout(timeoutMs),
   });
-  if (!res.ok) throw new Error(`Download failed ${res.status}: ${url}`);
-  if (!res.body) throw new Error(`Download failed (empty body): ${url}`);
+  if (!res.ok) throw new Error(`Download failed ${res.status}: ${label}`);
+  if (!res.body) throw new Error(`Download failed (empty body): ${label}`);
 
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   const total = Number(res.headers.get("content-length") || 0);
@@ -125,11 +149,19 @@ export async function downloadToFile(
   }
 }
 
+export type PickedReleaseAsset = {
+  assetName: string;
+  /** Prefer API asset URL when id is present. */
+  url: string;
+  asset: GhAsset;
+};
+
 export function pickReleaseAsset(
   release: GhRelease,
   platform: NodeJS.Platform,
   arch: string,
-): { assetName: string; url: string } {
+  repo: string = CPA_REPO,
+): PickedReleaseAsset {
   const version = normalizeTagVersion(release.tag_name);
   const candidates: string[] = [];
 
@@ -147,7 +179,13 @@ export function pickReleaseAsset(
 
   for (const name of candidates) {
     const asset = release.assets.find((a) => a.name === name);
-    if (asset) return { assetName: asset.name, url: asset.browser_download_url };
+    if (asset) {
+      return {
+        assetName: asset.name,
+        url: releaseAssetDownloadUrl(repo, asset),
+        asset,
+      };
+    }
   }
 
   throw new Error(
@@ -165,7 +203,10 @@ export function parseChecksumsText(text: string): Map<string, string> {
   return map;
 }
 
-export async function fetchChecksums(release: GhRelease): Promise<Map<string, string>> {
+export async function fetchChecksums(
+  release: GhRelease,
+  repo: string = CPA_REPO,
+): Promise<Map<string, string>> {
   const asset = release.assets.find((a) => a.name === "checksums.txt");
   if (!asset) {
     throw new Error(
@@ -173,8 +214,10 @@ export async function fetchChecksums(release: GhRelease): Promise<Map<string, st
     );
   }
 
-  const res = await fetch(asset.browser_download_url, {
-    headers: githubHeaders(false),
+  const url = releaseAssetDownloadUrl(repo, asset);
+  const res = await httpFetch(url, {
+    headers: githubHeaders(isApiAssetUrl(url) ? "download" : "browser"),
+    redirect: "follow",
     signal: AbortSignal.timeout(API_TIMEOUT_MS),
   });
   if (!res.ok) {

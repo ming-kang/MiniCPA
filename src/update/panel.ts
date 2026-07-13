@@ -8,6 +8,7 @@ import {
   downloadToFile,
   fetchLatestRelease,
   normalizeTagVersion,
+  releaseAssetDownloadUrl,
   repoFromPanelUrl,
 } from "./github.js";
 
@@ -57,8 +58,9 @@ export async function updatePanel(
 
   ensureDir(miniCpaTempDownloadsDir());
   const cachePath = path.join(miniCpaTempDownloadsDir(), `management-${release.tag_name}.html`);
-  await downloadToFile(asset.browser_download_url, cachePath, {
+  await downloadToFile(releaseAssetDownloadUrl(repo, asset), cachePath, {
     label: "management.html",
+    apiAsset: true,
   });
 
   fs.mkdirSync(layout.staticDir, { recursive: true });

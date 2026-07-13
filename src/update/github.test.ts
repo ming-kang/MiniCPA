@@ -4,6 +4,7 @@ import {
   normalizeTagVersion,
   parseChecksumsText,
   pickReleaseAsset,
+  releaseAssetDownloadUrl,
   repoFromPanelUrl,
   type GhRelease,
 } from "./github.js";
@@ -13,9 +14,11 @@ function release(tag: string, names: string[]): GhRelease {
     tag_name: tag,
     name: tag,
     published_at: "2026-01-01T00:00:00Z",
-    assets: names.map((name) => ({
+    assets: names.map((name, index) => ({
+      id: 1000 + index,
       name,
       browser_download_url: `https://example.com/${name}`,
+      url: `https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/assets/${1000 + index}`,
     })),
   };
 }
@@ -66,9 +69,10 @@ describe("pickReleaseAsset", () => {
   ];
   const rel = release("v7.0.0", names);
 
-  it("picks windows amd64", () => {
-    const { assetName } = pickReleaseAsset(rel, "win32", "x64");
-    assert.equal(assetName, "CLIProxyAPI_7.0.0_windows_amd64.zip");
+  it("picks windows amd64 via API asset URL", () => {
+    const picked = pickReleaseAsset(rel, "win32", "x64");
+    assert.equal(picked.assetName, "CLIProxyAPI_7.0.0_windows_amd64.zip");
+    assert.match(picked.url, /api\.github\.com\/repos\/router-for-me\/CLIProxyAPI\/releases\/assets\//);
   });
 
   it("prefers windows arm64 when available", () => {
@@ -89,5 +93,28 @@ describe("pickReleaseAsset", () => {
   it("throws when no asset", () => {
     const empty = release("v1.0.0", []);
     assert.throws(() => pickReleaseAsset(empty, "win32", "x64"), /No release asset/);
+  });
+});
+
+describe("releaseAssetDownloadUrl", () => {
+  it("prefers numeric asset id", () => {
+    assert.equal(
+      releaseAssetDownloadUrl("owner/repo", {
+        id: 42,
+        name: "a.zip",
+        browser_download_url: "https://github.com/owner/repo/releases/download/v1/a.zip",
+      }),
+      "https://api.github.com/repos/owner/repo/releases/assets/42",
+    );
+  });
+
+  it("falls back to browser URL without id", () => {
+    assert.equal(
+      releaseAssetDownloadUrl("owner/repo", {
+        name: "a.zip",
+        browser_download_url: "https://github.com/owner/repo/releases/download/v1/a.zip",
+      }),
+      "https://github.com/owner/repo/releases/download/v1/a.zip",
+    );
   });
 });

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { getListenAddress, readCpaConfig } from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
+import { describeProxyEnv, hasProxyEnvConfigured, httpFetch } from "../http.js";
 import { managementUrl, waitForHttpOk } from "../process/health.js";
 import { resolveRunning } from "../process/lifecycle.js";
 import { readCurrentRuntimeVersion, resolveRunnableExecutable } from "../process/runtime.js";
@@ -85,11 +86,17 @@ export async function runDoctor(opts: { home?: string }): Promise<void> {
     console.log("[info] not running (cpa start)");
   }
 
+  if (hasProxyEnvConfigured()) {
+    console.log(`[info] proxy env ${describeProxyEnv()}`);
+  } else {
+    console.log("[info] proxy env none (HTTP(S)_PROXY / ALL_PROXY not set)");
+  }
+
   // Optional: GitHub reachability (non-fatal)
   try {
-    const res = await fetch("https://api.github.com/rate_limit", {
+    const res = await httpFetch("https://api.github.com/rate_limit", {
       headers: { "User-Agent": "MiniCPA", Accept: "application/vnd.github+json" },
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(10_000),
     });
     if (res.ok) {
       const body = (await res.json()) as { resources?: { core?: { remaining?: number } } };

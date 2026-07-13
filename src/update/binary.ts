@@ -184,7 +184,10 @@ export async function updateBinary(
     ensureDir(miniCpaTempDownloadsDir());
     const archivePath = path.join(miniCpaTempDownloadsDir(), assetName);
 
-    await downloadToFile(url, archivePath, { label: assetName });
+    await downloadToFile(url, archivePath, {
+      label: assetName,
+      apiAsset: true,
+    });
 
     let checksums = new Map<string, string>();
     if (!options?.insecure) {

@@ -34,6 +34,7 @@ export async function waitForHttpOk(url: string, timeoutMs = 8000): Promise<bool
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
+      // Local loopback probe — use global fetch so HTTP(S)_PROXY is not applied.
       const res = await fetch(url, {
         method: "GET",
         signal: AbortSignal.timeout(2000),
