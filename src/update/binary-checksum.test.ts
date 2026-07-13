@@ -4,8 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { executableName } from "../paths.js";
-import { verifyBinaryChecksum } from "./binary.js";
+import { verifyArchiveChecksum } from "./binary.js";
 
 const temps: string[] = [];
 
@@ -15,55 +14,58 @@ afterEach(() => {
   }
 });
 
-function writeTempExe(content: string): string {
+function writeTempArchive(content: string, name = "CLIProxyAPI_7.0.0_windows_amd64.zip"): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-cksum-"));
   temps.push(dir);
-  const file = path.join(dir, executableName());
+  const file = path.join(dir, name);
   fs.writeFileSync(file, content);
   return file;
 }
 
-describe("verifyBinaryChecksum", () => {
-  it("accepts matching checksum", () => {
-    const content = "hello-cpa";
-    const exePath = writeTempExe(content);
+describe("verifyArchiveChecksum", () => {
+  it("accepts matching archive checksum (upstream checksums.txt style)", () => {
+    const archiveName = "CLIProxyAPI_7.0.0_windows_amd64.zip";
+    const content = "hello-archive";
+    const archivePath = writeTempArchive(content, archiveName);
     const digest = crypto.createHash("sha256").update(content).digest("hex");
-    const map = new Map([[executableName(), digest]]);
-    assert.doesNotThrow(() =>
-      verifyBinaryChecksum(map, "archive.zip", exePath),
-    );
+    const map = new Map([[archiveName, digest]]);
+    assert.doesNotThrow(() => verifyArchiveChecksum(map, archivePath, archiveName));
   });
 
   it("rejects mismatch", () => {
-    const exePath = writeTempExe("payload");
-    const map = new Map([[executableName(), "a".repeat(64)]]);
+    const archiveName = "CLIProxyAPI_7.0.0_windows_amd64.zip";
+    const archivePath = writeTempArchive("payload", archiveName);
+    const map = new Map([[archiveName, "a".repeat(64)]]);
     assert.throws(
-      () => verifyBinaryChecksum(map, "archive.zip", exePath),
+      () => verifyArchiveChecksum(map, archivePath, archiveName),
       /Checksum mismatch/,
     );
   });
 
   it("rejects missing key", () => {
-    const exePath = writeTempExe("payload");
-    const map = new Map([["other-name", "b".repeat(64)]]);
+    const archiveName = "CLIProxyAPI_7.0.0_windows_amd64.zip";
+    const archivePath = writeTempArchive("payload", archiveName);
+    const map = new Map([["other.zip", "b".repeat(64)]]);
     assert.throws(
-      () => verifyBinaryChecksum(map, "archive.zip", exePath),
-      /No checksum entry/,
+      () => verifyArchiveChecksum(map, archivePath, archiveName),
+      /No checksum entry for archive/,
     );
   });
 
   it("rejects empty map", () => {
-    const exePath = writeTempExe("payload");
+    const archiveName = "CLIProxyAPI_7.0.0_windows_amd64.zip";
+    const archivePath = writeTempArchive("payload", archiveName);
     assert.throws(
-      () => verifyBinaryChecksum(new Map(), "archive.zip", exePath),
+      () => verifyArchiveChecksum(new Map(), archivePath, archiveName),
       /No checksums available/,
     );
   });
 
   it("skips when insecure", () => {
-    const exePath = writeTempExe("payload");
+    const archiveName = "CLIProxyAPI_7.0.0_windows_amd64.zip";
+    const archivePath = writeTempArchive("payload", archiveName);
     assert.doesNotThrow(() =>
-      verifyBinaryChecksum(new Map(), "archive.zip", exePath, { insecure: true }),
+      verifyArchiveChecksum(new Map(), archivePath, archiveName, { insecure: true }),
     );
   });
 });

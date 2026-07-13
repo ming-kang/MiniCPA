@@ -102,28 +102,30 @@ async function extractArchive(archivePath: string, destDir: string): Promise<str
   throw new Error(`Unsupported archive: ${archivePath}`);
 }
 
-/** Strict integrity check unless insecure. Exported for unit tests. */
-export function verifyBinaryChecksum(
+/**
+ * Verify the downloaded release archive against checksums.txt.
+ * CLIProxyAPI publishes SHA-256 of the zip/tar.gz asset names, not the nested binary.
+ */
+export function verifyArchiveChecksum(
   checksums: Map<string, string>,
+  archivePath: string,
   archiveName: string,
-  exePath: string,
   options?: { insecure?: boolean },
 ): void {
   if (options?.insecure) return;
   if (checksums.size === 0) {
     throw new Error("No checksums available (use --insecure to skip integrity check)");
   }
-  const exeName = executableName();
-  const keys = [`${archiveName}/${exeName}`, exeName, path.basename(exePath)];
+  const keys = [archiveName, path.basename(archivePath)];
   const expected = keys.map((key) => checksums.get(key)).find(Boolean);
   if (!expected) {
     throw new Error(
-      `No checksum entry for ${exeName} (tried: ${keys.join(", ")}). Use --insecure to skip.`,
+      `No checksum entry for archive ${archiveName} (tried: ${keys.join(", ")}). Use --insecure to skip.`,
     );
   }
-  const actual = sha256File(exePath);
+  const actual = sha256File(archivePath);
   if (actual !== expected) {
-    throw new Error(`Checksum mismatch for ${exeName}`);
+    throw new Error(`Checksum mismatch for ${archiveName}`);
   }
 }
 
@@ -189,20 +191,17 @@ export async function updateBinary(
       apiAsset: true,
     });
 
-    let checksums = new Map<string, string>();
     if (!options?.insecure) {
-      checksums = await fetchChecksums(release);
+      const checksums = await fetchChecksums(release);
+      verifyArchiveChecksum(checksums, archivePath, assetName);
     } else {
-      console.error("Warning: --insecure skips binary integrity verification");
+      console.error("Warning: --insecure skips archive integrity verification");
     }
 
     const staging = miniCpaTempExtractDir();
     try {
       await waitForBinaryUnlocked(home);
       const extractedExe = await extractArchive(archivePath, staging);
-      verifyBinaryChecksum(checksums, assetName, extractedExe, {
-        insecure: options?.insecure,
-      });
       installRuntimeBinary(home, version, extractedExe);
 
       const next = readInstallState(home);

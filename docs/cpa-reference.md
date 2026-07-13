@@ -36,7 +36,7 @@ OAuth, routing, api-keys, and management secrets: edit `config.yaml` / `.env` or
 ## Update behaviour
 
 - `cpa update` replaces **binary + panel** by default.
-- Binary integrity: downloads release `checksums.txt` and verifies the executable SHA-256. Missing/failed checksums **abort** the update unless you pass **`--insecure`** (unsafe; for emergencies only).
+- Binary integrity: downloads release `checksums.txt` and verifies the **archive** SHA-256 (zip/tar.gz asset name, as published upstream). Missing/failed checksums **abort** the update unless you pass **`--insecure`** (unsafe; for emergencies only).
 - Already-latest versions are **skipped** unless you pass `--force` (or `--version` for a specific binary tag). “Current” prefers probing the on-disk binary, then install state.
 - If CPA is running, update **stops → replaces → restarts** automatically.
 - Previous binary is kept as `cli-proxy-api(.exe).bak` during replace. On failure after stop, MiniCPA restores the backup and tries to restart; on success the backup is removed. If restart also fails, run `cpa start` manually.
