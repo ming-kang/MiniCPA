@@ -15,7 +15,8 @@ export async function runInit(opts: { home?: string; force?: boolean }): Promise
 
   if (!fs.existsSync(layout.configFile) || opts.force) {
     if (opts.force && fs.existsSync(layout.configFile)) {
-      const bak = `${layout.configFile}.bak`;
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const bak = `${layout.configFile}.bak.${stamp}`;
       fs.copyFileSync(layout.configFile, bak);
       console.log(`Backed up ${layout.configFile} → ${bak}`);
     }
@@ -36,6 +37,7 @@ export async function runInit(opts: { home?: string; force?: boolean }): Promise
   writeCliGlobalConfig({ home });
   console.log(`MiniCPA root  ${miniCpaRoot()}`);
   console.log(`Instance      ${home}`);
+  console.log(`Note: change default api-key (sk-cliproxyapi) before exposing the API`);
   console.log(`Next: cpa update`);
   console.log(`      cpa start`);
   console.log(`      cpa open`);

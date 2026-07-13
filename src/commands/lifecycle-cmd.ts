@@ -1,13 +1,17 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createContext, printHome } from "../context.js";
+import { buildCpaChildEnv } from "../process/child-env.js";
 import { apiBaseUrl, managementUrl, waitForHttpOk } from "../process/health.js";
 import { resolveRunning, startDaemon, stopDaemon } from "../process/lifecycle.js";
+import { withHomeLock } from "../process/lock.js";
 import { readCurrentRuntimeVersion, resolveRunnableExecutable } from "../process/runtime.js";
 
 export async function runStart(opts: { home?: string; noWait?: boolean }): Promise<void> {
   const ctx = createContext(opts);
-  const running = await startDaemon(ctx.home, { noWait: opts.noWait });
+  const running = await withHomeLock(ctx.home, "start", () =>
+    startDaemon(ctx.home, { noWait: opts.noWait }),
+  );
   const base = apiBaseUrl(ctx.home);
   printHome(ctx);
   console.log(`Running   PID=${running.pid}`);
@@ -17,14 +21,22 @@ export async function runStart(opts: { home?: string; noWait?: boolean }): Promi
 
 export async function runStop(opts: { home?: string }): Promise<void> {
   const ctx = createContext(opts);
-  const stopped = await stopDaemon(ctx.home);
+  const stopped = await withHomeLock(ctx.home, "stop", () => stopDaemon(ctx.home));
   printHome(ctx);
   console.log(stopped ? "Stopped" : "Not running");
 }
 
 export async function runRestart(opts: { home?: string; noWait?: boolean }): Promise<void> {
-  await runStop(opts);
-  await runStart(opts);
+  const ctx = createContext(opts);
+  const running = await withHomeLock(ctx.home, "restart", async () => {
+    await stopDaemon(ctx.home);
+    return startDaemon(ctx.home, { noWait: opts.noWait });
+  });
+  const base = apiBaseUrl(ctx.home);
+  printHome(ctx);
+  console.log(`Running   PID=${running.pid}`);
+  console.log(`API       ${base}`);
+  console.log(`Manage    ${managementUrl(ctx.home)}`);
 }
 
 export async function runStatus(opts: { home?: string }): Promise<void> {
@@ -185,7 +197,7 @@ export async function runTui(opts: { home?: string }): Promise<void> {
   const child = spawn(exe, ["-config", ctx.layout.configFile, "-tui"], {
     cwd: ctx.home,
     stdio: "inherit",
-    env: process.env,
+    env: buildCpaChildEnv(),
   });
   await new Promise<void>((resolve) => {
     child.on("close", () => resolve());

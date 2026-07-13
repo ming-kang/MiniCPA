@@ -15,7 +15,7 @@ import {
   runStop,
   runTui,
 } from "./commands/lifecycle-cmd.js";
-import { runUpdate, runUpdateCheck } from "./commands/update-cmd.js";
+import { assertUpdateScopeFlags, runUpdate, runUpdateCheck } from "./commands/update-cmd.js";
 import { createContext } from "./context.js";
 import { resolveHomeOption } from "./home-opt.js";
 import { defaultCpaHome, miniCpaRoot, miniCpaTempRoot } from "./paths.js";
@@ -44,7 +44,7 @@ program
   .command("init")
   .description("Create CPA_HOME layout and register default home")
   .option("--home <dir>", "CPA_HOME directory", defaultCpaHome())
-  .option("--force", "Overwrite config.yaml (backs up to config.yaml.bak)")
+  .option("--force", "Overwrite config.yaml (backs up to config.yaml.bak.<timestamp>)")
   .action(
     withCliErrors(async (opts: { home: string; force?: boolean }, cmd: Command) => {
       await runInit({ home: homeOf(cmd) ?? opts.home, force: opts.force });
@@ -128,6 +128,7 @@ updateCmd
   .option("--panel", "Update management panel only")
   .option("--version <ver>", "Install specific CPA version (e.g. 7.2.66)")
   .option("--force", "Reinstall even if already latest (running CPA is always restarted on replace)")
+  .option("--insecure", "Skip binary checksum verification (unsafe)")
   .action(
     withCliErrors(
       async (
@@ -137,15 +138,18 @@ updateCmd
           panel?: boolean;
           version?: string;
           force?: boolean;
+          insecure?: boolean;
         },
         cmd: Command,
       ) => {
+        assertUpdateScopeFlags(opts);
         await runUpdate({
           home: homeOf(cmd),
-          panelOnly: opts.panel,
-          binaryOnly: opts.binary && !opts.panel && !opts.all,
+          panelOnly: !!opts.panel,
+          binaryOnly: !!opts.binary,
           version: opts.version,
           force: opts.force,
+          insecure: opts.insecure,
         });
       },
     ),

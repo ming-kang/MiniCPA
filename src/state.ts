@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { writeFileAtomic } from "./fs-atomic.js";
 import { cpaLayout, ensureDir } from "./paths.js";
 
 export type InstallState = {
@@ -51,7 +52,7 @@ export function writeInstallState(home: string, state: InstallState): void {
     panelSha256: state.panelSha256,
     lastUpdateCheck: state.lastUpdateCheck,
   };
-  fs.writeFileSync(layout.installStateFile, JSON.stringify(clean, null, 2) + "\n", "utf8");
+  writeFileAtomic(layout.installStateFile, JSON.stringify(clean, null, 2) + "\n");
 }
 
 export function readPidRecord(home: string): PidRecord | undefined {
@@ -81,7 +82,7 @@ export function readPidRecord(home: string): PidRecord | undefined {
 export function writePidRecord(home: string, record: PidRecord): void {
   const layout = cpaLayout(home);
   ensureDir(layout.stateDir);
-  fs.writeFileSync(layout.pidFile, JSON.stringify(record) + "\n", "utf8");
+  writeFileAtomic(layout.pidFile, JSON.stringify(record) + "\n");
 }
 
 export function clearPid(home: string): void {

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { writeFileAtomic } from "./fs-atomic.js";
 
 /** Single branded namespace — avoids generic "CPA" colliding with other installs. */
 export const MINICPA_DIR_NAME = "MiniCPA";
@@ -70,7 +71,7 @@ export function readCliGlobalConfig(): CliGlobalConfig {
 export function writeCliGlobalConfig(config: CliGlobalConfig): void {
   const dir = miniCpaRoot();
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(cliConfigPath(), JSON.stringify(config, null, 2) + "\n", "utf8");
+  writeFileAtomic(cliConfigPath(), JSON.stringify(config, null, 2) + "\n");
 }
 
 export function resolveCpaHome(explicit?: string): string {
@@ -128,6 +129,11 @@ export function executableName(): string {
 /** Single active binary under the instance root (replaced on each update). */
 export function activeExecutablePath(home: string): string {
   return path.join(home, executableName());
+}
+
+/** Previous binary kept during update for rollback. */
+export function backupExecutablePath(home: string): string {
+  return `${activeExecutablePath(home)}.bak`;
 }
 
 export function ensureDir(dir: string): void {

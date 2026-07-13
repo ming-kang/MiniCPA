@@ -33,6 +33,12 @@ export async function runDoctor(opts: { home?: string }): Promise<void> {
       const cfg = readCpaConfig(ctx.layout.configFile);
       const { host, port } = getListenAddress(cfg);
       console.log(`[info] listen ${host}:${port}`);
+      const apiKeys = cfg["api-keys"] ?? [];
+      if (apiKeys.includes("sk-cliproxyapi")) {
+        console.log(
+          "[warn] default api-key sk-cliproxyapi still in config — change before exposing the API",
+        );
+      }
     } catch (err) {
       console.log(`[fail] config.yaml parse error: ${(err as Error).message}`);
       ok = false;

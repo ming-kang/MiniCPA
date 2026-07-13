@@ -167,16 +167,26 @@ export function parseChecksumsText(text: string): Map<string, string> {
 
 export async function fetchChecksums(release: GhRelease): Promise<Map<string, string>> {
   const asset = release.assets.find((a) => a.name === "checksums.txt");
-  if (!asset) return new Map();
-
-  try {
-    const res = await fetch(asset.browser_download_url, {
-      headers: githubHeaders(false),
-      signal: AbortSignal.timeout(API_TIMEOUT_MS),
-    });
-    if (!res.ok) return new Map();
-    return parseChecksumsText(await res.text());
-  } catch {
-    return new Map();
+  if (!asset) {
+    throw new Error(
+      `Release ${release.tag_name} has no checksums.txt (use --insecure to skip integrity check)`,
+    );
   }
+
+  const res = await fetch(asset.browser_download_url, {
+    headers: githubHeaders(false),
+    signal: AbortSignal.timeout(API_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `Failed to download checksums.txt (HTTP ${res.status}). Use --insecure to skip integrity check.`,
+    );
+  }
+  const map = parseChecksumsText(await res.text());
+  if (map.size === 0) {
+    throw new Error(
+      `checksums.txt for ${release.tag_name} is empty or unparseable (use --insecure to skip)`,
+    );
+  }
+  return map;
 }

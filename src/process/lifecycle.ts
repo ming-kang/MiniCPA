@@ -1,16 +1,18 @@
 import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
-import { cpaLayout, ensureDir } from "../paths.js";
+import { activeExecutablePath, cpaLayout, ensureDir } from "../paths.js";
 import { clearPid, readPidRecord, writePidRecord } from "../state.js";
 import { sleep, tailFile } from "../util.js";
+import { buildCpaChildEnv } from "./child-env.js";
 import { managementUrl, waitForHttpOk } from "./health.js";
+import { imageMatchesExpectedExe, parseTasklistImageName } from "./pid-identity.js";
 import { resolveRunnableExecutable } from "./runtime.js";
 
 const DEFAULT_READY_MS = 15_000;
 const STOP_GRACE_MS = 5_000;
+const FILE_UNLOCK_WAIT_MS = 5_000;
 
-function isProcessAlive(pid: number): boolean {
+export function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -19,39 +21,29 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-function basenameLower(p: string): string {
-  return path.basename(p).toLowerCase();
-}
-
-/** Best-effort: does this PID look like our CPA binary? */
+/** Fail-closed: probe errors mean "not our process". */
 export function processLooksLikeCpa(pid: number, expectedExe: string): boolean {
-  const expected = basenameLower(expectedExe).replace(/\.exe$/, "");
-  if (!expected) return true;
+  const expected = expectedExe || "";
+  if (!expected) return false;
 
   try {
     if (process.platform === "linux") {
-      const comm = fs.readFileSync(`/proc/${pid}/comm`, "utf8").trim().toLowerCase();
-      if (comm && (expected.startsWith(comm) || comm.startsWith(expected))) {
-        return true;
-      }
+      const comm = fs.readFileSync(`/proc/${pid}/comm`, "utf8").trim();
+      if (comm && imageMatchesExpectedExe(comm, expected)) return true;
       const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0")[0] ?? "";
-      const base = basenameLower(cmdline).replace(/\.exe$/, "");
-      return base.includes(expected) || base === expected;
+      if (!cmdline) return false;
+      return imageMatchesExpectedExe(cmdline, expected);
     }
 
     if (process.platform === "win32") {
-      // tasklist CSV: "image name","pid",...
       const out = execFileSync(
         "tasklist",
         ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
         { encoding: "utf8", windowsHide: true, timeout: 3000 },
       ).trim();
-      if (!out || /^INFO:/i.test(out)) return false;
-      // "cli-proxy-api.exe","1234",...
-      const m = out.match(/^"([^"]+)"/);
-      const image = (m?.[1] ?? out.split(",")[0] ?? "").replace(/^"|"$/g, "").toLowerCase();
-      const imageBase = image.replace(/\.exe$/, "");
-      return imageBase === expected || imageBase.includes(expected) || expected.includes(imageBase);
+      const image = parseTasklistImageName(out);
+      if (!image) return false;
+      return imageMatchesExpectedExe(image, expected);
     }
 
     if (process.platform === "darwin") {
@@ -60,15 +52,13 @@ export function processLooksLikeCpa(pid: number, expectedExe: string): boolean {
         timeout: 3000,
       }).trim();
       if (!out) return false;
-      const base = basenameLower(out).replace(/\.exe$/, "");
-      return base === expected || base.includes(expected) || expected.includes(base);
+      return imageMatchesExpectedExe(out, expected);
     }
   } catch {
-    // If the probe fails, keep the live PID rather than false-negative stop/status.
-    return true;
+    return false;
   }
 
-  return true;
+  return false;
 }
 
 export type RunningInfo = {
@@ -116,6 +106,40 @@ function dumpRecentLogs(home: string): string {
   return parts.length ? `\n${parts.join("\n")}` : "";
 }
 
+async function runTaskkill(pid: number, force: boolean): Promise<void> {
+  const args = force
+    ? ["/PID", String(pid), "/T", "/F"]
+    : ["/PID", String(pid), "/T"];
+  await new Promise<void>((resolve) => {
+    const killer = spawn("taskkill", args, {
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    killer.on("close", () => resolve());
+    killer.on("error", () => resolve());
+  });
+}
+
+/** Wait until the active binary is free for replace (Windows file locks). */
+export async function waitForBinaryUnlocked(
+  home: string,
+  timeoutMs = FILE_UNLOCK_WAIT_MS,
+): Promise<void> {
+  const target = activeExecutablePath(home);
+  if (!fs.existsSync(target)) return;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const probe = `${target}.unlock-probe`;
+      fs.renameSync(target, probe);
+      fs.renameSync(probe, target);
+      return;
+    } catch {
+      await sleep(150);
+    }
+  }
+}
+
 export type StartOptions = {
   /** Skip waiting for HTTP ready (default false). */
   noWait?: boolean;
@@ -156,7 +180,7 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
     detached: true,
     stdio: ["ignore", out, err],
     windowsHide: true,
-    env: process.env,
+    env: buildCpaChildEnv(),
   });
 
   child.unref();
@@ -206,14 +230,18 @@ export async function stopDaemon(home: string): Promise<boolean> {
 
   const pid = running.pid;
   if (process.platform === "win32") {
-    await new Promise<void>((resolve) => {
-      const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
-        windowsHide: true,
-        stdio: "ignore",
-      });
-      killer.on("close", () => resolve());
-      killer.on("error", () => resolve());
-    });
+    await runTaskkill(pid, false);
+    const deadline = Date.now() + STOP_GRACE_MS;
+    while (Date.now() < deadline && isProcessAlive(pid)) {
+      await sleep(200);
+    }
+    if (isProcessAlive(pid)) {
+      await runTaskkill(pid, true);
+      const hardDeadline = Date.now() + 2_000;
+      while (Date.now() < hardDeadline && isProcessAlive(pid)) {
+        await sleep(100);
+      }
+    }
   } else {
     try {
       process.kill(pid, "SIGTERM");
@@ -227,8 +255,7 @@ export async function stopDaemon(home: string): Promise<boolean> {
     }
   }
 
-  // Brief wait so file locks (Windows) release before in-place binary replace.
-  await sleep(300);
+  await waitForBinaryUnlocked(home);
   clearPid(home);
   return true;
 }

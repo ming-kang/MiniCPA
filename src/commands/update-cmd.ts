@@ -1,6 +1,18 @@
 import { createContext, printHome } from "../context.js";
+import { withHomeLock } from "../process/lock.js";
 import { checkBinaryUpdate, updateBinary } from "../update/binary.js";
 import { checkPanelUpdate, updatePanel } from "../update/panel.js";
+
+export function assertUpdateScopeFlags(opts: {
+  all?: boolean;
+  binary?: boolean;
+  panel?: boolean;
+}): void {
+  const selected = [opts.all, opts.binary, opts.panel].filter(Boolean).length;
+  if (selected > 1) {
+    throw new Error("Use only one of --all, --binary, or --panel");
+  }
+}
 
 export async function runUpdateCheck(opts: { home?: string }): Promise<void> {
   const ctx = createContext(opts);
@@ -38,6 +50,8 @@ export async function runUpdate(opts: {
   version?: string;
   /** Re-download even if already latest. */
   force?: boolean;
+  /** Skip binary checksum verification (unsafe). */
+  insecure?: boolean;
 }): Promise<void> {
   const ctx = createContext(opts);
   printHome(ctx);
@@ -46,35 +60,41 @@ export async function runUpdate(opts: {
     throw new Error("Use only one of --panel or --binary");
   }
 
-  if (opts.panelOnly) {
-    const result = await updatePanel(ctx.home, { force: opts.force });
+  await withHomeLock(ctx.home, "update", async () => {
+    if (opts.panelOnly) {
+      const result = await updatePanel(ctx.home, { force: opts.force });
+      console.log(
+        result.skipped
+          ? `Panel already ${result.version} (use --force to reinstall)`
+          : `Panel updated to ${result.version}`,
+      );
+      return;
+    }
+
+    // Default: replace binary + panel. Running CPA is stopped/restarted automatically.
+    const binary = await updateBinary(ctx.home, {
+      version: opts.version,
+      force: opts.force,
+      insecure: opts.insecure,
+    });
+    if (binary.skipped) {
+      console.log(`CPA already ${binary.version} (use --force to reinstall)`);
+    } else {
+      console.log(
+        `CPA updated to ${binary.version}${binary.restarted ? " (restarted)" : ""}`,
+      );
+    }
+
+    if (opts.binaryOnly) {
+      console.log("Panel skipped (--binary).");
+      return;
+    }
+
+    const panel = await updatePanel(ctx.home, { force: opts.force });
     console.log(
-      result.skipped
-        ? `Panel already ${result.version} (use --force to reinstall)`
-        : `Panel updated to ${result.version}`,
+      panel.skipped
+        ? `Panel already ${panel.version} (use --force to reinstall)`
+        : `Panel updated to ${panel.version}`,
     );
-    return;
-  }
-
-  // Default: replace binary + panel. Running CPA is stopped/restarted automatically.
-  const binary = await updateBinary(ctx.home, { version: opts.version, force: opts.force });
-  if (binary.skipped) {
-    console.log(`CPA already ${binary.version} (use --force to reinstall)`);
-  } else {
-    console.log(
-      `CPA updated to ${binary.version}${binary.restarted ? " (restarted)" : ""}`,
-    );
-  }
-
-  if (opts.binaryOnly) {
-    console.log("Panel skipped (--binary).");
-    return;
-  }
-
-  const panel = await updatePanel(ctx.home, { force: opts.force });
-  console.log(
-    panel.skipped
-      ? `Panel already ${panel.version} (use --force to reinstall)`
-      : `Panel updated to ${panel.version}`,
-  );
+  });
 }
