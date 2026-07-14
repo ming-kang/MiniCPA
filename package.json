@@ -1,5 +1,5 @@
 {
-  "name": "@asterin/minicpa",
+  "name": "@astralyn/minicpa",
   "version": "0.0.5",
   "description": "Thin cpa CLI: layout, lifecycle, and updates for CLIProxyAPI",
   "license": "MIT",

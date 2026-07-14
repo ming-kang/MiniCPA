@@ -9,19 +9,19 @@ One install by default. **`cpa update` replaces the binary and panel in place.**
 Requires **Node.js 20+**.
 
 ```bash
-npm install -g @asterin/minicpa
+npm install -g @astralyn/minicpa
 ```
 
 Or without a global install:
 
 ```bash
-npx @asterin/minicpa --help
+npx @astralyn/minicpa --help
 ```
 
 To update MiniCPA itself:
 
 ```bash
-npm install -g @asterin/minicpa@latest
+npm install -g @astralyn/minicpa@latest
 ```
 
 `cpa update` updates the managed CPA binary and management panel; it does not update MiniCPA.
