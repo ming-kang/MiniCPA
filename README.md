@@ -6,7 +6,7 @@ One install by default. **`cpa update` replaces the binary and panel in place.**
 
 ## Install
 
-Requires **Node.js 20+**.
+Requires **Node.js 24+**.
 
 ```bash
 npm install -g @astralyn/minicpa

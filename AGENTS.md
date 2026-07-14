@@ -6,7 +6,7 @@ MiniCPA is a strict TypeScript ESM CLI for managing CLIProxyAPI instances. The e
 
 ## Build, Test, and Development Commands
 
-- `npm install` installs the Node.js 20+ development dependencies.
+- `npm install` installs the Node.js 24+ development dependencies.
 - `npm run dev -- --help` runs the TypeScript CLI without building it.
 - `npm run typecheck` runs TypeScript validation without emitting files.
 - `npm test` type-checks, then runs all `node:test` suites through `tsx`.
