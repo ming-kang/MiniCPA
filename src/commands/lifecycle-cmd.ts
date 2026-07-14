@@ -7,6 +7,17 @@ import { resolveRunning, startDaemon, stopDaemon } from "../process/lifecycle.js
 import { withHomeLock } from "../process/lock.js";
 import { readCurrentRuntimeVersion, resolveRunnableExecutable } from "../process/runtime.js";
 
+export function parseLogLineCount(value: string): number {
+  if (!/^[1-9]\d*$/.test(value)) {
+    throw new Error("--lines must be a positive whole number");
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error("--lines must be a positive whole number");
+  }
+  return parsed;
+}
+
 export async function runStart(opts: { home?: string; noWait?: boolean }): Promise<void> {
   const ctx = createContext(opts);
   const running = await withHomeLock(ctx.home, "start", () =>

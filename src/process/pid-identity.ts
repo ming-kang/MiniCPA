@@ -1,7 +1,9 @@
 import path from "node:path";
 
 function basenameLower(filePath: string): string {
-  return path.basename(filePath).toLowerCase();
+  // Process metadata may contain a path from a different OS than the current
+  // one (for example Windows tasklist output checked on a POSIX runner).
+  return path.posix.basename(filePath.replace(/\\/g, "/")).toLowerCase();
 }
 
 function stripExeSuffix(name: string): string {
@@ -20,7 +22,6 @@ export function imageMatchesExpectedExe(imageOrComm: string, expectedExe: string
   if (observed === expected) return true;
   // Linux /proc/pid/comm is often truncated to 15 characters
   if (observed.length <= 15 && expected.startsWith(observed)) return true;
-  if (expected.length <= 15 && observed.startsWith(expected)) return true;
   return false;
 }
 

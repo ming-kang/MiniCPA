@@ -15,7 +15,7 @@
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsc --noEmit && node --import tsx --test src/**/*.test.ts",
+    "test": "tsc --noEmit && node scripts/run-tests.mjs",
     "prepublishOnly": "npm test && npm run build"
   },
   "engines": {

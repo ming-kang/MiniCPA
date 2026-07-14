@@ -191,6 +191,10 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
     windowsHide: true,
     env: buildCpaChildEnv(),
   });
+  let spawnError: Error | undefined;
+  child.once("error", (err) => {
+    spawnError = err;
+  });
 
   child.unref();
   try {
@@ -207,6 +211,11 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
   const startedAt = new Date().toISOString();
   writePidRecord(home, { pid: child.pid, exe, startedAt });
   await sleep(500);
+
+  if (spawnError) {
+    clearPid(home);
+    throw new Error(`Failed to start CPA: ${spawnError.message}`);
+  }
 
   if (!isProcessAlive(child.pid)) {
     clearPid(home);

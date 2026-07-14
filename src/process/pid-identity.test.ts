@@ -18,6 +18,7 @@ describe("imageMatchesExpectedExe", () => {
   it("rejects unrelated images", () => {
     assert.equal(imageMatchesExpectedExe("chrome", "cli-proxy-api"), false);
     assert.equal(imageMatchesExpectedExe("node", "/bin/cli-proxy-api"), false);
+    assert.equal(imageMatchesExpectedExe("cli-proxy-api-other", "cli-proxy-api"), false);
   });
 });
 

@@ -15,6 +15,7 @@ import {
   runStatus,
   runStop,
   runTui,
+  parseLogLineCount,
 } from "./commands/lifecycle-cmd.js";
 import { assertUpdateScopeFlags, runUpdate, runUpdateCheck } from "./commands/update-cmd.js";
 import { createContext } from "./context.js";
@@ -101,7 +102,7 @@ program
       await runLogs({
         home: homeOf(cmd),
         follow: opts.follow,
-        lines: Number.parseInt(opts.lines, 10) || 80,
+        lines: parseLogLineCount(opts.lines),
         errOnly: opts.err,
       });
     }),
