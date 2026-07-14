@@ -49,6 +49,13 @@ export function miniCpaTempDownloadsDir(): string {
   return path.join(miniCpaTempRoot(), "downloads");
 }
 
+/** Unique per-operation download directory; safe for updates across multiple homes. */
+export function miniCpaTempDownloadDir(prefix = "download-"): string {
+  const downloads = miniCpaTempDownloadsDir();
+  ensureDir(downloads);
+  return fs.mkdtempSync(path.join(downloads, prefix));
+}
+
 export function miniCpaTempExtractDir(prefix = "extract-"): string {
   ensureDir(miniCpaTempRoot());
   return fs.mkdtempSync(path.join(miniCpaTempRoot(), prefix));

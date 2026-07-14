@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getPanelRepository, readCpaConfig } from "../config-yaml.js";
-import { cpaLayout, ensureDir, miniCpaTempDownloadsDir } from "../paths.js";
-import { readInstallState, writeInstallState } from "../state.js";
+import { writeFileAtomic } from "../fs-atomic.js";
+import { cpaLayout, ensureDir, miniCpaTempDownloadDir } from "../paths.js";
+import { readInstallState, type InstallState, writeInstallState } from "../state.js";
 import { sha256File } from "../util.js";
 import {
   downloadToFile,
@@ -18,6 +19,19 @@ export type PanelUpdateResult = {
   skipped: boolean;
 };
 
+/** True only when the on-disk panel matches the version and digest MiniCPA recorded. */
+export function isInstalledPanelIntact(
+  managementHtml: string,
+  state: Pick<InstallState, "panelVersion" | "panelSha256">,
+): boolean {
+  if (!state.panelVersion || !state.panelSha256 || !fs.existsSync(managementHtml)) return false;
+  try {
+    return sha256File(managementHtml) === state.panelSha256;
+  } catch {
+    return false;
+  }
+}
+
 export async function checkPanelUpdate(home: string): Promise<{
   current?: string;
   latest: string;
@@ -29,7 +43,8 @@ export async function checkPanelUpdate(home: string): Promise<{
   const release = await fetchLatestRelease(repo);
   const latest = normalizeTagVersion(release.tag_name);
   const state = readInstallState(home);
-  const current = state.panelVersion;
+  const intact = isInstalledPanelIntact(layout.managementHtml, state);
+  const current = intact ? state.panelVersion : undefined;
   return {
     current,
     latest,
@@ -49,38 +64,39 @@ export async function updatePanel(
   const version = normalizeTagVersion(release.tag_name);
   const state = readInstallState(home);
 
-  if (state.panelVersion === version && !options?.force) {
+  if (
+    state.panelVersion === version &&
+    isInstalledPanelIntact(layout.managementHtml, state) &&
+    !options?.force
+  ) {
     return { version, changed: false, skipped: true };
   }
 
   const asset = release.assets.find((a) => a.name === "management.html");
   if (!asset) throw new Error(`management.html not found in ${repo} ${release.tag_name}`);
 
-  ensureDir(miniCpaTempDownloadsDir());
-  const cachePath = path.join(miniCpaTempDownloadsDir(), `management-${release.tag_name}.html`);
-  await downloadToFile(releaseAssetDownloadUrl(repo, asset), cachePath, {
-    label: "management.html",
-    apiAsset: true,
-  });
-
-  fs.mkdirSync(layout.staticDir, { recursive: true });
-  const tmp = `${layout.managementHtml}.tmp`;
-  fs.copyFileSync(cachePath, tmp);
-  fs.renameSync(tmp, layout.managementHtml);
+  const downloadDir = miniCpaTempDownloadDir("panel-");
+  const cachePath = path.join(downloadDir, "management.html");
   try {
-    fs.unlinkSync(cachePath);
-  } catch {
-    /* ignore */
+    await downloadToFile(releaseAssetDownloadUrl(repo, asset), cachePath, {
+      label: "management.html",
+      apiAsset: true,
+    });
+
+    ensureDir(layout.staticDir);
+    writeFileAtomic(layout.managementHtml, fs.readFileSync(cachePath));
+
+    const next = readInstallState(home);
+    writeInstallState(home, {
+      ...next,
+      cpaHome: home,
+      panelVersion: version,
+      panelSha256: sha256File(layout.managementHtml),
+      lastUpdateCheck: new Date().toISOString(),
+    });
+
+    return { version, changed: true, skipped: false };
+  } finally {
+    fs.rmSync(downloadDir, { recursive: true, force: true });
   }
-
-  const next = readInstallState(home);
-  writeInstallState(home, {
-    ...next,
-    cpaHome: home,
-    panelVersion: version,
-    panelSha256: sha256File(layout.managementHtml),
-    lastUpdateCheck: new Date().toISOString(),
-  });
-
-  return { version, changed: true, skipped: false };
 }

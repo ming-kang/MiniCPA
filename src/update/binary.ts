@@ -5,7 +5,7 @@ import * as tar from "tar";
 import {
   ensureDir,
   executableName,
-  miniCpaTempDownloadsDir,
+  miniCpaTempDownloadDir,
   miniCpaTempExtractDir,
 } from "../paths.js";
 import { resolveRunning, startDaemon, stopDaemon, waitForBinaryUnlocked } from "../process/lifecycle.js";
@@ -180,8 +180,8 @@ export async function updateBinary(
 
   // Phase 1: prepare the new binary while CPA may still be serving traffic.
   const { assetName, url } = pickReleaseAsset(release, process.platform, process.arch);
-  ensureDir(miniCpaTempDownloadsDir());
-  const archivePath = path.join(miniCpaTempDownloadsDir(), assetName);
+  const downloadDir = miniCpaTempDownloadDir("binary-");
+  const archivePath = path.join(downloadDir, assetName);
   const staging = miniCpaTempExtractDir();
 
   try {
@@ -245,10 +245,6 @@ export async function updateBinary(
     }
   } finally {
     fs.rmSync(staging, { recursive: true, force: true });
-    try {
-      fs.unlinkSync(archivePath);
-    } catch {
-      /* ignore */
-    }
+    fs.rmSync(downloadDir, { recursive: true, force: true });
   }
 }

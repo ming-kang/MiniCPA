@@ -4,6 +4,45 @@ Thin cross-platform **`cpa`** command: layout, start/stop, open management UI, u
 
 One install by default. **`cpa update` replaces the binary and panel in place.** Download and checksum happen first; a running CPA is only stopped for the brief replace window, then restarted. Already-latest installs are skipped unless you pass `--force`. Binary updates verify GitHub `checksums.txt` by default (`--insecure` skips this).
 
+## Install
+
+Requires **Node.js 20+**.
+
+```bash
+npm install -g @asterin/minicpa
+```
+
+Or without a global install:
+
+```bash
+npx @asterin/minicpa --help
+```
+
+To update MiniCPA itself:
+
+```bash
+npm install -g @asterin/minicpa@latest
+```
+
+`cpa update` updates the managed CPA binary and management panel; it does not update MiniCPA.
+
+## Quick start
+
+```bash
+cpa init
+cpa update
+cpa start
+cpa open
+```
+
+Override home: `CPA_HOME`, `cpa --home <dir>`, or `cpa init --home <dir>`.
+
+Optional: set `GITHUB_TOKEN` to avoid GitHub API rate limits during updates. That token is **not** passed into the CPA process.
+
+**Proxy:** MiniCPA honors standard shell proxy env vars for update/network calls: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` (upper or lower case). Set them in PowerShell `$PROFILE`, bashrc, etc. — same as curl/git. `cpa doctor` prints whether a proxy is detected.
+
+Change the default API key (`sk-cliproxyapi`) in `config.yaml` before exposing the API.
+
 ## Paths
 
 | Command | Windows | macOS | Linux |
@@ -29,28 +68,23 @@ See [docs/cpa-reference.md](docs/cpa-reference.md) for startup details, default 
 
 Errors print a short message; set `DEBUG=1` for stack traces.
 
-## Quick start
+## Develop
 
 ```bash
-npm install && npm run build && npm link
-cpa init
-cpa update
-cpa start
-cpa open
+git clone https://github.com/ming-kang/MiniCPA.git
+cd MiniCPA
+npm install
+npm test
+npm run build
+npm link   # optional: local global `cpa`
 ```
-
-Override home: `CPA_HOME`, `cpa --home <dir>`, or `cpa init --home <dir>`.
-
-Optional: set `GITHUB_TOKEN` to avoid GitHub API rate limits during updates. That token is **not** passed into the CPA process.
-
-**Proxy:** MiniCPA honors standard shell proxy env vars for update/network calls: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` (upper or lower case). Set them in PowerShell `$PROFILE`, bashrc, etc. — same as curl/git. `cpa doctor` prints whether a proxy is detected.
-
-Change the default API key (`sk-cliproxyapi`) in `config.yaml` before exposing the API.
-
-## Develop
 
 ```bash
 npm run typecheck
 npm test
 npm run build
 ```
+
+## License
+
+[MIT](LICENSE)

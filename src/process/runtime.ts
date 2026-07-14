@@ -8,23 +8,24 @@ import { readInstallState, writeInstallState } from "../state.js";
 import { readInstalledRuntimeVersion } from "../util.js";
 
 /**
- * Prefer probing the on-disk binary; fall back to install state.
- * When probe and state disagree, probe wins (and state is refreshed).
+ * Probe the installed binary for its version. Install state is only a record,
+ * not proof that the binary still exists or is runnable.
  */
 export async function readCurrentRuntimeVersion(home: string): Promise<string | undefined> {
   const state = readInstallState(home);
-  const probed = await readInstalledRuntimeVersion(activeExecutablePath(home));
-  if (probed) {
-    if (state.runtimeVersion !== probed) {
-      writeInstallState(home, {
-        ...state,
-        cpaHome: home,
-        runtimeVersion: probed,
-      });
-    }
-    return probed;
+  const executable = activeExecutablePath(home);
+  const probed = await readInstalledRuntimeVersion(executable);
+  if (!probed) {
+    return undefined;
   }
-  return state.runtimeVersion;
+  if (state.runtimeVersion !== probed) {
+    writeInstallState(home, {
+      ...state,
+      cpaHome: home,
+      runtimeVersion: probed,
+    });
+  }
+  return probed;
 }
 
 function moveAsideExisting(target: string, backup: string): void {

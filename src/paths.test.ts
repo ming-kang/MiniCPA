@@ -3,7 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { cpaLayout, defaultCpaHome, executableName, resolveCpaHome } from "./paths.js";
+import {
+  cpaLayout,
+  defaultCpaHome,
+  executableName,
+  miniCpaTempDownloadDir,
+  miniCpaTempDownloadsDir,
+  resolveCpaHome,
+} from "./paths.js";
 
 const prevHome = process.env.CPA_HOME;
 
@@ -57,5 +64,20 @@ describe("defaultCpaHome", () => {
     const home = defaultCpaHome();
     assert.ok(home.includes("MiniCPA") || home.includes("minicpa") || fs.existsSync(path.dirname(home)) || true);
     assert.ok(home.endsWith(path.join("instances", "default")) || home.replace(/\\/g, "/").endsWith("instances/default"));
+  });
+});
+
+describe("miniCpaTempDownloadDir", () => {
+  it("creates a distinct directory for each download operation", () => {
+    const first = miniCpaTempDownloadDir("test-download-");
+    const second = miniCpaTempDownloadDir("test-download-");
+    try {
+      assert.notEqual(first, second);
+      assert.equal(path.dirname(first), miniCpaTempDownloadsDir());
+      assert.equal(path.dirname(second), miniCpaTempDownloadsDir());
+    } finally {
+      fs.rmSync(first, { recursive: true, force: true });
+      fs.rmSync(second, { recursive: true, force: true });
+    }
   });
 });

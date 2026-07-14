@@ -3,9 +3,10 @@
   "version": "0.0.5",
   "description": "Thin cpa CLI: layout, lifecycle, and updates for CLIProxyAPI",
   "license": "MIT",
+  "author": "ming-kang",
   "type": "module",
   "bin": {
-    "cpa": "./dist/cli.js"
+    "cpa": "dist/cli.js"
   },
   "files": [
     "dist"
@@ -14,10 +15,31 @@
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsc --noEmit && node --import tsx --test src/**/*.test.ts"
+    "test": "tsc --noEmit && node --import tsx --test src/**/*.test.ts",
+    "prepublishOnly": "npm test && npm run build"
   },
   "engines": {
     "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ming-kang/MiniCPA.git"
+  },
+  "homepage": "https://github.com/ming-kang/MiniCPA#readme",
+  "bugs": {
+    "url": "https://github.com/ming-kang/MiniCPA/issues"
+  },
+  "keywords": [
+    "cli",
+    "cpa",
+    "cliproxyapi",
+    "cli-proxy-api",
+    "proxy",
+    "management",
+    "update"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "adm-zip": "^0.5.16",
