@@ -1,0 +1,42 @@
+# Default: detect text vs binary automatically and normalize line endings to LF.
+* text=auto eol=lf
+
+# Lock LF for typical source and config files that must not change on checkout.
+*.ts text eol=lf
+*.mts text eol=lf
+*.cts text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.json text eol=lf
+*.jsonc text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.mdx text eol=lf
+*.txt text eol=lf
+*.gitignore text eol=lf
+*.gitattributes text eol=lf
+*.sh text eol=lf
+*.bat text eol=lf
+*.ps1 text eol=lf
+
+# Treat common archive, image, and executable assets as binary.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tgz binary
+*.tar.gz binary
+*.gz binary
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+
+# Reduce noisy three-way merge attempts on the npm lockfile.
+package-lock.json -diff
