@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { isInstalledPanelIntact } from "./panel.js";
+import { assertPanelContentSane, isInstalledPanelIntact } from "./panel.js";
 
 const temps: string[] = [];
 
@@ -47,5 +47,26 @@ describe("isInstalledPanelIntact", () => {
       false,
     );
     assert.equal(isInstalledPanelIntact(file, { panelVersion: "1.2.3" }), false);
+  });
+});
+
+describe("assertPanelContentSane", () => {
+  it("accepts minimal HTML", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-panel-"));
+    temps.push(dir);
+    const file = path.join(dir, "management.html");
+    fs.writeFileSync(file, "<!doctype html><html><body>panel</body></html>");
+    assert.doesNotThrow(() => assertPanelContentSane(file));
+  });
+
+  it("rejects empty or non-html", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-panel-"));
+    temps.push(dir);
+    const empty = path.join(dir, "empty.html");
+    fs.writeFileSync(empty, "x");
+    assert.throws(() => assertPanelContentSane(empty), /too small/);
+    const bad = path.join(dir, "bad.html");
+    fs.writeFileSync(bad, "not html content at all here - plain text payload only!!!");
+    assert.throws(() => assertPanelContentSane(bad), /does not look like HTML/);
   });
 });

@@ -26,6 +26,7 @@ export async function runUpdateCheck(opts: { home?: string }): Promise<void> {
   );
 
   let panelUpToDate = true;
+  let panelError = false;
   try {
     const panel = await checkPanelUpdate(ctx.home);
     panelUpToDate = panel.upToDate;
@@ -35,10 +36,12 @@ export async function runUpdateCheck(opts: { home?: string }): Promise<void> {
       }`,
     );
   } catch (err) {
-    console.log(`Panel       skipped (${(err as Error).message})`);
+    panelError = true;
+    console.log(`Panel       error (${(err as Error).message})`);
   }
 
-  process.exitCode = binary.upToDate && panelUpToDate ? 0 : 1;
+  // Exit 1 when outdated or when panel check failed (do not treat errors as up-to-date).
+  process.exitCode = binary.upToDate && panelUpToDate && !panelError ? 0 : 1;
 }
 
 export async function runUpdate(opts: {

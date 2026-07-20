@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { buildCpaChildEnv } from "./process/child-env.js";
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -93,13 +94,21 @@ export function tailFile(file: string, maxLines = 40): string {
 export async function runCommand(
   command: string,
   args: string[],
-  options?: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number },
+  options?: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    timeoutMs?: number;
+    /** When true (default), strip MiniCPA tokens from the child environment. */
+    scrubSecrets?: boolean;
+  },
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   const timeoutMs = options?.timeoutMs ?? 30_000;
+  const merged = { ...process.env, ...options?.env };
+  const env = options?.scrubSecrets === false ? merged : buildCpaChildEnv(merged);
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options?.cwd,
-      env: { ...process.env, ...options?.env },
+      env,
       windowsHide: true,
     });
     let stdout = "";

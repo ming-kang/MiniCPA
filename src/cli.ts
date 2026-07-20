@@ -19,8 +19,8 @@ import {
 } from "./commands/lifecycle-cmd.js";
 import { assertUpdateScopeFlags, runUpdate, runUpdateCheck } from "./commands/update-cmd.js";
 import { createContext } from "./context.js";
-import { resolveHomeOption } from "./home-opt.js";
-import { defaultCpaHome, miniCpaRoot, miniCpaTempRoot } from "./paths.js";
+import { addHomeOption, resolveHomeOption } from "./home-opt.js";
+import { miniCpaRoot, miniCpaTempRoot } from "./paths.js";
 import { readCurrentRuntimeVersion } from "./process/runtime.js";
 import { readInstallState } from "./state.js";
 
@@ -42,83 +42,88 @@ function homeOf(cmd: Command): string | undefined {
   return resolveHomeOption(cmd);
 }
 
-program
-  .command("init")
-  .description("Create CPA_HOME layout and register default home")
-  .option("--home <dir>", "CPA_HOME directory", defaultCpaHome())
-  .option("--force", "Overwrite config.yaml (backs up to config.yaml.bak.<timestamp>)")
-  .action(
-    withCliErrors(async (opts: { home: string; force?: boolean }, cmd: Command) => {
-      await runInit({ home: homeOf(cmd) ?? opts.home, force: opts.force });
-    }),
-  );
+addHomeOption(
+  program
+    .command("init")
+    .description("Create CPA_HOME layout and register default home")
+    .option("--force", "Overwrite config.yaml (backs up to config.yaml.bak.<timestamp>)"),
+).action(
+  withCliErrors(async (opts: { home?: string; force?: boolean }, cmd: Command) => {
+    await runInit({ home: homeOf(cmd) ?? opts.home, force: opts.force });
+  }),
+);
 
-program
-  .command("start")
-  .description("Start CPA in background (waits until HTTP is ready)")
-  .option("--no-wait", "Do not wait for HTTP ready")
-  .action(
-    withCliErrors(async (opts: { wait?: boolean }, cmd: Command) => {
-      await runStart({ home: homeOf(cmd), noWait: opts.wait === false });
-    }),
-  );
+addHomeOption(
+  program
+    .command("start")
+    .description("Start CPA in background (waits until HTTP is ready)")
+    .option("--no-wait", "Do not wait for HTTP ready"),
+).action(
+  withCliErrors(async (opts: { wait?: boolean }, cmd: Command) => {
+    await runStart({ home: homeOf(cmd), noWait: opts.wait === false });
+  }),
+);
 
-program.command("stop").description("Stop CPA").action(
+addHomeOption(program.command("stop").description("Stop CPA")).action(
   withCliErrors(async (_opts: unknown, cmd: Command) => {
     await runStop({ home: homeOf(cmd) });
   }),
 );
 
-program
-  .command("restart")
-  .description("Restart CPA")
-  .option("--no-wait", "Do not wait for HTTP ready")
-  .action(
-    withCliErrors(async (opts: { wait?: boolean }, cmd: Command) => {
-      await runRestart({ home: homeOf(cmd), noWait: opts.wait === false });
-    }),
-  );
+addHomeOption(
+  program
+    .command("restart")
+    .description("Restart CPA")
+    .option("--no-wait", "Do not wait for HTTP ready"),
+).action(
+  withCliErrors(async (opts: { wait?: boolean }, cmd: Command) => {
+    await runRestart({ home: homeOf(cmd), noWait: opts.wait === false });
+  }),
+);
 
-program.command("status").description("Show CPA status").action(
+addHomeOption(program.command("status").description("Show CPA status")).action(
   withCliErrors(async (_opts: unknown, cmd: Command) => {
     await runStatus({ home: homeOf(cmd) });
   }),
 );
 
-program.command("open").description("Open management UI in browser").action(
+addHomeOption(program.command("open").description("Open management UI in browser")).action(
   withCliErrors(async (_opts: unknown, cmd: Command) => {
     await runOpen({ home: homeOf(cmd) });
   }),
 );
 
-program
-  .command("logs")
-  .description("Show CPA logs (stdout + stderr by default)")
-  .option("-f, --follow", "Follow log output")
-  .option("-n, --lines <n>", "Number of lines per file", "80")
-  .option("--err", "Show error log only")
-  .action(
-    withCliErrors(async (opts: { follow?: boolean; lines: string; err?: boolean }, cmd: Command) => {
-      await runLogs({
-        home: homeOf(cmd),
-        follow: opts.follow,
-        lines: parseLogLineCount(opts.lines),
-        errOnly: opts.err,
-      });
-    }),
-  );
+addHomeOption(
+  program
+    .command("logs")
+    .description("Show CPA logs (stdout + stderr by default)")
+    .option("-f, --follow", "Follow log output")
+    .option("-n, --lines <n>", "Number of lines per file", "80")
+    .option("--err", "Show error log only"),
+).action(
+  withCliErrors(async (opts: { follow?: boolean; lines: string; err?: boolean }, cmd: Command) => {
+    await runLogs({
+      home: homeOf(cmd),
+      follow: opts.follow,
+      lines: parseLogLineCount(opts.lines),
+      errOnly: opts.err,
+    });
+  }),
+);
 
-program.command("tui").description("Open official CPA terminal UI").action(
+addHomeOption(program.command("tui").description("Open official CPA terminal UI")).action(
   withCliErrors(async (_opts: unknown, cmd: Command) => {
     await runTui({ home: homeOf(cmd) });
   }),
 );
 
-const updateCmd = program
-  .command("update")
-  .description("Replace CPA binary and management panel (default: both)");
+const updateCmd = addHomeOption(
+  program.command("update").description("Replace CPA binary and management panel (default: both)"),
+);
 
-updateCmd.command("check").description("Check for updates (exit 1 if any outdated)").action(
+addHomeOption(
+  updateCmd.command("check").description("Check for updates (exit 1 if any outdated)"),
+).action(
   withCliErrors(async (_opts: unknown, cmd: Command) => {
     await runUpdateCheck({ home: homeOf(cmd) });
   }),
@@ -157,7 +162,7 @@ updateCmd
     ),
   );
 
-program.command("doctor").description("Validate CPA_HOME and runtime").action(
+addHomeOption(program.command("doctor").description("Validate CPA_HOME and runtime")).action(
   withCliErrors(async (_opts: unknown, cmd: Command) => {
     await runDoctor({ home: homeOf(cmd) });
   }),
@@ -165,37 +170,35 @@ program.command("doctor").description("Validate CPA_HOME and runtime").action(
 
 program
   .command("clean")
-  .description("Remove MiniCPA temp downloads/extract (never touches instance home)")
+  .description("Remove old MiniCPA temp downloads/extract (never touches instance home)")
   .action(
     withCliErrors(async () => {
       await runClean();
     }),
   );
 
-program
-  .command("version")
-  .description("Show MiniCPA and CPA runtime versions")
-  .action(
-    withCliErrors(async (_opts: unknown, cmd: Command) => {
-      const ctx = createContext({ home: homeOf(cmd) });
-      const state = readInstallState(ctx.home);
-      const runtime = await readCurrentRuntimeVersion(ctx.home);
-      console.log(`minicpa   ${pkg.version}`);
-      console.log(`CPA_HOME  ${ctx.home}`);
-      console.log(`cpa       ${runtime ?? "(not installed)"}`);
-      console.log(`panel     ${state.panelVersion ?? "-"}`);
-    }),
-  );
+addHomeOption(
+  program.command("version").description("Show MiniCPA and CPA runtime versions"),
+).action(
+  withCliErrors(async (_opts: unknown, cmd: Command) => {
+    const ctx = createContext({ home: homeOf(cmd) });
+    const state = readInstallState(ctx.home);
+    const runtime = await readCurrentRuntimeVersion(ctx.home);
+    console.log(`minicpa   ${pkg.version}`);
+    console.log(`CPA_HOME  ${ctx.home}`);
+    console.log(`cpa       ${runtime ?? "(not installed)"}`);
+    console.log(`panel     ${state.panelVersion ?? "-"}`);
+  }),
+);
 
-program
-  .command("home")
-  .description("Print CPA instance directory (config, auths, binary)")
-  .action(
-    withCliErrors(async (_opts: unknown, cmd: Command) => {
-      const ctx = createContext({ home: homeOf(cmd) });
-      console.log(ctx.home);
-    }),
-  );
+addHomeOption(
+  program.command("home").description("Print CPA instance directory (config, auths, binary)"),
+).action(
+  withCliErrors(async (_opts: unknown, cmd: Command) => {
+    const ctx = createContext({ home: homeOf(cmd) });
+    console.log(ctx.home);
+  }),
+);
 
 program.command("root").description("Print MiniCPA root (persistent data)").action(() => {
   console.log(miniCpaRoot());

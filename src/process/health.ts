@@ -30,21 +30,33 @@ function formatHttpBase(host: string, port: number): string {
   return `http://${normalizedHost}:${port}`;
 }
 
+function isReadyStatus(status: number): boolean {
+  return (status >= 200 && status < 300) || status === 304 || status === 401 || status === 403;
+}
+
 export async function waitForHttpOk(url: string, timeoutMs = 8000): Promise<boolean> {
+  return waitForAnyHttpOk([url], timeoutMs);
+}
+
+/** Probe several URLs until one returns a "server up" status (panel may 404). */
+export async function waitForAnyHttpOk(urls: string[], timeoutMs = 8000): Promise<boolean> {
+  const unique = [...new Set(urls.filter(Boolean))];
+  if (unique.length === 0) return false;
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    try {
-      // Local loopback probe — use global fetch so HTTP(S)_PROXY is not applied.
-      const res = await fetch(url, {
-        method: "GET",
-        signal: AbortSignal.timeout(2000),
-      });
-      if (res.ok || res.status === 304 || res.status === 401 || res.status === 403) {
-        // Any HTTP response from CPA means the server is up (panel may require auth).
-        return true;
+    for (const url of unique) {
+      try {
+        // Local loopback probe — use global fetch so HTTP(S)_PROXY is not applied.
+        const res = await fetch(url, {
+          method: "GET",
+          signal: AbortSignal.timeout(2000),
+        });
+        if (isReadyStatus(res.status)) {
+          return true;
+        }
+      } catch {
+        /* try next URL */
       }
-    } catch {
-      /* retry */
     }
     await sleep(300);
   }
@@ -63,4 +75,10 @@ export function apiBaseUrl(home: string): string {
   const cfg = readCpaConfig(layout.configFile);
   const { host, port } = getListenAddress(cfg);
   return formatHttpBase(host, port);
+}
+
+/** Prefer panel URL, then root — works for binary-only installs without management.html. */
+export function readinessUrls(home: string): string[] {
+  const base = apiBaseUrl(home);
+  return [`${base}/management.html`, `${base}/`, base];
 }

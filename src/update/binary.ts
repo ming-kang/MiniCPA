@@ -8,7 +8,12 @@ import {
   miniCpaTempDownloadDir,
   miniCpaTempExtractDir,
 } from "../paths.js";
-import { resolveRunning, startDaemon, stopDaemon, waitForBinaryUnlocked } from "../process/lifecycle.js";
+import {
+  resolveRunning,
+  startDaemon,
+  stopDaemon,
+  waitForBinaryUnlocked,
+} from "../process/lifecycle.js";
 import {
   clearRuntimeBinaryBackup,
   installRuntimeBinary,
@@ -22,9 +27,10 @@ import {
   fetchChecksums,
   fetchCpaReleaseByTag,
   fetchLatestCpaRelease,
+  listReleaseAssetCandidates,
   normalizeTagVersion,
-  pickReleaseAsset,
   type GhRelease,
+  type PickedReleaseAsset,
 } from "./github.js";
 
 export class BinaryUpdateError extends Error {
@@ -74,6 +80,13 @@ export function findSafeExtractedExecutable(destDir: string, exeName: string): s
   throw new Error(`${exeName} not found in extract directory`);
 }
 
+function isUnsafeArchiveEntryName(entryName: string): boolean {
+  const normalized = entryName.replace(/\\/g, "/");
+  if (path.posix.isAbsolute(normalized) || path.win32.isAbsolute(normalized)) return true;
+  const parts = normalized.split("/");
+  return parts.some((p) => p === "..");
+}
+
 async function extractArchive(archivePath: string, destDir: string): Promise<string> {
   const exeName = executableName();
   fs.mkdirSync(destDir, { recursive: true });
@@ -84,9 +97,7 @@ async function extractArchive(archivePath: string, destDir: string): Promise<str
       .getEntries()
       .find((e) => !e.isDirectory && path.basename(e.entryName) === exeName);
     if (!entry) throw new Error(`${exeName} not found in ${archivePath}`);
-    // Reject zip-slip style entry names
-    const entryName = entry.entryName.replace(/\\/g, "/");
-    if (entryName.includes("..") || path.isAbsolute(entryName)) {
+    if (isUnsafeArchiveEntryName(entry.entryName)) {
       throw new Error(`Unsafe zip entry path: ${entry.entryName}`);
     }
     const out = path.join(destDir, exeName);
@@ -95,7 +106,20 @@ async function extractArchive(archivePath: string, destDir: string): Promise<str
   }
 
   if (archivePath.endsWith(".tar.gz") || archivePath.endsWith(".tgz")) {
-    await tar.x({ file: archivePath, cwd: destDir });
+    await tar.x({
+      file: archivePath,
+      cwd: destDir,
+      // Only extract the expected executable (and parent dirs implicitly).
+      filter: (entryPath, entry) => {
+        if (isUnsafeArchiveEntryName(entryPath)) return false;
+        const type = (entry as { type?: string }).type;
+        if (type === "SymbolicLink" || type === "Link") return false;
+        const base = path.posix.basename(entryPath.replace(/\\/g, "/"));
+        // Allow directories so nested layouts extract parents; tar may still need them.
+        if (type === "Directory" || entryPath.endsWith("/")) return true;
+        return base === exeName;
+      },
+    });
     return findSafeExtractedExecutable(destDir, exeName);
   }
 
@@ -152,13 +176,41 @@ export async function checkBinaryUpdate(home: string): Promise<{
   };
 }
 
+async function downloadFirstAvailableAsset(
+  candidates: PickedReleaseAsset[],
+  downloadDir: string,
+): Promise<{ picked: PickedReleaseAsset; archivePath: string }> {
+  if (candidates.length === 0) {
+    throw new Error("No release asset candidates for this platform");
+  }
+  let lastError: Error | undefined;
+  for (const picked of candidates) {
+    const archivePath = path.join(downloadDir, picked.assetName);
+    try {
+      await downloadToFile(picked.url, archivePath, { label: picked.assetName });
+      return { picked, archivePath };
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (!/Download failed 404/i.test(lastError.message)) {
+        throw lastError;
+      }
+      try {
+        fs.unlinkSync(archivePath);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  throw lastError ?? new Error("All release asset candidates failed to download");
+}
+
 /**
  * Replace CPA binary in place.
  * - Download + checksum + extract happen **before** stopping a running CPA.
  * - Running process is stopped only for the brief install window, then restarted.
  * - Already-latest installs are skipped unless `force` or a specific `version` is requested.
  * - `.bak` is cleared only after a successful install (and healthy restart when it was running).
- * - If we stopped the process and the update fails, restore `.bak` and try to restart.
+ * - On any phase-2 failure, restore `.bak` when present; if it was running, stop → restore → start.
  */
 export async function updateBinary(
   home: string,
@@ -178,17 +230,13 @@ export async function updateBinary(
     return { version, changed: false, skipped: true, restarted: false };
   }
 
-  // Phase 1: prepare the new binary while CPA may still be serving traffic.
-  const { assetName, url } = pickReleaseAsset(release, process.platform, process.arch);
+  const candidates = listReleaseAssetCandidates(release, process.platform, process.arch);
   const downloadDir = miniCpaTempDownloadDir("binary-");
-  const archivePath = path.join(downloadDir, assetName);
   const staging = miniCpaTempExtractDir();
 
   try {
-    await downloadToFile(url, archivePath, {
-      label: assetName,
-      apiAsset: true,
-    });
+    const { picked, archivePath } = await downloadFirstAvailableAsset(candidates, downloadDir);
+    const assetName = picked.assetName;
 
     if (!options?.insecure) {
       const checksums = await fetchChecksums(release);
@@ -209,14 +257,6 @@ export async function updateBinary(
       await waitForBinaryUnlocked(home);
       installRuntimeBinary(home, version, extractedExe);
 
-      const next = readInstallState(home);
-      writeInstallState(home, {
-        ...next,
-        cpaHome: home,
-        runtimeVersion: version,
-        lastUpdateCheck: new Date().toISOString(),
-      });
-
       let restarted = false;
       if (wasRunning) {
         console.log("Restarting CPA…");
@@ -225,23 +265,53 @@ export async function updateBinary(
         restarted = true;
       }
 
+      // Only record the new version after a healthy install (+ restart when needed).
+      const next = readInstallState(home);
+      writeInstallState(home, {
+        ...next,
+        cpaHome: home,
+        runtimeVersion: version,
+        lastUpdateCheck: new Date().toISOString(),
+      });
+
       clearRuntimeBinaryBackup(home);
       return { version, changed: true, skipped: false, restarted };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (!wasRunning) throw err;
+      console.error("Update failed; restoring previous binary…");
 
-      console.error("Update failed; restoring previous binary and restarting…");
-      restoreRuntimeBinaryFromBackup(home);
-      try {
-        await startDaemon(home);
-        throw new BinaryUpdateError(msg, true);
-      } catch (restartErr) {
-        if (restartErr instanceof BinaryUpdateError) throw restartErr;
-        const restartMessage =
-          restartErr instanceof Error ? restartErr.message : String(restartErr);
-        throw new BinaryUpdateError(`${msg}\nRestart error: ${restartMessage}`, false);
+      // Half-started new process may still be running after a failed restart.
+      if (resolveRunning(home)) {
+        try {
+          await stopDaemon(home);
+        } catch {
+          /* best-effort */
+        }
       }
+
+      restoreRuntimeBinaryFromBackup(home);
+
+      const next = readInstallState(home);
+      writeInstallState(home, {
+        ...next,
+        cpaHome: home,
+        runtimeVersion: currentVersion,
+        lastUpdateCheck: new Date().toISOString(),
+      });
+
+      if (wasRunning) {
+        try {
+          await startDaemon(home);
+          throw new BinaryUpdateError(msg, true);
+        } catch (restartErr) {
+          if (restartErr instanceof BinaryUpdateError) throw restartErr;
+          const restartMessage =
+            restartErr instanceof Error ? restartErr.message : String(restartErr);
+          throw new BinaryUpdateError(`${msg}\nRestart error: ${restartMessage}`, false);
+        }
+      }
+
+      throw err;
     }
   } finally {
     fs.rmSync(staging, { recursive: true, force: true });

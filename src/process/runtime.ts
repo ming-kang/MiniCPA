@@ -112,7 +112,31 @@ export function clearRuntimeBinaryBackup(home: string): void {
   }
 }
 
+/** If a crash left the binary as `*.unlock-probe`, restore the canonical name. */
+export function recoverUnlockProbeBinary(home: string): boolean {
+  const active = activeExecutablePath(home);
+  const probe = `${active}.unlock-probe`;
+  if (fs.existsSync(active) || !fs.existsSync(probe)) return false;
+  try {
+    fs.renameSync(probe, active);
+    return true;
+  } catch {
+    try {
+      fs.copyFileSync(probe, active);
+      try {
+        fs.unlinkSync(probe);
+      } catch {
+        /* ignore */
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
 export function resolveRunnableExecutable(home: string): string {
+  recoverUnlockProbeBinary(home);
   const active = activeExecutablePath(home);
   if (fs.existsSync(active)) return active;
   throw new Error(`CPA binary not found under ${home}. Run: cpa update`);

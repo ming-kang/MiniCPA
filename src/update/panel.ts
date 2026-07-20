@@ -9,6 +9,7 @@ import {
   downloadToFile,
   fetchLatestRelease,
   normalizeTagVersion,
+  parseGithubDigest,
   releaseAssetDownloadUrl,
   repoFromPanelUrl,
 } from "./github.js";
@@ -29,6 +30,38 @@ export function isInstalledPanelIntact(
     return sha256File(managementHtml) === state.panelSha256;
   } catch {
     return false;
+  }
+}
+
+/** Basic sanity checks for a downloaded management panel (not a full integrity proof). */
+export function assertPanelContentSane(filePath: string, expectedDigest?: string): void {
+  if (!fs.existsSync(filePath)) {
+    throw new Error("management.html download missing on disk");
+  }
+  const stat = fs.statSync(filePath);
+  if (stat.size < 32) {
+    throw new Error("management.html download is empty or too small");
+  }
+  if (stat.size > 20 * 1024 * 1024) {
+    throw new Error("management.html download is unreasonably large");
+  }
+  const fd = fs.openSync(filePath, "r");
+  let head = "";
+  try {
+    const buf = Buffer.alloc(512);
+    const n = fs.readSync(fd, buf, 0, 512, 0);
+    head = buf.subarray(0, n).toString("utf8");
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (!/<\s*(!doctype|html|script|meta)/i.test(head)) {
+    throw new Error("management.html does not look like HTML (refusing to install)");
+  }
+  if (expectedDigest) {
+    const actual = sha256File(filePath);
+    if (actual !== expectedDigest) {
+      throw new Error("management.html digest mismatch (GitHub asset digest)");
+    }
   }
 }
 
@@ -80,8 +113,9 @@ export async function updatePanel(
   try {
     await downloadToFile(releaseAssetDownloadUrl(repo, asset), cachePath, {
       label: "management.html",
-      apiAsset: true,
     });
+
+    assertPanelContentSane(cachePath, parseGithubDigest(asset.digest));
 
     ensureDir(layout.staticDir);
     writeFileAtomic(layout.managementHtml, fs.readFileSync(cachePath));

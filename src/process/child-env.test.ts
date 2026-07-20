@@ -9,7 +9,10 @@ describe("buildCpaChildEnv", () => {
       HOME: "/home/user",
       GITHUB_TOKEN: "secret-gh",
       GH_TOKEN: "secret-gh2",
+      GH_ENTERPRISE_TOKEN: "secret-ent",
+      GITHUB_PAT: "secret-pat",
       NPM_TOKEN: "secret-npm",
+      NPM_AUTH_TOKEN: "secret-npm-auth",
       NODE_AUTH_TOKEN: "secret-node",
       CPA_HOME: "/data/cpa",
     });

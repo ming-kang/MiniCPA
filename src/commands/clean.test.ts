@@ -39,9 +39,26 @@ describe("runClean", () => {
     const sibling = path.join(base, "instances-default-config.yaml");
     fs.writeFileSync(sibling, "keep-me");
 
-    await runClean();
+    // minAgeMs 0: tests exercise full removal; default clean keeps recent files.
+    await runClean({ minAgeMs: 0 });
 
     assert.equal(fs.existsSync(miniTemp), false);
     assert.equal(fs.readFileSync(sibling, "utf8"), "keep-me");
+  });
+
+  it("keeps recent temp entries by default", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-clean-base-"));
+    temps.push(base);
+    process.env.TMPDIR = base;
+    process.env.TEMP = base;
+    process.env.TMP = base;
+
+    const miniTemp = path.join(base, "MiniCPA");
+    fs.mkdirSync(path.join(miniTemp, "downloads"), { recursive: true });
+    fs.writeFileSync(path.join(miniTemp, "downloads", "fresh.zip"), "payload");
+
+    await runClean({ minAgeMs: 60 * 60 * 1000 });
+
+    assert.equal(fs.existsSync(path.join(miniTemp, "downloads", "fresh.zip")), true);
   });
 });

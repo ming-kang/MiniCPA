@@ -1,6 +1,7 @@
 import fs from "node:fs";
-import { defaultConfigYaml } from "../config-yaml.js";
+import { defaultConfigYaml, generateApiKey } from "../config-yaml.js";
 import { createContext } from "../context.js";
+import { writeFileAtomic } from "../fs-atomic.js";
 import { ensureDir, miniCpaRoot, writeCliGlobalConfig } from "../paths.js";
 
 export async function runInit(opts: { home?: string; force?: boolean }): Promise<void> {
@@ -20,24 +21,25 @@ export async function runInit(opts: { home?: string; force?: boolean }): Promise
       fs.copyFileSync(layout.configFile, bak);
       console.log(`Backed up ${layout.configFile} → ${bak}`);
     }
-    fs.writeFileSync(layout.configFile, defaultConfigYaml(), "utf8");
+    const apiKey = generateApiKey();
+    writeFileAtomic(layout.configFile, defaultConfigYaml(apiKey));
     console.log(`Created  ${layout.configFile}`);
+    console.log(`api-key  ${apiKey} (stored in config.yaml — change before public exposure)`);
   } else {
     console.log(`Exists   ${layout.configFile}`);
   }
 
   if (!fs.existsSync(layout.envFile)) {
-    fs.writeFileSync(
+    writeFileAtomic(
       layout.envFile,
       "# Optional overrides for CPA (MANAGEMENT_PASSWORD, storage backends, etc.)\n",
-      "utf8",
     );
   }
 
+  // Preserve future keys in global config by merging.
   writeCliGlobalConfig({ home });
   console.log(`MiniCPA root  ${miniCpaRoot()}`);
   console.log(`Instance      ${home}`);
-  console.log(`Note: change default api-key (sk-cliproxyapi) before exposing the API`);
   console.log(`Next: cpa update`);
   console.log(`      cpa start`);
   console.log(`      cpa open`);

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { imageMatchesExpectedExe, parseTasklistImageName } from "./pid-identity.js";
+import {
+  exePathsMatch,
+  imageMatchesExpectedExe,
+  parseTasklistImageName,
+} from "./pid-identity.js";
 
 describe("imageMatchesExpectedExe", () => {
   it("matches exact basenames", () => {
@@ -8,17 +12,32 @@ describe("imageMatchesExpectedExe", () => {
     assert.equal(imageMatchesExpectedExe("cli-proxy-api.exe", "C:\\a\\cli-proxy-api.exe"), true);
   });
 
-  it("allows truncated linux comm when expected is longer", () => {
-    // /proc/pid/comm max 15 chars; observed may be a prefix of the full name
-    const fullName = "cli-proxy-api-x"; // 15 chars
-    const truncated = fullName.slice(0, 12);
-    assert.equal(imageMatchesExpectedExe(truncated, fullName), true);
+  it("allows truncated linux comm only when observed is exactly 15 chars", () => {
+    const fullName = "cli-proxy-api-xx"; // 16 chars
+    const truncated15 = fullName.slice(0, 15);
+    assert.equal(truncated15.length, 15);
+    assert.equal(imageMatchesExpectedExe(truncated15, fullName), true);
+  });
+
+  it("rejects short prefixes that are not true comm truncation", () => {
+    assert.equal(imageMatchesExpectedExe("cli", "cli-proxy-api"), false);
+    assert.equal(imageMatchesExpectedExe("cli-proxy", "cli-proxy-api"), false);
+    assert.equal(imageMatchesExpectedExe("c", "cli-proxy-api"), false);
   });
 
   it("rejects unrelated images", () => {
     assert.equal(imageMatchesExpectedExe("chrome", "cli-proxy-api"), false);
     assert.equal(imageMatchesExpectedExe("node", "/bin/cli-proxy-api"), false);
     assert.equal(imageMatchesExpectedExe("cli-proxy-api-other", "cli-proxy-api"), false);
+  });
+});
+
+describe("exePathsMatch", () => {
+  it("matches resolved paths case-insensitively on basename fallback", () => {
+    assert.equal(
+      exePathsMatch("/opt/cpa/cli-proxy-api", "/opt/cpa/cli-proxy-api"),
+      true,
+    );
   });
 });
 
@@ -31,6 +50,11 @@ describe("parseTasklistImageName", () => {
   });
 
   it("returns undefined for INFO lines", () => {
-    assert.equal(parseTasklistImageName("INFO: No tasks are running which match the specified criteria."), undefined);
+    assert.equal(
+      parseTasklistImageName(
+        "INFO: No tasks are running which match the specified criteria.",
+      ),
+      undefined,
+    );
   });
 });

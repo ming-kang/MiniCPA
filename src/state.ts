@@ -17,9 +17,13 @@ export type PidRecord = {
   startedAt: string;
 };
 
+function isPositiveInt(n: unknown): n is number {
+  return typeof n === "number" && Number.isInteger(n) && n > 0;
+}
+
+/** Read-only: never creates directories. */
 export function readInstallState(home: string): InstallState {
   const layout = cpaLayout(home);
-  ensureDir(layout.stateDir);
   if (!fs.existsSync(layout.installStateFile)) {
     return { cpaHome: home };
   }
@@ -63,7 +67,7 @@ export function readPidRecord(home: string): PidRecord | undefined {
 
   try {
     const parsed = JSON.parse(raw) as Partial<PidRecord>;
-    if (typeof parsed.pid === "number" && Number.isFinite(parsed.pid)) {
+    if (isPositiveInt(parsed.pid)) {
       return {
         pid: parsed.pid,
         exe: typeof parsed.exe === "string" ? parsed.exe : "",
@@ -74,8 +78,10 @@ export function readPidRecord(home: string): PidRecord | undefined {
     /* legacy plain PID */
   }
 
+  // Legacy plain integer PID only (reject "123abc" prefixes).
+  if (!/^\d+$/.test(raw)) return undefined;
   const pid = Number.parseInt(raw, 10);
-  if (!Number.isFinite(pid)) return undefined;
+  if (!isPositiveInt(pid)) return undefined;
   return { pid, exe: "", startedAt: "" };
 }
 

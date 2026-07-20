@@ -15,15 +15,26 @@ export type CliGlobalConfig = {
  * MiniCPA application root (CLI config, default instance).
  * Windows: %LOCALAPPDATA%\MiniCPA
  */
+function envPathOr(fallback: string, value: string | undefined): string {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : fallback;
+}
+
 export function miniCpaRoot(): string {
   if (process.platform === "win32") {
-    const base = process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
+    const base = envPathOr(
+      path.join(os.homedir(), "AppData", "Local"),
+      process.env.LOCALAPPDATA,
+    );
     return path.join(base, MINICPA_DIR_NAME);
   }
   if (process.platform === "darwin") {
     return path.join(os.homedir(), "Library", "Application Support", MINICPA_DIR_NAME);
   }
-  const xdgData = process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local", "share");
+  const xdgData = envPathOr(
+    path.join(os.homedir(), ".local", "share"),
+    process.env.XDG_DATA_HOME,
+  );
   return path.join(xdgData, MINICPA_DIR_NAME);
 }
 
@@ -78,14 +89,16 @@ export function readCliGlobalConfig(): CliGlobalConfig {
 export function writeCliGlobalConfig(config: CliGlobalConfig): void {
   const dir = miniCpaRoot();
   fs.mkdirSync(dir, { recursive: true });
-  writeFileAtomic(cliConfigPath(), JSON.stringify(config, null, 2) + "\n");
+  const merged: CliGlobalConfig = { ...readCliGlobalConfig(), ...config };
+  writeFileAtomic(cliConfigPath(), JSON.stringify(merged, null, 2) + "\n");
 }
 
 export function resolveCpaHome(explicit?: string): string {
-  if (explicit) return path.resolve(explicit);
-  if (process.env.CPA_HOME) return path.resolve(process.env.CPA_HOME);
+  if (explicit?.trim()) return path.resolve(explicit.trim());
+  const envHome = process.env.CPA_HOME?.trim();
+  if (envHome) return path.resolve(envHome);
   const global = readCliGlobalConfig().home;
-  if (global) return path.resolve(global);
+  if (global?.trim()) return path.resolve(global.trim());
   const current = defaultCpaHome();
   const legacy = legacyCpaHome();
   if (

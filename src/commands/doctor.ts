@@ -1,9 +1,9 @@
 import fs from "node:fs";
-import { getListenAddress, readCpaConfig } from "../config-yaml.js";
+import { getListenAddress, LEGACY_DEFAULT_API_KEY, readCpaConfig } from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
 import { describeProxyEnv, hasProxyEnvConfigured, httpFetch } from "../http.js";
-import { backupExecutablePath, miniCpaTempRoot } from "../paths.js";
-import { managementUrl, waitForHttpOk } from "../process/health.js";
+import { activeExecutablePath, backupExecutablePath, cliConfigPath, miniCpaTempRoot } from "../paths.js";
+import { readinessUrls, waitForAnyHttpOk } from "../process/health.js";
 import { resolveRunning } from "../process/lifecycle.js";
 import { readCurrentRuntimeVersion, resolveRunnableExecutable } from "../process/runtime.js";
 import { readInstallState } from "../state.js";
@@ -35,16 +35,19 @@ export async function runDoctor(opts: { home?: string }): Promise<void> {
     console.log("[fail] config.yaml missing — run: cpa init");
     ok = false;
   } else {
-    console.log("[ ok ] config.yaml");
     try {
       const cfg = readCpaConfig(ctx.layout.configFile);
       const { host, port } = getListenAddress(cfg);
+      console.log("[ ok ] config.yaml");
       console.log(`[info] listen ${host}:${port}`);
       const apiKeys = cfg["api-keys"] ?? [];
-      if (apiKeys.includes("sk-cliproxyapi")) {
+      if (apiKeys.includes(LEGACY_DEFAULT_API_KEY)) {
         console.log(
-          "[warn] default api-key sk-cliproxyapi still in config — change before exposing the API",
+          `[warn] default api-key ${LEGACY_DEFAULT_API_KEY} still in config — change before exposing the API`,
         );
+      }
+      if (host !== "127.0.0.1" && host !== "localhost" && apiKeys.includes(LEGACY_DEFAULT_API_KEY)) {
+        console.log("[warn] non-loopback host with legacy default api-key is unsafe");
       }
     } catch (err) {
       console.log(`[fail] config.yaml parse error: ${(err as Error).message}`);
@@ -63,6 +66,11 @@ export async function runDoctor(opts: { home?: string }): Promise<void> {
   const version = await readCurrentRuntimeVersion(ctx.home);
   const state = readInstallState(ctx.home);
   console.log(`[info] cpa runtime ${version ?? "-"} (state=${state.runtimeVersion ?? "-"})`);
+  if (state.runtimeVersion && !version) {
+    console.log("[warn] install state has runtimeVersion but binary is missing/unprobeable");
+  } else if (state.runtimeVersion && version && state.runtimeVersion !== version) {
+    console.log("[warn] runtime version differs from install state (will sync on next probe write)");
+  }
   console.log(`[info] panel ${state.panelVersion ?? "-"}`);
 
   if (fs.existsSync(ctx.layout.managementHtml)) {
@@ -74,6 +82,15 @@ export async function runDoctor(opts: { home?: string }): Promise<void> {
   for (const dir of [ctx.layout.logsDir, ctx.layout.stateDir, ctx.layout.authsDir, ctx.layout.staticDir]) {
     if (!fs.existsSync(dir)) {
       console.log(`[warn] dir missing: ${dir}`);
+    }
+  }
+
+  const globalCfg = cliConfigPath();
+  if (fs.existsSync(globalCfg)) {
+    try {
+      JSON.parse(fs.readFileSync(globalCfg, "utf8"));
+    } catch {
+      console.log(`[warn] MiniCPA config.json is corrupt (${globalCfg})`);
     }
   }
 
@@ -103,6 +120,13 @@ export async function runDoctor(opts: { home?: string }): Promise<void> {
     );
   }
 
+  const unlockProbe = `${activeExecutablePath(ctx.home)}.unlock-probe`;
+  if (fs.existsSync(unlockProbe)) {
+    console.log(
+      `[warn] unlock-probe residue present (${unlockProbe}) — run cpa start to recover or rename to the active binary`,
+    );
+  }
+
   const tempRoot = miniCpaTempRoot();
   const tempSize = directorySizeBytes(tempRoot);
   if (tempSize > 10 * 1024 * 1024) {
@@ -117,14 +141,18 @@ export async function runDoctor(opts: { home?: string }): Promise<void> {
 
   const running = resolveRunning(ctx.home);
   if (running) {
-    console.log(`[ ok ] running PID=${running.pid}`);
-    const url = managementUrl(ctx.home);
-    const reachable = await waitForHttpOk(url, 3000);
+    if (running.identityUnknown) {
+      console.log(`[warn] running PID=${running.pid} (identity probe inconclusive — not cleared)`);
+    } else {
+      console.log(`[ ok ] running PID=${running.pid}`);
+    }
+    const urls = readinessUrls(ctx.home);
+    const reachable = await waitForAnyHttpOk(urls, 3000);
     if (!reachable) {
-      console.log(`[fail] HTTP not reachable at ${url}`);
+      console.log(`[fail] HTTP not reachable (tried ${urls.join(", ")})`);
       ok = false;
     } else {
-      console.log(`[ ok ] HTTP ${url}`);
+      console.log(`[ ok ] HTTP ${urls[0]}`);
     }
   } else {
     console.log("[info] not running (cpa start)");
@@ -153,7 +181,10 @@ export async function runDoctor(opts: { home?: string }): Promise<void> {
         `[ ok ] GitHub API${remaining !== undefined ? ` (rate remaining=${remaining})` : ""}`,
       );
       if (remaining !== undefined && remaining < 5) {
-        console.log("[warn] GitHub rate limit low — set GITHUB_TOKEN for updates");
+        console.log(
+          "[info] REST rate low (updates use github.com/releases by default; " +
+            "GITHUB_TOKEN/GH_TOKEN only needed for API fallback)",
+        );
       }
     } else {
       console.log(`[warn] GitHub API HTTP ${res.status}`);

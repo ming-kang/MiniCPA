@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { cpaLayout, ensureDir } from "../paths.js";
+import { isProcessAlive } from "./alive.js";
 
 export type HomeLockRecord = {
   pid: number;
@@ -12,15 +13,6 @@ export type HomeLockRecord = {
 const lockDepthByHome = new Map<string, number>();
 
 const ACQUIRE_ATTEMPTS = 5;
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function resolveLockPath(home: string): string {
   return path.join(cpaLayout(home).stateDir, "cpa.lock");

@@ -35,13 +35,15 @@ cpa start
 cpa open
 ```
 
-Override home: `CPA_HOME`, `cpa --home <dir>`, or `cpa init --home <dir>`.
+**Home resolution** (first match wins): `--home` (before or after the subcommand) → `CPA_HOME` → MiniCPA `config.json` → default instance under `cpa root`.
 
-Optional: set `GITHUB_TOKEN` to avoid GitHub API rate limits during updates. That token is **not** passed into the CPA process.
+Examples: `cpa --home D:\cpa init`, `cpa doctor --home D:\cpa`, `CPA_HOME=D:\cpa cpa start`.
+
+Updates resolve and download public releases via `github.com/releases` (no REST rate limit). Optional: set `GITHUB_TOKEN` or `GH_TOKEN` only if the browser path is blocked and MiniCPA must fall back to the GitHub API. Tokens are stripped from CPA child processes (including version probes).
 
 **Proxy:** MiniCPA honors standard shell proxy env vars for update/network calls: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` (upper or lower case). Set them in PowerShell `$PROFILE`, bashrc, etc. — same as curl/git. `cpa doctor` prints whether a proxy is detected.
 
-Change the default API key (`sk-cliproxyapi`) in `config.yaml` before exposing the API.
+`cpa init` generates a random `api-keys` entry in `config.yaml` — still change it before public exposure. Do not run `cpa clean` during an active `cpa update` (clean only removes temp entries older than ~1 hour).
 
 ## Paths
 

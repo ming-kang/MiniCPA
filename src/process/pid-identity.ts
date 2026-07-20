@@ -12,7 +12,8 @@ function stripExeSuffix(name: string): string {
 
 /**
  * Match process image/comm against expected CPA executable basename.
- * Prefer exact basename equality; allow truncated comm (Linux 15-char limit).
+ * Prefer exact basename equality; allow Linux 15-char comm truncation only
+ * when the observed name is exactly 15 characters (kernel TASK_COMM_LEN-1).
  */
 export function imageMatchesExpectedExe(imageOrComm: string, expectedExe: string): boolean {
   const expected = stripExeSuffix(basenameLower(expectedExe));
@@ -20,9 +21,23 @@ export function imageMatchesExpectedExe(imageOrComm: string, expectedExe: string
   const observed = stripExeSuffix(basenameLower(imageOrComm.trim()));
   if (!observed) return false;
   if (observed === expected) return true;
-  // Linux /proc/pid/comm is often truncated to 15 characters
-  if (observed.length <= 15 && expected.startsWith(observed)) return true;
+  // Linux /proc/pid/comm is truncated to 15 characters — only then allow prefix.
+  if (observed.length === 15 && expected.startsWith(observed) && expected.length > 15) {
+    return true;
+  }
   return false;
+}
+
+/** True when full paths resolve to the same executable (Linux /proc/pid/exe). */
+export function exePathsMatch(observedPath: string, expectedPath: string): boolean {
+  try {
+    const a = path.resolve(observedPath.replace(/\s+\(deleted\)$/i, "").trim());
+    const b = path.resolve(expectedPath.trim());
+    if (a.toLowerCase() === b.toLowerCase()) return true;
+  } catch {
+    /* ignore */
+  }
+  return imageMatchesExpectedExe(observedPath, expectedPath);
 }
 
 /** Parse tasklist CSV /NH first field (image name). */
