@@ -8,6 +8,7 @@ import {
   formatBytes,
   parseCpaVersionFromHelp,
   rotateFileIfLarge,
+  tailFile,
 } from "./util.js";
 
 const temps: string[] = [];
@@ -52,6 +53,15 @@ describe("directorySizeBytes", () => {
     fs.writeFileSync(path.join(dir, "a", "f.txt"), "hello");
     fs.writeFileSync(path.join(dir, "b.txt"), "world!");
     assert.equal(directorySizeBytes(dir), 5 + 6);
+  });
+});
+
+describe("tailFile", () => {
+  it("reads only the requested trailing lines", () => {
+    const dir = tempDir();
+    const file = path.join(dir, "cpa.log");
+    fs.writeFileSync(file, Array.from({ length: 100 }, (_, index) => `line-${index}`).join("\n"));
+    assert.equal(tailFile(file, 3), "line-97\nline-98\nline-99");
   });
 });
 

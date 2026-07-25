@@ -1,36 +1,39 @@
 import fs from "node:fs";
 import path from "node:path";
-import { cpaLayout, ensureDir } from "../paths.js";
+import { ensureDir, miniCpaRoot } from "../paths.js";
 import { isProcessAlive } from "./alive.js";
+import { readProcessStartMarker } from "./pid-identity.js";
 
-export type HomeLockRecord = {
+export type MiniCpaLockRecord = {
   pid: number;
   command: string;
   acquiredAt: string;
+  startMarker?: string;
 };
 
-/** Per-process re-entrancy depth keyed by resolved home. */
-const lockDepthByHome = new Map<string, number>();
+/** Per-process re-entrancy depth for the one global MiniCPA lock. */
+const lockDepth = new Map<string, number>();
 
 const ACQUIRE_ATTEMPTS = 5;
 
-function resolveLockPath(home: string): string {
-  return path.join(cpaLayout(home).stateDir, "cpa.lock");
+function resolveLockPath(): string {
+  return path.join(miniCpaRoot(), "state", "cpa.lock");
 }
 
-function homeKey(home: string): string {
-  return path.resolve(home);
+function homeKey(): string {
+  return path.resolve(resolveLockPath());
 }
 
-function readLockRecord(lockPath: string): HomeLockRecord | undefined {
+function readLockRecord(lockPath: string): MiniCpaLockRecord | undefined {
   if (!fs.existsSync(lockPath)) return undefined;
   try {
-    const parsed = JSON.parse(fs.readFileSync(lockPath, "utf8")) as Partial<HomeLockRecord>;
+    const parsed = JSON.parse(fs.readFileSync(lockPath, "utf8")) as Partial<MiniCpaLockRecord>;
     if (typeof parsed.pid !== "number" || !Number.isFinite(parsed.pid)) return undefined;
     return {
       pid: parsed.pid,
       command: typeof parsed.command === "string" ? parsed.command : "unknown",
       acquiredAt: typeof parsed.acquiredAt === "string" ? parsed.acquiredAt : "",
+      startMarker: typeof parsed.startMarker === "string" ? parsed.startMarker : undefined,
     };
   } catch {
     return undefined;
@@ -38,32 +41,33 @@ function readLockRecord(lockPath: string): HomeLockRecord | undefined {
 }
 
 /**
- * Claim lock via exclusive create (`wx`). If the file already exists, preempt only
- * when the holder PID is dead (or is ourselves after a crashed finally).
+ * Claim the global lock via exclusive create (`wx`). If the file already exists,
+ * preempt only when the holder PID is dead (or is ourselves after a crashed finally).
  */
-function tryAcquireLock(home: string, command: string): void {
-  const key = homeKey(home);
-  const depth = lockDepthByHome.get(key) ?? 0;
+function tryAcquireLock(command: string): void {
+  const key = homeKey();
+  const depth = lockDepth.get(key) ?? 0;
   if (depth > 0) {
-    lockDepthByHome.set(key, depth + 1);
+    lockDepth.set(key, depth + 1);
     return;
   }
 
-  const layout = cpaLayout(home);
-  ensureDir(layout.stateDir);
-  const lockPath = resolveLockPath(home);
-  const record: HomeLockRecord = {
+  const lockPath = resolveLockPath();
+  ensureDir(path.dirname(lockPath));
+  const record: MiniCpaLockRecord = {
     pid: process.pid,
     command,
     acquiredAt: new Date().toISOString(),
+    startMarker: readProcessStartMarker(process.pid),
   };
   const payload = JSON.stringify(record) + "\n";
 
   for (let attempt = 0; attempt < ACQUIRE_ATTEMPTS; attempt++) {
     try {
-      const fd = fs.openSync(lockPath, "wx");
+      const fd = fs.openSync(lockPath, "wx", 0o600);
       try {
         fs.writeFileSync(fd, payload);
+        fs.fsyncSync(fd);
       } finally {
         fs.closeSync(fd);
       }
@@ -71,10 +75,10 @@ function tryAcquireLock(home: string, command: string): void {
       const verified = readLockRecord(lockPath);
       if (!verified || verified.pid !== process.pid) {
         throw new Error(
-          `Failed to acquire CPA_HOME lock (held by PID=${verified?.pid ?? "?"}). Retry.`,
+          `Failed to acquire MiniCPA lock (held by PID=${verified?.pid ?? "?"}). Retry.`,
         );
       }
-      lockDepthByHome.set(key, 1);
+      lockDepth.set(key, 1);
       return;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
@@ -102,12 +106,24 @@ function tryAcquireLock(home: string, command: string): void {
     }
 
     if (isProcessAlive(existing.pid)) {
+      const currentStartMarker = readProcessStartMarker(existing.pid);
+      if (
+        existing.startMarker &&
+        currentStartMarker &&
+        existing.startMarker !== currentStartMarker
+      ) {
+        try {
+          fs.unlinkSync(lockPath);
+        } catch {
+          /* raced with another preemptor */
+        }
+        continue;
+      }
       throw new Error(
         `Another cpa ${existing.command} is running (PID=${existing.pid}). Retry after it finishes.`,
       );
     }
 
-    // Stale lock (dead PID): preempt, then retry O_EXCL so only one winner remains.
     try {
       fs.unlinkSync(lockPath);
     } catch {
@@ -115,26 +131,23 @@ function tryAcquireLock(home: string, command: string): void {
     }
   }
 
-  throw new Error(
-    `Failed to acquire CPA_HOME lock after ${ACQUIRE_ATTEMPTS} attempts. Retry.`,
-  );
+  throw new Error(`Failed to acquire MiniCPA lock after ${ACQUIRE_ATTEMPTS} attempts. Retry.`);
 }
 
-function releaseLock(home: string): void {
-  const key = homeKey(home);
-  const depth = lockDepthByHome.get(key) ?? 0;
+function releaseLock(): void {
+  const key = homeKey();
+  const depth = lockDepth.get(key) ?? 0;
   if (depth > 1) {
-    lockDepthByHome.set(key, depth - 1);
+    lockDepth.set(key, depth - 1);
     return;
   }
   if (depth === 1) {
-    lockDepthByHome.delete(key);
+    lockDepth.delete(key);
   }
 
-  const lockPath = resolveLockPath(home);
+  const lockPath = resolveLockPath();
   const existing = readLockRecord(lockPath);
-  if (!existing) return;
-  if (existing.pid !== process.pid) return;
+  if (!existing || existing.pid !== process.pid) return;
   try {
     fs.unlinkSync(lockPath);
   } catch {
@@ -142,16 +155,15 @@ function releaseLock(home: string): void {
   }
 }
 
-/** Exclusive CPA_HOME lock for start/stop/update (stale holder auto-preempted). */
-export async function withHomeLock<T>(
-  home: string,
+/** Exclusive global lock for the one managed CPA instance. */
+export async function withMiniCpaLock<T>(
   command: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  tryAcquireLock(home, command);
+  tryAcquireLock(command);
   try {
     return await fn();
   } finally {
-    releaseLock(home);
+    releaseLock();
   }
 }

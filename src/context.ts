@@ -5,11 +5,11 @@ export type CommandContext = {
   layout: CpaLayout;
 };
 
-export function createContext(opts?: { home?: string }): CommandContext {
-  const home = resolveCpaHome(opts?.home);
+export function createContext(): CommandContext {
+  const home = resolveCpaHome();
   return { home, layout: cpaLayout(home) };
 }
 
 export function printHome(ctx: CommandContext): void {
-  console.log(`CPA_HOME  ${ctx.home}`);
+  console.log(`CPA home  ${ctx.home}`);
 }

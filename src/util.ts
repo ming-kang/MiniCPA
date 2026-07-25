@@ -85,9 +85,33 @@ export function rotateFileIfLarge(
   }
 }
 
-export function tailFile(file: string, maxLines = 40): string {
-  if (!fs.existsSync(file)) return "";
-  const lines = fs.readFileSync(file, "utf8").split(/\r?\n/);
+export function tailFile(file: string, maxLines = 40, maxBytes = 8 * 1024 * 1024): string {
+  if (!fs.existsSync(file) || maxLines < 1 || maxBytes < 1) return "";
+  const stat = fs.statSync(file);
+  if (stat.size === 0) return "";
+
+  const chunks: Buffer[] = [];
+  let position = stat.size;
+  let bytesRead = 0;
+  let lineBreaks = 0;
+  const fd = fs.openSync(file, "r");
+  try {
+    while (position > 0 && bytesRead < maxBytes && lineBreaks <= maxLines) {
+      const length = Math.min(64 * 1024, position, maxBytes - bytesRead);
+      position -= length;
+      const chunk = Buffer.allocUnsafe(length);
+      fs.readSync(fd, chunk, 0, length, position);
+      chunks.unshift(chunk);
+      bytesRead += length;
+      for (const byte of chunk) {
+        if (byte === 0x0a) lineBreaks += 1;
+      }
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+
+  const lines = Buffer.concat(chunks).toString("utf8").split(/\r?\n/);
   return lines.slice(-maxLines).join("\n").trimEnd();
 }
 

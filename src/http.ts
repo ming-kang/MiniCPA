@@ -70,6 +70,10 @@ export function redactProxyUrl(proxyUrl: string): string {
       parsed.username = parsed.username ? "***" : "";
       parsed.password = parsed.password ? "***" : "";
     }
+    // Proxy URLs should not normally carry a query or fragment; redact both in
+    // diagnostics because they may contain bearer tokens or credentials.
+    if (parsed.search) parsed.search = "?***";
+    if (parsed.hash) parsed.hash = "#***";
     return parsed.toString();
   } catch {
     return "(invalid proxy URL)";

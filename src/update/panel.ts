@@ -7,12 +7,14 @@ import { readInstallState, type InstallState, writeInstallState } from "../state
 import { sha256File } from "../util.js";
 import {
   downloadToFile,
-  fetchLatestRelease,
+  fetchLatestReleaseWithAssets,
   normalizeTagVersion,
   parseGithubDigest,
   releaseAssetDownloadUrl,
   repoFromPanelUrl,
 } from "./github.js";
+
+const MAX_PANEL_BYTES = 20 * 1024 * 1024;
 
 export type PanelUpdateResult = {
   version: string;
@@ -33,7 +35,17 @@ export function isInstalledPanelIntact(
   }
 }
 
-/** Basic sanity checks for a downloaded management panel (not a full integrity proof). */
+export function requireGithubAssetDigest(digest: string | undefined): string {
+  const parsed = parseGithubDigest(digest);
+  if (!parsed) {
+    throw new Error(
+      "management.html has no GitHub SHA-256 digest; refusing unverified panel update",
+    );
+  }
+  return parsed;
+}
+
+/** Basic sanity and integrity checks for a downloaded management panel. */
 export function assertPanelContentSane(filePath: string, expectedDigest?: string): void {
   if (!fs.existsSync(filePath)) {
     throw new Error("management.html download missing on disk");
@@ -42,7 +54,7 @@ export function assertPanelContentSane(filePath: string, expectedDigest?: string
   if (stat.size < 32) {
     throw new Error("management.html download is empty or too small");
   }
-  if (stat.size > 20 * 1024 * 1024) {
+  if (stat.size > MAX_PANEL_BYTES) {
     throw new Error("management.html download is unreasonably large");
   }
   const fd = fs.openSync(filePath, "r");
@@ -73,10 +85,15 @@ export async function checkPanelUpdate(home: string): Promise<{
   const layout = cpaLayout(home);
   const cfg = readCpaConfig(layout.configFile);
   const repo = repoFromPanelUrl(getPanelRepository(cfg));
-  const release = await fetchLatestRelease(repo);
+  const release = await fetchLatestReleaseWithAssets(repo);
   const latest = normalizeTagVersion(release.tag_name);
+  const asset = release.assets.find((candidate) => candidate.name === "management.html");
+  if (!asset) throw new Error(`management.html not found in ${repo} ${release.tag_name}`);
+  const expectedDigest = requireGithubAssetDigest(asset.digest);
   const state = readInstallState(home);
-  const intact = isInstalledPanelIntact(layout.managementHtml, state);
+  const intact =
+    isInstalledPanelIntact(layout.managementHtml, state) &&
+    state.panelSha256 === expectedDigest;
   const current = intact ? state.panelVersion : undefined;
   return {
     current,
@@ -93,29 +110,31 @@ export async function updatePanel(
   const layout = cpaLayout(home);
   const cfg = readCpaConfig(layout.configFile);
   const repo = repoFromPanelUrl(getPanelRepository(cfg));
-  const release = await fetchLatestRelease(repo);
+  const release = await fetchLatestReleaseWithAssets(repo);
   const version = normalizeTagVersion(release.tag_name);
+  const asset = release.assets.find((candidate) => candidate.name === "management.html");
+  if (!asset) throw new Error(`management.html not found in ${repo} ${release.tag_name}`);
+  const expectedDigest = requireGithubAssetDigest(asset.digest);
   const state = readInstallState(home);
 
   if (
     state.panelVersion === version &&
+    state.panelSha256 === expectedDigest &&
     isInstalledPanelIntact(layout.managementHtml, state) &&
     !options?.force
   ) {
     return { version, changed: false, skipped: true };
   }
 
-  const asset = release.assets.find((a) => a.name === "management.html");
-  if (!asset) throw new Error(`management.html not found in ${repo} ${release.tag_name}`);
-
   const downloadDir = miniCpaTempDownloadDir("panel-");
   const cachePath = path.join(downloadDir, "management.html");
   try {
     await downloadToFile(releaseAssetDownloadUrl(repo, asset), cachePath, {
       label: "management.html",
+      maxBytes: MAX_PANEL_BYTES,
     });
 
-    assertPanelContentSane(cachePath, parseGithubDigest(asset.digest));
+    assertPanelContentSane(cachePath, expectedDigest);
 
     ensureDir(layout.staticDir);
     writeFileAtomic(layout.managementHtml, fs.readFileSync(cachePath));

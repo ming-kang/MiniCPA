@@ -2,10 +2,11 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createContext, printHome } from "../context.js";
 import { buildCpaChildEnv } from "../process/child-env.js";
-import { apiBaseUrl, managementUrl, waitForHttpOk } from "../process/health.js";
+import { apiBaseUrl, managementUrl, readinessUrls, waitForAnyHttpOk, waitForHttpOk } from "../process/health.js";
 import { resolveRunning, startDaemon, stopDaemon } from "../process/lifecycle.js";
-import { withHomeLock } from "../process/lock.js";
+import { withMiniCpaLock } from "../process/lock.js";
 import { readCurrentRuntimeVersion, resolveRunnableExecutable } from "../process/runtime.js";
+import { tailFile } from "../util.js";
 
 export function parseLogLineCount(value: string): number {
   if (!/^[1-9]\d*$/.test(value)) {
@@ -18,9 +19,9 @@ export function parseLogLineCount(value: string): number {
   return parsed;
 }
 
-export async function runStart(opts: { home?: string; noWait?: boolean }): Promise<void> {
-  const ctx = createContext(opts);
-  const running = await withHomeLock(ctx.home, "start", () =>
+export async function runStart(opts: { noWait?: boolean }): Promise<void> {
+  const ctx = createContext();
+  const running = await withMiniCpaLock("start", () =>
     startDaemon(ctx.home, { noWait: opts.noWait }),
   );
   const base = apiBaseUrl(ctx.home);
@@ -30,16 +31,16 @@ export async function runStart(opts: { home?: string; noWait?: boolean }): Promi
   console.log(`Manage    ${managementUrl(ctx.home)}`);
 }
 
-export async function runStop(opts: { home?: string }): Promise<void> {
-  const ctx = createContext(opts);
-  const stopped = await withHomeLock(ctx.home, "stop", () => stopDaemon(ctx.home));
+export async function runStop(): Promise<void> {
+  const ctx = createContext();
+  const stopped = await withMiniCpaLock("stop", () => stopDaemon(ctx.home));
   printHome(ctx);
   console.log(stopped ? "Stopped" : "Not running");
 }
 
-export async function runRestart(opts: { home?: string; noWait?: boolean }): Promise<void> {
-  const ctx = createContext(opts);
-  const running = await withHomeLock(ctx.home, "restart", async () => {
+export async function runRestart(opts: { noWait?: boolean }): Promise<void> {
+  const ctx = createContext();
+  const running = await withMiniCpaLock("restart", async () => {
     await stopDaemon(ctx.home);
     return startDaemon(ctx.home, { noWait: opts.noWait });
   });
@@ -50,8 +51,8 @@ export async function runRestart(opts: { home?: string; noWait?: boolean }): Pro
   console.log(`Manage    ${managementUrl(ctx.home)}`);
 }
 
-export async function runStatus(opts: { home?: string }): Promise<void> {
-  const ctx = createContext(opts);
+export async function runStatus(): Promise<void> {
+  const ctx = createContext();
   const running = resolveRunning(ctx.home);
   const version = await readCurrentRuntimeVersion(ctx.home);
   printHome(ctx);
@@ -61,7 +62,7 @@ export async function runStatus(opts: { home?: string }): Promise<void> {
     if (running.startedAt) console.log(`Started   ${running.startedAt}`);
     console.log(`API       ${apiBaseUrl(ctx.home)}`);
     console.log(`Manage    ${managementUrl(ctx.home)}`);
-    const reachable = await waitForHttpOk(managementUrl(ctx.home), 2000);
+    const reachable = await waitForAnyHttpOk(readinessUrls(ctx.home), 2000);
     console.log(`HTTP      ${reachable ? "ok" : "not reachable"}`);
     if (!reachable) {
       console.log("Hint     try: cpa restart   (or cpa logs --err)");
@@ -73,8 +74,8 @@ export async function runStatus(opts: { home?: string }): Promise<void> {
   }
 }
 
-export async function runOpen(opts: { home?: string }): Promise<void> {
-  const ctx = createContext(opts);
+export async function runOpen(): Promise<void> {
+  const ctx = createContext();
   const url = managementUrl(ctx.home);
   const ok = await waitForHttpOk(url, 3000);
   if (!ok) {
@@ -88,24 +89,31 @@ export async function runOpen(opts: { home?: string }): Promise<void> {
 }
 
 async function openInBrowser(url: string): Promise<void> {
-  if (process.platform === "win32") {
-    spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" }).unref();
-    return;
-  }
-  if (process.platform === "darwin") {
-    spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
-    return;
-  }
-  spawn("xdg-open", [url], { detached: true, stdio: "ignore" }).unref();
+  const command =
+    process.platform === "win32"
+      ? "rundll32.exe"
+      : process.platform === "darwin"
+        ? "open"
+        : "xdg-open";
+  const args =
+    process.platform === "win32" ? ["url.dll,FileProtocolHandler", url] : [url];
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command, args, { detached: true, stdio: "ignore" });
+    child.once("error", reject);
+    child.once("spawn", () => {
+      child.unref();
+      resolve();
+    });
+  });
 }
 
 export async function runLogs(opts: {
-  home?: string;
   follow?: boolean;
   lines?: number;
   errOnly?: boolean;
 }): Promise<void> {
-  const ctx = createContext(opts);
+  const ctx = createContext();
   const outFile = ctx.layout.logFile;
   const errFile = ctx.layout.errLogFile;
   const n = opts.lines ?? 80;
@@ -154,8 +162,7 @@ export async function runLogs(opts: {
 }
 
 function printTail(file: string, n: number): void {
-  const content = fs.readFileSync(file, "utf8").split(/\r?\n/);
-  console.log(content.slice(-n).join("\n"));
+  console.log(tailFile(file, n));
 }
 
 async function tailFollowMany(files: string[]): Promise<void> {
@@ -170,11 +177,14 @@ async function tailFollowMany(files: string[]): Promise<void> {
       if (stat.size < pos) pos = 0;
       if (stat.size > pos) {
         const fd = fs.openSync(file, "r");
-        const len = stat.size - pos;
-        const buf = Buffer.alloc(len);
-        fs.readSync(fd, buf, 0, len, pos);
-        fs.closeSync(fd);
-        state.set(file, stat.size);
+        const len = Math.min(stat.size - pos, 8 * 1024 * 1024);
+        const buf = Buffer.allocUnsafe(len);
+        try {
+          fs.readSync(fd, buf, 0, len, pos);
+        } finally {
+          fs.closeSync(fd);
+        }
+        state.set(file, pos + len);
         const prefix = files.length > 1 ? `[${file.endsWith(".err.log") ? "err" : "out"}] ` : "";
         const text = buf.toString();
         if (prefix) {
@@ -196,8 +206,8 @@ async function tailFollowMany(files: string[]): Promise<void> {
   });
 }
 
-export async function runTui(opts: { home?: string }): Promise<void> {
-  const ctx = createContext(opts);
+export async function runTui(): Promise<void> {
+  const ctx = createContext();
   const running = resolveRunning(ctx.home);
   if (!running) {
     console.error("CPA is not running. Run: cpa start");
@@ -210,7 +220,18 @@ export async function runTui(opts: { home?: string }): Promise<void> {
     stdio: "inherit",
     env: buildCpaChildEnv(),
   });
-  await new Promise<void>((resolve) => {
-    child.on("close", () => resolve());
+  await new Promise<void>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          signal ? `CPA TUI terminated by ${signal}` : `CPA TUI exited with code ${code ?? 1}`,
+        ),
+      );
+    });
   });
 }

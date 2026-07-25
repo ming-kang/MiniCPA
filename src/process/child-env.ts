@@ -11,6 +11,8 @@ const STRIPPED_ENV_KEYS = [
   "NODE_AUTH_TOKEN",
 ] as const;
 
+const STRIPPED_ENV_KEY_SET = new Set<string>(STRIPPED_ENV_KEYS);
+
 /**
  * Environment for cli-proxy-api / tui / version-probe children: copy of process.env
  * without MiniCPA update credentials.
@@ -19,8 +21,12 @@ export function buildCpaChildEnv(
   sourceEnv: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   const childEnv: NodeJS.ProcessEnv = { ...sourceEnv };
-  for (const key of STRIPPED_ENV_KEYS) {
-    delete childEnv[key];
+  // Windows environment-variable names are case-insensitive. Filter every spelling
+  // on every platform so a differently cased token can never reach a CPA child.
+  for (const key of Object.keys(childEnv)) {
+    if (STRIPPED_ENV_KEY_SET.has(key.toUpperCase())) {
+      delete childEnv[key];
+    }
   }
   return childEnv;
 }

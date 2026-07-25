@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { assertPanelContentSane, isInstalledPanelIntact } from "./panel.js";
+import { assertPanelContentSane, isInstalledPanelIntact, requireGithubAssetDigest } from "./panel.js";
 
 const temps: string[] = [];
 
@@ -47,6 +47,15 @@ describe("isInstalledPanelIntact", () => {
       false,
     );
     assert.equal(isInstalledPanelIntact(file, { panelVersion: "1.2.3" }), false);
+  });
+});
+
+describe("requireGithubAssetDigest", () => {
+  it("requires a valid GitHub SHA-256 digest", () => {
+    const digest = "a".repeat(64);
+    assert.equal(requireGithubAssetDigest(`sha256:${digest}`), digest);
+    assert.throws(() => requireGithubAssetDigest(undefined), /refusing unverified/);
+    assert.throws(() => requireGithubAssetDigest("md5:abc"), /refusing unverified/);
   });
 });
 

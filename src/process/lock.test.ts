@@ -4,14 +4,30 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { withHomeLock } from "./lock.js";
+import { miniCpaRoot } from "../paths.js";
+import { withMiniCpaLock } from "./lock.js";
 
-const tempHomes: string[] = [];
+const tempDirs: string[] = [];
 const childPids: number[] = [];
+const originalLocalAppData = process.env.LOCALAPPDATA;
+const originalXdgDataHome = process.env.XDG_DATA_HOME;
+const originalHome = process.env.HOME;
+
+function configureIsolatedAppRoot(): void {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-lock-root-"));
+  tempDirs.push(root);
+  process.env.LOCALAPPDATA = root;
+  process.env.XDG_DATA_HOME = root;
+  process.env.HOME = root;
+}
+
+function lockPath(): string {
+  return path.join(miniCpaRoot(), "state", "cpa.lock");
+}
 
 afterEach(() => {
-  for (const home of tempHomes.splice(0)) {
-    fs.rmSync(home, { recursive: true, force: true });
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
   for (const pid of childPids.splice(0)) {
     try {
@@ -20,13 +36,13 @@ afterEach(() => {
       /* ignore */
     }
   }
+  if (originalLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+  else process.env.LOCALAPPDATA = originalLocalAppData;
+  if (originalXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+  else process.env.XDG_DATA_HOME = originalXdgDataHome;
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
 });
-
-function makeHome(): string {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-lock-"));
-  tempHomes.push(home);
-  return home;
-}
 
 function spawnLiveHolder(): number {
   const child =
@@ -41,41 +57,38 @@ function spawnLiveHolder(): number {
   return child.pid;
 }
 
-describe("withHomeLock", () => {
-  it("runs exclusive work and releases", async () => {
-    const home = makeHome();
+describe("withMiniCpaLock", () => {
+  it("uses one global lock and releases it", async () => {
+    configureIsolatedAppRoot();
     let ran = false;
-    await withHomeLock(home, "test", async () => {
+    await withMiniCpaLock("test", async () => {
       ran = true;
-      const lockPath = path.join(home, "state", "cpa.lock");
-      assert.ok(fs.existsSync(lockPath));
+      assert.ok(fs.existsSync(lockPath()));
     });
     assert.equal(ran, true);
-    assert.equal(fs.existsSync(path.join(home, "state", "cpa.lock")), false);
+    assert.equal(fs.existsSync(lockPath()), false);
   });
 
-  it("preempts stale lock from dead pid", async () => {
-    const home = makeHome();
-    const stateDir = path.join(home, "state");
-    fs.mkdirSync(stateDir, { recursive: true });
+  it("preempts a stale global lock", async () => {
+    configureIsolatedAppRoot();
+    fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
     fs.writeFileSync(
-      path.join(stateDir, "cpa.lock"),
+      lockPath(),
       JSON.stringify({ pid: 999_999_999, command: "stale", acquiredAt: new Date().toISOString() }) +
         "\n",
     );
-    await withHomeLock(home, "test", async () => {
+    await withMiniCpaLock("test", async () => {
       /* acquired */
     });
-    assert.equal(fs.existsSync(path.join(home, "state", "cpa.lock")), false);
+    assert.equal(fs.existsSync(lockPath()), false);
   });
 
-  it("rejects live holder from another process", async () => {
-    const home = makeHome();
+  it("rejects a live holder globally", async () => {
+    configureIsolatedAppRoot();
     const holderPid = spawnLiveHolder();
-    const stateDir = path.join(home, "state");
-    fs.mkdirSync(stateDir, { recursive: true });
+    fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
     fs.writeFileSync(
-      path.join(stateDir, "cpa.lock"),
+      lockPath(),
       JSON.stringify({
         pid: holderPid,
         command: "start",
@@ -83,19 +96,20 @@ describe("withHomeLock", () => {
       }) + "\n",
     );
     await assert.rejects(
-      () => withHomeLock(home, "update", async () => undefined),
+      () => withMiniCpaLock("update", async () => undefined),
       /Another cpa start is running/,
     );
+    assert.ok(fs.existsSync(lockPath()));
   });
 
-  it("supports re-entrant acquire in same process", async () => {
-    const home = makeHome();
-    await withHomeLock(home, "outer", async () => {
-      await withHomeLock(home, "inner", async () => {
-        assert.ok(fs.existsSync(path.join(home, "state", "cpa.lock")));
+  it("supports intentional re-entrant acquire in the same process", async () => {
+    configureIsolatedAppRoot();
+    await withMiniCpaLock("outer", async () => {
+      await withMiniCpaLock("inner", async () => {
+        assert.ok(fs.existsSync(lockPath()));
       });
-      assert.ok(fs.existsSync(path.join(home, "state", "cpa.lock")));
+      assert.ok(fs.existsSync(lockPath()));
     });
-    assert.equal(fs.existsSync(path.join(home, "state", "cpa.lock")), false);
+    assert.equal(fs.existsSync(lockPath()), false);
   });
 });

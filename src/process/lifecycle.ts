@@ -1,6 +1,7 @@
 import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
-import { activeExecutablePath, cpaLayout, ensureDir } from "../paths.js";
+import path from "node:path";
+import { activeExecutablePath, cpaLayout, ensureDir, hardenCpaPermissions } from "../paths.js";
 import { clearPid, readPidRecord, writePidRecord } from "../state.js";
 import { rotateFileIfLarge, sleep, tailFile } from "../util.js";
 import { isProcessAlive } from "./alive.js";
@@ -10,6 +11,7 @@ import {
   exePathsMatch,
   imageMatchesExpectedExe,
   parseTasklistImageName,
+  readProcessStartMarker,
 } from "./pid-identity.js";
 import { recoverUnlockProbeBinary, resolveRunnableExecutable } from "./runtime.js";
 
@@ -23,11 +25,31 @@ export const FILE_UNLOCK_WAIT_MS = 30_000;
 
 export type ProcessIdentity = "match" | "mismatch" | "unknown";
 
+function readWindowsExecutablePath(pid: number): string | undefined {
+  const script = [
+    `$process = Get-Process -Id ${pid} -ErrorAction Stop`,
+    "if ($process.Path) { [Console]::Out.Write($process.Path) }",
+  ].join("; ");
+
+  for (const shell of ["powershell.exe", "pwsh.exe"]) {
+    try {
+      const output = execFileSync(
+        shell,
+        ["-NoProfile", "-NonInteractive", "-Command", script],
+        { encoding: "utf8", windowsHide: true, timeout: 3_000 },
+      ).trim();
+      if (output) return output;
+    } catch {
+      /* try the other PowerShell executable */
+    }
+  }
+  return undefined;
+}
+
 /**
- * Classify whether `pid` looks like our CPA binary.
- * - match: definitive identity match
- * - mismatch: definitive foreign/dead image
- * - unknown: probe failed (do not clear PID ownership)
+ * Classify whether `pid` is definitively the managed CPA binary.
+ * A basename-only signal is useful for detecting a mismatch, but never enough to
+ * authorize termination: another MiniCPA or unrelated process can share that name.
  */
 export function classifyProcessIdentity(pid: number, expectedExe: string): ProcessIdentity {
   const expected = expectedExe || "";
@@ -37,29 +59,18 @@ export function classifyProcessIdentity(pid: number, expectedExe: string): Proce
     if (process.platform === "linux") {
       try {
         const exeLink = fs.readlinkSync(`/proc/${pid}/exe`);
-        if (exeLink && exePathsMatch(exeLink, expected)) return "match";
-        // Realpath differs and both exist → foreign binary.
-        if (exeLink && fs.existsSync(expected) && !exePathsMatch(exeLink, expected)) {
-          // Still allow basename match for renamed copies under same home.
-          if (!imageMatchesExpectedExe(exeLink, expected)) return "mismatch";
-        }
+        return exePathsMatch(exeLink, expected) ? "match" : "mismatch";
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code;
-        if (code === "ENOENT") {
-          // Process may have exited between alive check and probe.
-          return "mismatch";
-        }
-        // EACCES etc. — fall through to comm/cmdline
+        // The process exited between the liveness and identity probes.
+        return code === "ENOENT" ? "mismatch" : "unknown";
       }
-
-      const comm = fs.readFileSync(`/proc/${pid}/comm`, "utf8").trim();
-      if (comm && imageMatchesExpectedExe(comm, expected)) return "match";
-      const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0")[0] ?? "";
-      if (!cmdline) return "mismatch";
-      return imageMatchesExpectedExe(cmdline, expected) ? "match" : "mismatch";
     }
 
     if (process.platform === "win32") {
+      const executable = readWindowsExecutablePath(pid);
+      if (executable) return exePathsMatch(executable, expected) ? "match" : "mismatch";
+
       const out = execFileSync(
         "tasklist",
         ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
@@ -67,7 +78,7 @@ export function classifyProcessIdentity(pid: number, expectedExe: string): Proce
       ).trim();
       const image = parseTasklistImageName(out);
       if (!image) return "mismatch";
-      return imageMatchesExpectedExe(image, expected) ? "match" : "mismatch";
+      return imageMatchesExpectedExe(image, expected) ? "unknown" : "mismatch";
     }
 
     if (process.platform === "darwin") {
@@ -76,7 +87,8 @@ export function classifyProcessIdentity(pid: number, expectedExe: string): Proce
         timeout: 3000,
       }).trim();
       if (!out) return "mismatch";
-      return imageMatchesExpectedExe(out, expected) ? "match" : "mismatch";
+      if (path.isAbsolute(out) && exePathsMatch(out, expected)) return "match";
+      return imageMatchesExpectedExe(out, expected) ? "unknown" : "mismatch";
     }
   } catch {
     return "unknown";
@@ -107,6 +119,16 @@ export function resolveRunning(home: string): RunningInfo | undefined {
     return undefined;
   }
 
+  const currentStartMarker = readProcessStartMarker(record.pid);
+  if (
+    record.startMarker &&
+    currentStartMarker &&
+    record.startMarker !== currentStartMarker
+  ) {
+    clearPid(home);
+    return undefined;
+  }
+
   let exe: string;
   try {
     exe = resolveRunnableExecutable(home);
@@ -124,8 +146,21 @@ export function resolveRunning(home: string): RunningInfo | undefined {
     pid: record.pid,
     exe: exe || record.exe,
     startedAt: record.startedAt || undefined,
-    identityUnknown: identity === "unknown",
+    identityUnknown:
+      identity === "unknown" ||
+      (!!record.startMarker && !currentStartMarker),
   };
+}
+
+function openPrivateAppendLog(file: string): number {
+  const fd = fs.openSync(file, "a", 0o600);
+  try {
+    if (process.platform !== "win32") fs.chmodSync(file, 0o600);
+    return fd;
+  } catch (err) {
+    fs.closeSync(fd);
+    throw err;
+  }
 }
 
 function logPathsHint(home: string): string {
@@ -155,6 +190,17 @@ async function runTaskkill(pid: number, force: boolean): Promise<void> {
     killer.on("close", () => resolve());
     killer.on("error", () => resolve());
   });
+}
+
+/** Re-check immediately before a destructive signal to avoid PID-reuse kills. */
+function assertSafeToStop(home: string, pid: number): void {
+  const current = resolveRunning(home);
+  if (!current || current.pid !== pid || current.identityUnknown) {
+    throw new Error(
+      `Refusing to stop PID=${pid}: MiniCPA can no longer verify it is the managed CPA process. ` +
+        "Stop it manually if appropriate, then retry.",
+    );
+  }
 }
 
 /** Wait until the active binary is free for replace (Windows file locks). */
@@ -228,6 +274,7 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
   ensureDir(layout.stateDir);
   ensureDir(layout.authsDir);
   ensureDir(layout.staticDir);
+  hardenCpaPermissions(home);
 
   if (!fs.existsSync(layout.configFile)) {
     throw new Error(`Missing config: ${layout.configFile}. Run: cpa init`);
@@ -237,8 +284,14 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
   // Rotate oversized logs only when starting a new process (fd not yet held).
   rotateFileIfLarge(layout.logFile);
   rotateFileIfLarge(layout.errLogFile);
-  const out = fs.openSync(layout.logFile, "a");
-  const err = fs.openSync(layout.errLogFile, "a");
+  const out = openPrivateAppendLog(layout.logFile);
+  let err: number;
+  try {
+    err = openPrivateAppendLog(layout.errLogFile);
+  } catch (error) {
+    fs.closeSync(out);
+    throw error;
+  }
 
   const child = spawn(exe, ["-config", layout.configFile], {
     cwd: home,
@@ -265,7 +318,8 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
   }
 
   const startedAt = new Date().toISOString();
-  writePidRecord(home, { pid: child.pid, exe, startedAt });
+  const startMarker = readProcessStartMarker(child.pid);
+  writePidRecord(home, { pid: child.pid, exe, startedAt, startMarker });
   await sleep(500);
 
   if (spawnError) {
@@ -304,13 +358,22 @@ export async function stopDaemon(home: string): Promise<boolean> {
   }
 
   const pid = running.pid;
+  if (running.identityUnknown) {
+    throw new Error(
+      `Refusing to stop PID=${pid}: MiniCPA cannot verify process ownership. ` +
+        "Stop it manually if appropriate, then retry.",
+    );
+  }
+
   if (process.platform === "win32") {
+    assertSafeToStop(home, pid);
     await runTaskkill(pid, false);
     const deadline = Date.now() + STOP_GRACE_MS;
     while (Date.now() < deadline && isProcessAlive(pid)) {
       await sleep(200);
     }
     if (isProcessAlive(pid)) {
+      assertSafeToStop(home, pid);
       await runTaskkill(pid, true);
       const hardDeadline = Date.now() + STOP_KILL_WAIT_MS;
       while (Date.now() < hardDeadline && isProcessAlive(pid)) {
@@ -318,25 +381,27 @@ export async function stopDaemon(home: string): Promise<boolean> {
       }
     }
   } else {
+    assertSafeToStop(home, pid);
     try {
       process.kill(pid, "SIGTERM");
-      const deadline = Date.now() + STOP_GRACE_MS;
-      while (Date.now() < deadline && isProcessAlive(pid)) {
-        await sleep(200);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ESRCH") throw err;
+    }
+    const deadline = Date.now() + STOP_GRACE_MS;
+    while (Date.now() < deadline && isProcessAlive(pid)) {
+      await sleep(200);
+    }
+    if (isProcessAlive(pid)) {
+      assertSafeToStop(home, pid);
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ESRCH") throw err;
       }
-      if (isProcessAlive(pid)) {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          /* already dead */
-        }
-        const hardDeadline = Date.now() + STOP_KILL_WAIT_MS;
-        while (Date.now() < hardDeadline && isProcessAlive(pid)) {
-          await sleep(100);
-        }
+      const hardDeadline = Date.now() + STOP_KILL_WAIT_MS;
+      while (Date.now() < hardDeadline && isProcessAlive(pid)) {
+        await sleep(100);
       }
-    } catch {
-      /* already dead */
     }
   }
 

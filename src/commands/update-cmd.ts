@@ -1,5 +1,5 @@
 import { createContext, printHome } from "../context.js";
-import { withHomeLock } from "../process/lock.js";
+import { withMiniCpaLock } from "../process/lock.js";
 import { checkBinaryUpdate, updateBinary } from "../update/binary.js";
 import { checkPanelUpdate, updatePanel } from "../update/panel.js";
 
@@ -14,8 +14,8 @@ export function assertUpdateScopeFlags(opts: {
   }
 }
 
-export async function runUpdateCheck(opts: { home?: string }): Promise<void> {
-  const ctx = createContext(opts);
+export async function runUpdateCheck(): Promise<void> {
+  const ctx = createContext();
   printHome(ctx);
 
   const binary = await checkBinaryUpdate(ctx.home);
@@ -45,7 +45,6 @@ export async function runUpdateCheck(opts: { home?: string }): Promise<void> {
 }
 
 export async function runUpdate(opts: {
-  home?: string;
   /** Update panel only */
   panelOnly?: boolean;
   /** Binary only (skip panel). Default is binary + panel. */
@@ -56,14 +55,14 @@ export async function runUpdate(opts: {
   /** Skip binary checksum verification (unsafe). */
   insecure?: boolean;
 }): Promise<void> {
-  const ctx = createContext(opts);
+  const ctx = createContext();
   printHome(ctx);
 
   if (opts.panelOnly && opts.binaryOnly) {
     throw new Error("Use only one of --panel or --binary");
   }
 
-  await withHomeLock(ctx.home, "update", async () => {
+  await withMiniCpaLock("update", async () => {
     if (opts.panelOnly) {
       const result = await updatePanel(ctx.home, { force: opts.force });
       console.log(

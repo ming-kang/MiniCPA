@@ -22,6 +22,17 @@ describe("writeFileAtomic", () => {
     assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).ok, true);
   });
 
+  it("writes a private file by default on POSIX", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-atomic-"));
+    temps.push(dir);
+    const file = path.join(dir, "secret.json");
+    writeFileAtomic(file, "secret");
+    if (process.platform !== "win32") {
+      assert.equal(fs.statSync(file).mode & 0o077, 0);
+      assert.equal(fs.statSync(dir).mode & 0o077, 0);
+    }
+  });
+
   it("overwrites existing file", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-atomic-"));
     temps.push(dir);

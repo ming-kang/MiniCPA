@@ -21,11 +21,12 @@ describe("hasProxyEnvConfigured", () => {
 });
 
 describe("redactProxyUrl", () => {
-  it("masks credentials", () => {
-    assert.equal(
-      redactProxyUrl("http://user:secret@127.0.0.1:7890"),
-      "http://***:***@127.0.0.1:7890/",
+  it("masks credentials and query secrets", () => {
+    const redacted = redactProxyUrl(
+      "http://user:secret@127.0.0.1:7890/?token=super-secret#credential",
     );
+    assert.match(redacted, /\*\*\*/);
+    assert.doesNotMatch(redacted, /user|secret|super-secret|credential/);
   });
 });
 

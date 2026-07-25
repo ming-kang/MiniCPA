@@ -33,6 +33,9 @@ import {
   type PickedReleaseAsset,
 } from "./github.js";
 
+const MAX_BINARY_ARCHIVE_BYTES = 512 * 1024 * 1024;
+const MAX_EXTRACTED_EXECUTABLE_BYTES = 512 * 1024 * 1024;
+
 export class BinaryUpdateError extends Error {
   readonly previousRestarted: boolean;
   readonly causeMessage: string;
@@ -100,6 +103,9 @@ async function extractArchive(archivePath: string, destDir: string): Promise<str
     if (isUnsafeArchiveEntryName(entry.entryName)) {
       throw new Error(`Unsafe zip entry path: ${entry.entryName}`);
     }
+    if (entry.header.size > MAX_EXTRACTED_EXECUTABLE_BYTES) {
+      throw new Error(`${exeName} in ${archivePath} exceeds extraction size limit`);
+    }
     const out = path.join(destDir, exeName);
     fs.writeFileSync(out, entry.getData());
     return out;
@@ -115,6 +121,10 @@ async function extractArchive(archivePath: string, destDir: string): Promise<str
         const type = (entry as { type?: string }).type;
         if (type === "SymbolicLink" || type === "Link") return false;
         const base = path.posix.basename(entryPath.replace(/\\/g, "/"));
+        const size = (entry as { size?: number }).size;
+        if (typeof size === "number" && size > MAX_EXTRACTED_EXECUTABLE_BYTES) {
+          throw new Error(`${exeName} in ${archivePath} exceeds extraction size limit`);
+        }
         // Allow directories so nested layouts extract parents; tar may still need them.
         if (type === "Directory" || entryPath.endsWith("/")) return true;
         return base === exeName;
@@ -187,7 +197,10 @@ async function downloadFirstAvailableAsset(
   for (const picked of candidates) {
     const archivePath = path.join(downloadDir, picked.assetName);
     try {
-      await downloadToFile(picked.url, archivePath, { label: picked.assetName });
+      await downloadToFile(picked.url, archivePath, {
+        label: picked.assetName,
+        maxBytes: MAX_BINARY_ARCHIVE_BYTES,
+      });
       return { picked, archivePath };
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));

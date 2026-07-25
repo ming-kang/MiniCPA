@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { activeExecutablePath } from "../paths.js";
-import { writeInstallState } from "../state.js";
+import { readInstallState, writeInstallState } from "../state.js";
 import { readCurrentRuntimeVersion } from "./runtime.js";
 
 const temps: string[] = [];
@@ -24,6 +24,22 @@ describe("readCurrentRuntimeVersion", () => {
     assert.equal(fs.existsSync(activeExecutablePath(home)), false);
     assert.equal(await readCurrentRuntimeVersion(home), undefined);
   });
+
+  it(
+    "does not rewrite install state while probing",
+    { skip: process.platform === "win32" },
+    async () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-runtime-"));
+      temps.push(home);
+      const executable = activeExecutablePath(home);
+      fs.writeFileSync(executable, "#!/bin/sh\necho 'CLIProxyAPI Version: 8.0.0'\n");
+      fs.chmodSync(executable, 0o755);
+      writeInstallState(home, { cpaHome: home, runtimeVersion: "7.0.0" });
+
+      assert.equal(await readCurrentRuntimeVersion(home), "8.0.0");
+      assert.equal(readInstallState(home).runtimeVersion, "7.0.0");
+    },
+  );
 
   it("does not trust a recorded version when the binary cannot be probed", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-runtime-"));

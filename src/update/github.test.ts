@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, it } from "node:test";
 import {
   browserReleaseAssetUrl,
   cpaAssetNameCandidates,
   cpaReleaseAssetNames,
+  downloadToFile,
   ensureReleaseTag,
   githubAuthToken,
   isSafeReleaseTag,
@@ -18,6 +22,14 @@ import {
   synthesizePublicRelease,
   type GhRelease,
 } from "./github.js";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 function release(tag: string, names: string[]): GhRelease {
   return {
@@ -81,10 +93,17 @@ describe("repoFromPanelUrl", () => {
       repoFromPanelUrl("https://github.com/foo/bar.git"),
       "foo/bar",
     );
+    assert.equal(
+      repoFromPanelUrl("https://github.com/foo/bar/releases/latest"),
+      "foo/bar",
+    );
   });
 
-  it("rejects non-github", () => {
+  it("rejects non-github and spoofed URLs", () => {
     assert.throws(() => repoFromPanelUrl("https://gitlab.com/a/b"), /Unsupported/);
+    assert.throws(() => repoFromPanelUrl("https://evil.example/github.com/a/b"), /Unsupported/);
+    assert.throws(() => repoFromPanelUrl("http://github.com/a/b"), /Unsupported/);
+    assert.throws(() => repoFromPanelUrl("https://github.com/a"), /Unsupported/);
   });
 });
 
@@ -126,6 +145,17 @@ describe("cpaReleaseAssetNames / candidates", () => {
     assert.ok(names.includes("CLIProxyAPI_7.0.0_windows_arm64.zip"));
     assert.ok(names.includes("CLIProxyAPI_7.0.0_linux_amd64_no-plugin.tar.gz"));
     assert.ok(names.includes("checksums.txt"));
+  });
+
+  it("rejects unsupported architectures rather than downloading amd64", () => {
+    assert.throws(
+      () => cpaAssetNameCandidates("7.0.0", "linux", "arm"),
+      /Unsupported CPU architecture/,
+    );
+    assert.throws(
+      () => cpaAssetNameCandidates("7.0.0", "freebsd", "x64"),
+      /Unsupported platform/,
+    );
   });
 
   it("orders arm windows candidates aarch64 first", () => {
@@ -200,6 +230,19 @@ describe("pickReleaseAsset", () => {
     const list = listReleaseAssetCandidates(synthetic, "win32", "arm64");
     assert.ok(list.length >= 2);
     assert.equal(list[0]!.assetName, "CLIProxyAPI_7.0.0_windows_aarch64.zip");
+  });
+});
+
+describe("downloadToFile", () => {
+  it("enforces a streamed maximum and removes partial output", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-download-"));
+    tempDirs.push(dir);
+    const dest = path.join(dir, "payload.bin");
+    await assert.rejects(
+      () => downloadToFile("data:application/octet-stream,hello", dest, { maxBytes: 4 }),
+      /exceeds 4 B limit/,
+    );
+    assert.equal(fs.existsSync(dest), false);
   });
 });
 

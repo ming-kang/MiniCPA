@@ -1,25 +1,91 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-/** Write file via temp + rename (best-effort atomic on Windows). */
-export function writeFileAtomic(filePath: string, data: string | Buffer): void {
+const PRIVATE_FILE_MODE = 0o600;
+
+function syncDirectory(directory: string): void {
+  if (process.platform === "win32") return;
+  try {
+    const fd = fs.openSync(directory, "r");
+    try {
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    /* best-effort durability only */
+  }
+}
+
+/**
+ * Write a private file via exclusive temp + rename.
+ * If replacement is unsupported (notably on Windows), preserve the old file until
+ * the new file is safely in place and restore it on failure.
+ */
+export function writeFileAtomic(
+  filePath: string,
+  data: string | Buffer,
+  options?: { mode?: number },
+): void {
   const directory = path.dirname(filePath);
-  fs.mkdirSync(directory, { recursive: true });
-  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(temporaryPath, data);
+  const mode = options?.mode ?? PRIVATE_FILE_MODE;
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") fs.chmodSync(directory, 0o700);
+
+  const base = path.basename(filePath);
+  const temporaryPath = path.join(directory, `.${base}.${process.pid}.${randomUUID()}.tmp`);
+  const fd = fs.openSync(temporaryPath, "wx", mode);
+  try {
+    fs.writeFileSync(fd, data);
+    fs.fsyncSync(fd);
+  } catch (err) {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      /* ignore close failure during cleanup */
+    }
+    try {
+      fs.unlinkSync(temporaryPath);
+    } catch {
+      /* ignore cleanup failure */
+    }
+    throw err;
+  }
+  fs.closeSync(fd);
+
   try {
     fs.renameSync(temporaryPath, filePath);
   } catch {
+    const backupPath = path.join(directory, `.${base}.${process.pid}.${randomUUID()}.bak`);
+    const hadOriginal = fs.existsSync(filePath);
     try {
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      if (hadOriginal) fs.renameSync(filePath, backupPath);
       fs.renameSync(temporaryPath, filePath);
-    } catch (renameError) {
-      try {
-        fs.unlinkSync(temporaryPath);
-      } catch {
-        /* ignore */
+      if (hadOriginal) {
+        try {
+          fs.unlinkSync(backupPath);
+        } catch {
+          /* a recoverable backup residue is safer than failing a completed write */
+        }
       }
-      throw renameError;
+    } catch (replacementError) {
+      try {
+        if (hadOriginal && fs.existsSync(backupPath) && !fs.existsSync(filePath)) {
+          fs.renameSync(backupPath, filePath);
+        }
+      } catch {
+        /* preserve the original failure below */
+      }
+      try {
+        if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
+      } catch {
+        /* ignore cleanup failure */
+      }
+      throw replacementError;
     }
   }
+
+  if (process.platform !== "win32") fs.chmodSync(filePath, mode);
+  syncDirectory(directory);
 }

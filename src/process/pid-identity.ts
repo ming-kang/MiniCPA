@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 
 function basenameLower(filePath: string): string {
@@ -28,16 +30,77 @@ export function imageMatchesExpectedExe(imageOrComm: string, expectedExe: string
   return false;
 }
 
-/** True when full paths resolve to the same executable (Linux /proc/pid/exe). */
+function runPowerShell(script: string): string | undefined {
+  for (const shell of ["powershell.exe", "pwsh.exe"]) {
+    try {
+      const output = execFileSync(
+        shell,
+        ["-NoProfile", "-NonInteractive", "-Command", script],
+        { encoding: "utf8", windowsHide: true, timeout: 3_000 },
+      ).trim();
+      if (output) return output;
+    } catch {
+      /* try the other PowerShell executable */
+    }
+  }
+  return undefined;
+}
+
+/** Stable process-creation marker used to detect PID reuse. */
+export function readProcessStartMarker(pid: number): string | undefined {
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  try {
+    if (process.platform === "linux") {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+      const closeParen = stat.lastIndexOf(")");
+      if (closeParen < 0) return undefined;
+      const fields = stat.slice(closeParen + 1).trim().split(/\s+/);
+      const startTicks = fields[19]; // proc(5) field 22; fields starts at field 3.
+      if (!startTicks || !/^\d+$/.test(startTicks)) return undefined;
+      let bootId = "boot";
+      try {
+        bootId = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() || bootId;
+      } catch {
+        /* start ticks remain stable for this boot */
+      }
+      return `${bootId}:${startTicks}`;
+    }
+    if (process.platform === "win32") {
+      return runPowerShell(
+        `$p = Get-Process -Id ${pid} -ErrorAction Stop; ` +
+          "[Console]::Out.Write($p.StartTime.ToUniversalTime().Ticks)",
+      );
+    }
+    if (process.platform === "darwin") {
+      const output = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], {
+        encoding: "utf8",
+        timeout: 3_000,
+      }).trim();
+      return output || undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+/** True only when full paths resolve to the same executable. */
 export function exePathsMatch(observedPath: string, expectedPath: string): boolean {
   try {
-    const a = path.resolve(observedPath.replace(/\s+\(deleted\)$/i, "").trim());
-    const b = path.resolve(expectedPath.trim());
-    if (a.toLowerCase() === b.toLowerCase()) return true;
+    const normalize = (filePath: string): string => {
+      const cleaned = filePath.replace(/\s+\(deleted\)$/i, "").trim();
+      try {
+        return fs.realpathSync.native(cleaned);
+      } catch {
+        return path.resolve(cleaned);
+      }
+    };
+    const a = normalize(observedPath);
+    const b = normalize(expectedPath);
+    return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
   } catch {
-    /* ignore */
+    return false;
   }
-  return imageMatchesExpectedExe(observedPath, expectedPath);
 }
 
 /** Parse tasklist CSV /NH first field (image name). */

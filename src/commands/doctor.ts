@@ -13,20 +13,20 @@ import {
   formatBytes,
 } from "../util.js";
 
-export async function runDoctor(opts: { home?: string }): Promise<void> {
-  const ctx = createContext(opts);
+export async function runDoctor(): Promise<void> {
+  const ctx = createContext();
   printHome(ctx);
   let ok = true;
 
   // Layout / write access
   try {
     fs.accessSync(ctx.home, fs.constants.W_OK);
-    console.log("[ ok ] CPA_HOME writable");
+    console.log("[ ok ] CPA home writable");
   } catch {
     if (!fs.existsSync(ctx.home)) {
-      console.log("[fail] CPA_HOME missing — run: cpa init");
+      console.log("[fail] CPA home missing — run: cpa init");
     } else {
-      console.log("[fail] CPA_HOME not writable");
+      console.log("[fail] CPA home not writable");
     }
     ok = false;
   }
@@ -69,7 +69,7 @@ export async function runDoctor(opts: { home?: string }): Promise<void> {
   if (state.runtimeVersion && !version) {
     console.log("[warn] install state has runtimeVersion but binary is missing/unprobeable");
   } else if (state.runtimeVersion && version && state.runtimeVersion !== version) {
-    console.log("[warn] runtime version differs from install state (will sync on next probe write)");
+    console.log("[warn] runtime version differs from install state — run: cpa update --force");
   }
   console.log(`[info] panel ${state.panelVersion ?? "-"}`);
 
@@ -82,6 +82,31 @@ export async function runDoctor(opts: { home?: string }): Promise<void> {
   for (const dir of [ctx.layout.logsDir, ctx.layout.stateDir, ctx.layout.authsDir, ctx.layout.staticDir]) {
     if (!fs.existsSync(dir)) {
       console.log(`[warn] dir missing: ${dir}`);
+    }
+  }
+
+  if (process.platform !== "win32") {
+    for (const target of [
+      ctx.home,
+      ctx.layout.configFile,
+      ctx.layout.envFile,
+      ctx.layout.authsDir,
+      ctx.layout.logsDir,
+      ctx.layout.stateDir,
+      ctx.layout.installStateFile,
+      ctx.layout.pidFile,
+      ctx.layout.logFile,
+      ctx.layout.errLogFile,
+    ]) {
+      if (!fs.existsSync(target)) continue;
+      try {
+        const mode = fs.statSync(target).mode & 0o777;
+        if ((mode & 0o077) !== 0) {
+          console.log(`[warn] permissions ${mode.toString(8).padStart(3, "0")} expose private data: ${target}`);
+        }
+      } catch {
+        /* best-effort diagnostic */
+      }
     }
   }
 

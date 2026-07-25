@@ -3,24 +3,27 @@ import { describe, it } from "node:test";
 import { buildCpaChildEnv, strippedEnvKeys } from "./child-env.js";
 
 describe("buildCpaChildEnv", () => {
-  it("strips known tokens and keeps PATH", () => {
+  it("strips known tokens in every case while keeping unrelated values", () => {
     const child = buildCpaChildEnv({
       PATH: "/usr/bin",
       HOME: "/home/user",
       GITHUB_TOKEN: "secret-gh",
+      github_token: "secret-gh-lower",
+      Gh_ToKeN: "secret-gh-mixed",
       GH_TOKEN: "secret-gh2",
-      GH_ENTERPRISE_TOKEN: "secret-ent",
+      gh_enterprise_token: "secret-ent",
       GITHUB_PAT: "secret-pat",
-      NPM_TOKEN: "secret-npm",
+      npm_token: "secret-npm",
       NPM_AUTH_TOKEN: "secret-npm-auth",
-      NODE_AUTH_TOKEN: "secret-node",
+      node_auth_token: "secret-node",
       CPA_HOME: "/data/cpa",
     });
     assert.equal(child.PATH, "/usr/bin");
     assert.equal(child.HOME, "/home/user");
     assert.equal(child.CPA_HOME, "/data/cpa");
-    for (const key of strippedEnvKeys()) {
-      assert.equal(child[key], undefined);
-    }
+    assert.equal(
+      Object.keys(child).some((key) => strippedEnvKeys().some((stripped) => stripped === key.toUpperCase())),
+      false,
+    );
   });
 });

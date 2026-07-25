@@ -4,6 +4,7 @@ import {
   exePathsMatch,
   imageMatchesExpectedExe,
   parseTasklistImageName,
+  readProcessStartMarker,
 } from "./pid-identity.js";
 
 describe("imageMatchesExpectedExe", () => {
@@ -33,11 +34,27 @@ describe("imageMatchesExpectedExe", () => {
 });
 
 describe("exePathsMatch", () => {
-  it("matches resolved paths case-insensitively on basename fallback", () => {
+  it("accepts the same resolved path", () => {
     assert.equal(
       exePathsMatch("/opt/cpa/cli-proxy-api", "/opt/cpa/cli-proxy-api"),
       true,
     );
+  });
+
+  it("rejects a different binary with the same basename", () => {
+    assert.equal(
+      exePathsMatch("/opt/other/cli-proxy-api", "/opt/managed/cli-proxy-api"),
+      false,
+    );
+  });
+});
+
+describe("readProcessStartMarker", () => {
+  it("returns a stable marker for the current process", () => {
+    const first = readProcessStartMarker(process.pid);
+    const second = readProcessStartMarker(process.pid);
+    assert.ok(first);
+    assert.equal(second, first);
   });
 });
 

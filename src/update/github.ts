@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { httpFetch } from "../http.js";
 import { formatBytes } from "../util.js";
@@ -203,6 +203,22 @@ function defaultAssetNamesForRepo(repo: string, tag: string): string[] {
   return ["management.html"];
 }
 
+function validateReleaseMetadata(repo: string, release: GhRelease): GhRelease {
+  if (!release || !isSafeReleaseTag(release.tag_name) || !Array.isArray(release.assets)) {
+    throw new Error(`GitHub returned invalid release metadata for ${repo}`);
+  }
+  for (const asset of release.assets) {
+    if (
+      !asset ||
+      typeof asset.name !== "string" ||
+      typeof asset.browser_download_url !== "string"
+    ) {
+      throw new Error(`GitHub returned an invalid release asset for ${repo}`);
+    }
+  }
+  return release;
+}
+
 async function fetchLatestReleaseViaApi(repo: string): Promise<GhRelease> {
   const res = await httpFetch(`https://api.github.com/repos/${repo}/releases/latest`, {
     headers: githubHeaders("json"),
@@ -211,7 +227,12 @@ async function fetchLatestReleaseViaApi(repo: string): Promise<GhRelease> {
   if (!res.ok) {
     throw new Error(formatGitHubApiError(res.status, repo, "releases/latest"));
   }
-  return (await res.json()) as GhRelease;
+  return validateReleaseMetadata(repo, (await res.json()) as GhRelease);
+}
+
+/** Fetch full latest-release metadata, including GitHub asset digests. */
+export async function fetchLatestReleaseWithAssets(repo: string): Promise<GhRelease> {
+  return fetchLatestReleaseViaApi(repo);
 }
 
 /**
@@ -253,7 +274,7 @@ async function fetchCpaReleaseByTagViaApi(normalizedTag: string): Promise<GhRele
     if (res.status === 404) throw new Error(`Release not found: ${normalizedTag}`);
     throw new Error(formatGitHubApiError(res.status, CPA_REPO, `releases/tags/${normalizedTag}`));
   }
-  return (await res.json()) as GhRelease;
+  return validateReleaseMetadata(CPA_REPO, (await res.json()) as GhRelease);
 }
 
 /**
@@ -275,9 +296,23 @@ export async function fetchCpaReleaseByTag(tag: string): Promise<GhRelease> {
 }
 
 export function repoFromPanelUrl(panelRepoUrl: string): string {
-  const m = panelRepoUrl.match(/github\.com\/([^/]+\/[^/]+)/i);
-  if (!m) throw new Error(`Unsupported panel repository URL: ${panelRepoUrl}`);
-  return m[1]!.replace(/\.git$/, "");
+  let parsed: URL;
+  try {
+    parsed = new URL(panelRepoUrl);
+  } catch {
+    throw new Error(`Unsupported panel repository URL: ${panelRepoUrl}`);
+  }
+  if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== "github.com") {
+    throw new Error(`Unsupported panel repository URL: ${panelRepoUrl}`);
+  }
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  const owner = parts[0];
+  const repository = parts[1]?.replace(/\.git$/i, "");
+  const safePart = /^[A-Za-z0-9_.-]+$/;
+  if (!owner || !repository || !safePart.test(owner) || !safePart.test(repository)) {
+    throw new Error(`Unsupported panel repository URL: ${panelRepoUrl}`);
+  }
+  return `${owner}/${repository}`;
 }
 
 export function normalizeTagVersion(tag: string): string {
@@ -288,8 +323,10 @@ export type DownloadOptions = {
   /** Shown in progress line */
   label?: string;
   timeoutMs?: number;
-  /** Override Accept / auth for GitHub API asset downloads */
+  /** Override Accept / auth for GitHub API asset downloads. */
   apiAsset?: boolean;
+  /** Refuse a response larger than this many bytes (both declared and streamed). */
+  maxBytes?: number;
 };
 
 /** Stream download to disk with optional progress on stderr. Honors proxy env via httpFetch. */
@@ -318,30 +355,51 @@ export async function downloadToFile(
   }
   if (!res.body) throw new Error(`Download failed (empty body): ${label}`);
 
+  const contentLength = Number(res.headers.get("content-length") || 0);
+  const total = Number.isFinite(contentLength) && contentLength > 0 ? contentLength : 0;
+  const maxBytes = options?.maxBytes;
+  if (maxBytes !== undefined && (!Number.isSafeInteger(maxBytes) || maxBytes < 1)) {
+    throw new Error(`Invalid maximum download size for ${label}`);
+  }
+  if (maxBytes !== undefined && total > maxBytes) {
+    try {
+      await res.body.cancel();
+    } catch {
+      /* ignore cancellation failure */
+    }
+    throw new Error(`Download exceeds ${formatBytes(maxBytes)} limit: ${label}`);
+  }
+
   fs.mkdirSync(path.dirname(dest), { recursive: true });
-  const total = Number(res.headers.get("content-length") || 0);
   let received = 0;
   let lastPct = -1;
 
   const nodeBody = Readable.fromWeb(res.body as import("node:stream/web").ReadableStream);
-  nodeBody.on("data", (chunk: Buffer | string) => {
-    const n = typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
-    received += n;
-    if (total > 0) {
-      const pct = Math.min(100, Math.floor((received / total) * 100));
-      if (pct !== lastPct && (pct % 5 === 0 || pct === 100)) {
-        lastPct = pct;
-        process.stderr.write(
-          `\rDownloading ${label}: ${pct}% (${formatBytes(received)} / ${formatBytes(total)})`,
-        );
+  const limiter = new Transform({
+    transform(chunk: Buffer | string, _encoding, callback): void {
+      const n = typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
+      received += n;
+      if (maxBytes !== undefined && received > maxBytes) {
+        callback(new Error(`Download exceeds ${formatBytes(maxBytes)} limit: ${label}`));
+        return;
       }
-    } else if (received === n || received % (2 * 1024 * 1024) < n) {
-      process.stderr.write(`\rDownloading ${label}: ${formatBytes(received)}`);
-    }
+      if (total > 0) {
+        const pct = Math.min(100, Math.floor((received / total) * 100));
+        if (pct !== lastPct && (pct % 5 === 0 || pct === 100)) {
+          lastPct = pct;
+          process.stderr.write(
+            `\rDownloading ${label}: ${pct}% (${formatBytes(received)} / ${formatBytes(total)})`,
+          );
+        }
+      } else if (received === n || received % (2 * 1024 * 1024) < n) {
+        process.stderr.write(`\rDownloading ${label}: ${formatBytes(received)}`);
+      }
+      callback(null, chunk);
+    },
   });
 
   try {
-    await pipeline(nodeBody, fs.createWriteStream(dest));
+    await pipeline(nodeBody, limiter, fs.createWriteStream(dest));
     if (total > 0 || received > 0) process.stderr.write("\n");
     if (received === 0) {
       try {
@@ -376,6 +434,12 @@ export function cpaAssetNameCandidates(
 ): string[] {
   const v = normalizeTagVersion(version);
   const candidates: string[] = [];
+  if (arch !== "x64" && arch !== "arm64") {
+    throw new Error(`Unsupported CPU architecture for CPA updates: ${platform}/${arch}`);
+  }
+  if (platform !== "win32" && platform !== "darwin" && platform !== "linux") {
+    throw new Error(`Unsupported platform for CPA updates: ${platform}/${arch}`);
+  }
 
   if (platform === "win32") {
     if (arch === "arm64") {

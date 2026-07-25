@@ -1,10 +1,5 @@
 import fs from "node:fs";
-import {
-  activeExecutablePath,
-  backupExecutablePath,
-  ensureDir,
-} from "../paths.js";
-import { readInstallState, writeInstallState } from "../state.js";
+import { activeExecutablePath, backupExecutablePath, ensureDir } from "../paths.js";
 import { readInstalledRuntimeVersion } from "../util.js";
 
 /**
@@ -12,20 +7,7 @@ import { readInstalledRuntimeVersion } from "../util.js";
  * not proof that the binary still exists or is runnable.
  */
 export async function readCurrentRuntimeVersion(home: string): Promise<string | undefined> {
-  const state = readInstallState(home);
-  const executable = activeExecutablePath(home);
-  const probed = await readInstalledRuntimeVersion(executable);
-  if (!probed) {
-    return undefined;
-  }
-  if (state.runtimeVersion !== probed) {
-    writeInstallState(home, {
-      ...state,
-      cpaHome: home,
-      runtimeVersion: probed,
-    });
-  }
-  return probed;
+  return readInstalledRuntimeVersion(activeExecutablePath(home));
 }
 
 function moveAsideExisting(target: string, backup: string): void {

@@ -15,6 +15,7 @@ export type PidRecord = {
   pid: number;
   exe: string;
   startedAt: string;
+  startMarker?: string;
 };
 
 function isPositiveInt(n: unknown): n is number {
@@ -72,6 +73,7 @@ export function readPidRecord(home: string): PidRecord | undefined {
         pid: parsed.pid,
         exe: typeof parsed.exe === "string" ? parsed.exe : "",
         startedAt: typeof parsed.startedAt === "string" ? parsed.startedAt : "",
+        startMarker: typeof parsed.startMarker === "string" ? parsed.startMarker : undefined,
       };
     }
   } catch {
@@ -82,7 +84,7 @@ export function readPidRecord(home: string): PidRecord | undefined {
   if (!/^\d+$/.test(raw)) return undefined;
   const pid = Number.parseInt(raw, 10);
   if (!isPositiveInt(pid)) return undefined;
-  return { pid, exe: "", startedAt: "" };
+  return { pid, exe: "", startedAt: "", startMarker: undefined };
 }
 
 export function writePidRecord(home: string, record: PidRecord): void {

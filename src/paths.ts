@@ -7,7 +7,7 @@ import { writeFileAtomic } from "./fs-atomic.js";
 export const MINICPA_DIR_NAME = "MiniCPA";
 
 export type CliGlobalConfig = {
-  /** Managed CLIProxyAPI instance directory (config, auths, binary). */
+  /** Legacy pointer to the one managed instance home (read for migration only). */
   home?: string;
 };
 
@@ -38,7 +38,7 @@ export function miniCpaRoot(): string {
   return path.join(xdgData, MINICPA_DIR_NAME);
 }
 
-/** Default (only) CPA instance directory. */
+/** The one managed CPA instance directory. */
 export function defaultCpaHome(): string {
   return path.join(miniCpaRoot(), "instances", "default");
 }
@@ -48,19 +48,18 @@ export function legacyCpaHome(): string {
   return path.join(miniCpaRoot(), "instance");
 }
 
-/**
- * Ephemeral MiniCPA files (release zips, extract staging). OS temp — safe to wipe.
- * Windows: %TEMP%\MiniCPA
- */
+/** Ephemeral MiniCPA files (release zips, extract staging) under private app data. */
 export function miniCpaTempRoot(): string {
-  return path.join(os.tmpdir(), MINICPA_DIR_NAME);
+  // Keep staging under MiniCPA's private application root rather than a predictable
+  // shared OS-temp path such as /tmp/MiniCPA, which is vulnerable to symlink attacks.
+  return path.join(miniCpaRoot(), "temp");
 }
 
 export function miniCpaTempDownloadsDir(): string {
   return path.join(miniCpaTempRoot(), "downloads");
 }
 
-/** Unique per-operation download directory; safe for updates across multiple homes. */
+/** Unique per-operation download directory. */
 export function miniCpaTempDownloadDir(prefix = "download-"): string {
   const downloads = miniCpaTempDownloadsDir();
   ensureDir(downloads);
@@ -88,15 +87,18 @@ export function readCliGlobalConfig(): CliGlobalConfig {
 
 export function writeCliGlobalConfig(config: CliGlobalConfig): void {
   const dir = miniCpaRoot();
-  fs.mkdirSync(dir, { recursive: true });
+  ensureDir(dir);
   const merged: CliGlobalConfig = { ...readCliGlobalConfig(), ...config };
   writeFileAtomic(cliConfigPath(), JSON.stringify(merged, null, 2) + "\n");
 }
 
-export function resolveCpaHome(explicit?: string): string {
-  if (explicit?.trim()) return path.resolve(explicit.trim());
-  const envHome = process.env.CPA_HOME?.trim();
-  if (envHome) return path.resolve(envHome);
+export function resolveCpaHome(): string {
+  if (process.env.CPA_HOME?.trim()) {
+    throw new Error(
+      "CPA_HOME is no longer supported: MiniCPA manages one instance only. Unset it and migrate the existing home before continuing.",
+    );
+  }
+  // Honor the previous persisted selection so upgrades retain the one existing install.
   const global = readCliGlobalConfig().home;
   if (global?.trim()) return path.resolve(global.trim());
   const current = defaultCpaHome();
@@ -142,6 +144,53 @@ export function cpaLayout(home: string): CpaLayout {
   };
 }
 
+/** Tighten permissions for an existing installation without following symlinks. */
+export function hardenCpaPermissions(home: string): void {
+  if (process.platform === "win32" || !fs.existsSync(home)) return;
+
+  const chmodPrivate = (target: string, recursive: boolean): void => {
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(target);
+    } catch {
+      return;
+    }
+    if (stat.isSymbolicLink()) return;
+    try {
+      fs.chmodSync(target, stat.isDirectory() ? 0o700 : 0o600);
+    } catch {
+      return;
+    }
+    if (!recursive || !stat.isDirectory()) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(target, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      chmodPrivate(path.join(target, entry.name), true);
+    }
+  };
+
+  const layout = cpaLayout(home);
+  chmodPrivate(home, false);
+  chmodPrivate(layout.configFile, false);
+  chmodPrivate(layout.envFile, false);
+  for (const directory of [layout.authsDir, layout.logsDir, layout.stateDir, layout.staticDir]) {
+    chmodPrivate(directory, true);
+  }
+  try {
+    for (const entry of fs.readdirSync(home)) {
+      if (entry.startsWith("config.yaml.bak.")) {
+        chmodPrivate(path.join(home, entry), false);
+      }
+    }
+  } catch {
+    /* best-effort upgrade hardening */
+  }
+}
+
 export function executableName(): string {
   return process.platform === "win32" ? "cli-proxy-api.exe" : "cli-proxy-api";
 }
@@ -156,6 +205,10 @@ export function backupExecutablePath(home: string): string {
   return `${activeExecutablePath(home)}.bak`;
 }
 
+/** Create a MiniCPA-private directory (0700 on POSIX). */
 export function ensureDir(dir: string): void {
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") {
+    fs.chmodSync(dir, 0o700);
+  }
 }

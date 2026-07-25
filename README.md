@@ -2,7 +2,7 @@
 
 Thin cross-platform **`cpa`** command: layout, start/stop, open management UI, update CPA binary and `management.html`. Everything else stays in [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI).
 
-One install by default. **`cpa update` replaces the binary and panel in place.** Download and checksum happen first; a running CPA is only stopped for the brief replace window, then restarted. Already-latest installs are skipped unless you pass `--force`. Binary updates verify GitHub `checksums.txt` by default (`--insecure` skips this).
+MiniCPA manages **one CPA instance**. `cpa update` replaces that instance's binary and panel in place. Download and checksum happen first; a running CPA is only stopped for the brief replace window, then restarted. Already-latest installs are skipped unless you pass `--force`. Binary updates verify GitHub `checksums.txt` by default (`--insecure` skips this).
 
 ## Install
 
@@ -35,15 +35,13 @@ cpa start
 cpa open
 ```
 
-**Home resolution** (first match wins): `--home` (before or after the subcommand) → `CPA_HOME` → MiniCPA `config.json` → default instance under `cpa root`.
+**Single-instance home:** MiniCPA uses the one home shown by `cpa home`. `--home` and `CPA_HOME` are intentionally unsupported. Upgrades preserve an existing persisted home from pre-single-instance MiniCPA releases; otherwise the canonical home is created under `cpa root`.
 
-Examples: `cpa --home D:\cpa init`, `cpa doctor --home D:\cpa`, `CPA_HOME=D:\cpa cpa start`.
-
-Updates resolve and download public releases via `github.com/releases` (no REST rate limit). Optional: set `GITHUB_TOKEN` or `GH_TOKEN` only if the browser path is blocked and MiniCPA must fall back to the GitHub API. Tokens are stripped from CPA child processes (including version probes).
+Updates resolve binary releases via `github.com/releases` first. Panel updates fetch GitHub release metadata to require the published SHA-256 asset digest; if the GitHub API is blocked or rate-limited, set `GITHUB_TOKEN` or `GH_TOKEN`. Tokens are stripped from CPA child processes (including version probes).
 
 **Proxy:** MiniCPA honors standard shell proxy env vars for update/network calls: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` (upper or lower case). Set them in PowerShell `$PROFILE`, bashrc, etc. — same as curl/git. `cpa doctor` prints whether a proxy is detected.
 
-`cpa init` generates a random `api-keys` entry in `config.yaml` — still change it before public exposure. Do not run `cpa clean` during an active `cpa update` (clean only removes temp entries older than ~1 hour).
+`cpa init` generates a random `api-keys` entry in `config.yaml` — still change it before public exposure. Staging files are private under MiniCPA app data; do not run `cpa clean` during an active `cpa update`.
 
 ## Paths
 
@@ -51,9 +49,9 @@ Updates resolve and download public releases via `github.com/releases` (no REST 
 |---------|---------|-------|-------|
 | `cpa root` | `%LOCALAPPDATA%\MiniCPA` | `~/Library/Application Support/MiniCPA` | `$XDG_DATA_HOME/MiniCPA` or `~/.local/share/MiniCPA` |
 | `cpa home` | `…\MiniCPA\instances\default` | same under root | same under root |
-| `cpa temp` | `%TEMP%\MiniCPA` | OS temp `/MiniCPA` | OS temp `/MiniCPA` |
+| `cpa temp` | `<cpa root>\temp` | `<cpa root>/temp` | `<cpa root>/temp` |
 
-See [docs/cpa-reference.md](docs/cpa-reference.md) for startup details, default config notes, and troubleshooting.
+See [docs/cpa-reference.md](docs/cpa-reference.md) for startup details, single-instance migration, default config notes, and troubleshooting.
 
 ## Commands
 
@@ -61,9 +59,9 @@ See [docs/cpa-reference.md](docs/cpa-reference.md) for startup details, default 
 
 | Command | Notes |
 |---------|--------|
-| `cpa start` | Waits until HTTP is ready (`--no-wait` to skip). Exclusive home lock. Rotates logs ≥ 50 MiB. |
+| `cpa start` | Waits until HTTP is ready (`--no-wait` to skip). Exclusive single-instance lock. Rotates logs ≥ 50 MiB. |
 | `cpa logs` | stdout + stderr; `--err` for error log only; `-f` follow |
-| `cpa update` | **Default: binary + panel.** Download/verify first, then stop/replace/restart if needed. Skips if current. `--force` reinstall. Checksums required unless `--insecure`. |
+| `cpa update` | **Default: binary + panel.** Download/verify first, then stop/replace/restart if needed. Binary checksums and the panel's GitHub SHA-256 asset digest are required unless `--insecure` is used for the binary. |
 | `cpa update --binary` / `--panel` / `--all` | Limit scope (**mutually exclusive**) |
 | `cpa clean` | Wipe MiniCPA temp downloads/extract only (never touches instance home) |
 | `cpa tui` | Official CPA terminal UI (must already be running) |
