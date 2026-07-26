@@ -17,9 +17,7 @@ const STRIPPED_ENV_KEY_SET = new Set<string>(STRIPPED_ENV_KEYS);
  * Environment for cli-proxy-api / tui / version-probe children: copy of process.env
  * without MiniCPA update credentials.
  */
-export function buildCpaChildEnv(
-  sourceEnv: NodeJS.ProcessEnv = process.env,
-): NodeJS.ProcessEnv {
+export function buildCpaChildEnv(sourceEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const childEnv: NodeJS.ProcessEnv = { ...sourceEnv };
   // Windows environment-variable names are case-insensitive. Filter every spelling
   // on every platform so a differently cased token can never reach a CPA child.

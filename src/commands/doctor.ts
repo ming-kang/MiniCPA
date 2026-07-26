@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import { formatCliError } from "../cli-errors.js";
-import { getListenAddress, LEGACY_DEFAULT_API_KEY, readCpaConfigWithWarnings } from "../config-yaml.js";
+import {
+  getListenAddress,
+  LEGACY_DEFAULT_API_KEY,
+  readCpaConfigWithWarnings,
+} from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
 import { describeProxyEnv, hasProxyEnvConfigured, httpFetch } from "../http.js";
 import { backupExecutablePath, cliConfigPath, miniCpaTempRoot, unlockProbePath } from "../paths.js";
@@ -8,11 +12,7 @@ import { readinessUrls, waitForAnyHttpOk } from "../process/health.js";
 import { resolveRunning } from "../process/lifecycle.js";
 import { readCurrentRuntimeVersion, resolveRunnableExecutable } from "../process/runtime.js";
 import { readInstallState } from "../state.js";
-import {
-  DEFAULT_LOG_ROTATE_BYTES,
-  directorySizeBytes,
-  formatBytes,
-} from "../util.js";
+import { DEFAULT_LOG_ROTATE_BYTES, directorySizeBytes, formatBytes } from "../util.js";
 
 export async function runDoctor(): Promise<void> {
   const ctx = createContext();
@@ -50,7 +50,11 @@ export async function runDoctor(): Promise<void> {
           `[warn] default api-key ${LEGACY_DEFAULT_API_KEY} still in config — change before exposing the API`,
         );
       }
-      if (host !== "127.0.0.1" && host !== "localhost" && apiKeys.includes(LEGACY_DEFAULT_API_KEY)) {
+      if (
+        host !== "127.0.0.1" &&
+        host !== "localhost" &&
+        apiKeys.includes(LEGACY_DEFAULT_API_KEY)
+      ) {
         console.log("[warn] non-loopback host with legacy default api-key is unsafe");
       }
     } catch (err) {
@@ -83,7 +87,12 @@ export async function runDoctor(): Promise<void> {
     console.log("[warn] management.html missing — run: cpa update --panel (or default update)");
   }
 
-  for (const dir of [ctx.layout.logsDir, ctx.layout.stateDir, ctx.layout.authsDir, ctx.layout.staticDir]) {
+  for (const dir of [
+    ctx.layout.logsDir,
+    ctx.layout.stateDir,
+    ctx.layout.authsDir,
+    ctx.layout.staticDir,
+  ]) {
     if (!fs.existsSync(dir)) {
       console.log(`[warn] dir missing: ${dir}`);
     }
@@ -106,7 +115,9 @@ export async function runDoctor(): Promise<void> {
       try {
         const mode = fs.statSync(target).mode & 0o777;
         if ((mode & 0o077) !== 0) {
-          console.log(`[warn] permissions ${mode.toString(8).padStart(3, "0")} expose private data: ${target}`);
+          console.log(
+            `[warn] permissions ${mode.toString(8).padStart(3, "0")} expose private data: ${target}`,
+          );
         }
       } catch {
         /* best-effort diagnostic */
@@ -171,9 +182,7 @@ export async function runDoctor(): Promise<void> {
   const tempRoot = miniCpaTempRoot();
   const tempSize = directorySizeBytes(tempRoot);
   if (tempSize > 10 * 1024 * 1024) {
-    console.log(
-      `[warn] temp ${formatBytes(tempSize)} under ${tempRoot} — run: cpa clean`,
-    );
+    console.log(`[warn] temp ${formatBytes(tempSize)} under ${tempRoot} — run: cpa clean`);
   } else if (tempSize > 0) {
     console.log(`[info] temp ${formatBytes(tempSize)} (${tempRoot})`);
   } else {

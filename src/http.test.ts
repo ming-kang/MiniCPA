@@ -169,8 +169,17 @@ describe("retry helpers", () => {
   });
 
   it("computes bounded backoff with deterministic random", () => {
-    assert.equal(retryDelayMs(0, 400, 8_000, () => 0), 400);
-    assert.equal(retryDelayMs(1, 400, 8_000, () => 0), 800);
-    assert.equal(retryDelayMs(10, 400, 1_000, () => 0), 1_000);
+    assert.equal(
+      retryDelayMs(0, 400, 8_000, () => 0),
+      400,
+    );
+    assert.equal(
+      retryDelayMs(1, 400, 8_000, () => 0),
+      800,
+    );
+    assert.equal(
+      retryDelayMs(10, 400, 1_000, () => 0),
+      1_000,
+    );
   });
 });

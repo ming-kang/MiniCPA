@@ -16,7 +16,7 @@ MiniCPA is a strict TypeScript ESM CLI for managing CLIProxyAPI instances. The e
 
 ## Coding Style & Naming Conventions
 
-Use two-space indentation, double quotes, semicolons, and explicit TypeScript types where they clarify contracts. Preserve ESM imports with `.js` specifiers. Use `camelCase` for functions and variables, `PascalCase` for types/classes, and lowercase kebab-case for multiword filenames such as `lifecycle-cmd.ts`. No formatter or linter is configured; match surrounding code and keep changes focused.
+Use two-space indentation, double quotes, semicolons, and explicit TypeScript types where they clarify contracts. Preserve ESM imports with `.js` specifiers. Use `camelCase` for functions and variables, `PascalCase` for types/classes, and lowercase kebab-case for multiword filenames such as `lifecycle-cmd.ts`. Formatting and linting are enforced by Biome (`biome.json`): run `npm run lint` before committing and `npm run lint:fix` to apply fixes. CI fails on lint errors.
 
 ## Testing Guidelines
 

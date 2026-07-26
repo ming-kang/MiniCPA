@@ -18,7 +18,7 @@ describe("writeFileAtomic", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-atomic-"));
     temps.push(dir);
     const file = path.join(dir, "state.json");
-    writeFileAtomic(file, JSON.stringify({ ok: true }) + "\n");
+    writeFileAtomic(file, `${JSON.stringify({ ok: true })}\n`);
     assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).ok, true);
   });
 

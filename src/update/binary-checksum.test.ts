@@ -36,10 +36,7 @@ describe("verifyArchiveChecksum", () => {
     const archiveName = "CLIProxyAPI_7.0.0_windows_amd64.zip";
     const archivePath = writeTempArchive("payload", archiveName);
     const map = new Map([[archiveName, "a".repeat(64)]]);
-    assert.throws(
-      () => verifyArchiveChecksum(map, archivePath, archiveName),
-      /Checksum mismatch/,
-    );
+    assert.throws(() => verifyArchiveChecksum(map, archivePath, archiveName), /Checksum mismatch/);
   });
 
   it("rejects missing key", () => {

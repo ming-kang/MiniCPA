@@ -24,9 +24,9 @@ import { createContext } from "./context.js";
 import { miniCpaRoot, miniCpaTempRoot } from "./paths.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const pkg = JSON.parse(
-  readFileSync(path.join(__dirname, "..", "package.json"), "utf8"),
-) as { version: string };
+const pkg = JSON.parse(readFileSync(path.join(__dirname, "..", "package.json"), "utf8")) as {
+  version: string;
+};
 
 const program = new Command();
 program
@@ -56,11 +56,14 @@ program
     }),
   );
 
-program.command("stop").description("Stop CPA").action(
-  withCliErrors(async () => {
-    await runStop();
-  }),
-);
+program
+  .command("stop")
+  .description("Stop CPA")
+  .action(
+    withCliErrors(async () => {
+      await runStop();
+    }),
+  );
 
 program
   .command("restart")
@@ -72,17 +75,23 @@ program
     }),
   );
 
-program.command("status").description("Show CPA status").action(
-  withCliErrors(async () => {
-    await runStatus();
-  }),
-);
+program
+  .command("status")
+  .description("Show CPA status")
+  .action(
+    withCliErrors(async () => {
+      await runStatus();
+    }),
+  );
 
-program.command("open").description("Open management UI in browser").action(
-  withCliErrors(async () => {
-    await runOpen();
-  }),
-);
+program
+  .command("open")
+  .description("Open management UI in browser")
+  .action(
+    withCliErrors(async () => {
+      await runOpen();
+    }),
+  );
 
 program
   .command("logs")
@@ -100,28 +109,37 @@ program
     }),
   );
 
-program.command("tui").description("Open official CPA terminal UI").action(
-  withCliErrors(async () => {
-    await runTui();
-  }),
-);
+program
+  .command("tui")
+  .description("Open official CPA terminal UI")
+  .action(
+    withCliErrors(async () => {
+      await runTui();
+    }),
+  );
 
 const updateCmd = program
   .command("update")
   .description("Replace CPA binary and management panel (default: both)");
 
-updateCmd.command("check").description("Check for updates (exit 1 if any outdated)").action(
-  withCliErrors(async () => {
-    await runUpdateCheck();
-  }),
-);
+updateCmd
+  .command("check")
+  .description("Check for updates (exit 1 if any outdated)")
+  .action(
+    withCliErrors(async () => {
+      await runUpdateCheck();
+    }),
+  );
 
 updateCmd
   .option("--all", "Update binary and panel (default; kept for compatibility)")
   .option("--binary", "Update CPA binary only")
   .option("--panel", "Update management panel only")
   .option("--version <ver>", "Install specific CPA version (e.g. 7.2.66)")
-  .option("--force", "Reinstall even if already latest (running CPA is always restarted on replace)")
+  .option(
+    "--force",
+    "Reinstall even if already latest (running CPA is always restarted on replace)",
+  )
   .option("--insecure", "Skip binary checksum verification (unsafe)")
   .action(
     withCliErrors(
@@ -145,11 +163,14 @@ updateCmd
     ),
   );
 
-program.command("doctor").description("Validate the single CPA instance").action(
-  withCliErrors(async () => {
-    await runDoctor();
-  }),
-);
+program
+  .command("doctor")
+  .description("Validate the single CPA instance")
+  .action(
+    withCliErrors(async () => {
+      await runDoctor();
+    }),
+  );
 
 program
   .command("clean")
@@ -160,30 +181,42 @@ program
     }),
   );
 
-program.command("version").description("Show MiniCPA and CPA runtime versions").action(
-  withCliErrors(async () => {
-    await runVersion(pkg.version);
-  }),
-);
+program
+  .command("version")
+  .description("Show MiniCPA and CPA runtime versions")
+  .action(
+    withCliErrors(async () => {
+      await runVersion(pkg.version);
+    }),
+  );
 
-program.command("home").description("Print the single CPA instance directory").action(
-  withCliErrors(async () => {
-    const ctx = createContext();
-    console.log(ctx.home);
-  }),
-);
+program
+  .command("home")
+  .description("Print the single CPA instance directory")
+  .action(
+    withCliErrors(async () => {
+      const ctx = createContext();
+      console.log(ctx.home);
+    }),
+  );
 
-program.command("root").description("Print MiniCPA root (persistent data)").action(
-  withCliErrors(async () => {
-    console.log(miniCpaRoot());
-  }),
-);
+program
+  .command("root")
+  .description("Print MiniCPA root (persistent data)")
+  .action(
+    withCliErrors(async () => {
+      console.log(miniCpaRoot());
+    }),
+  );
 
-program.command("temp").description("Print private staging directory").action(
-  withCliErrors(async () => {
-    console.log(miniCpaTempRoot());
-  }),
-);
+program
+  .command("temp")
+  .description("Print private staging directory")
+  .action(
+    withCliErrors(async () => {
+      console.log(miniCpaTempRoot());
+    }),
+  );
 
 try {
   await program.parseAsync(process.argv);

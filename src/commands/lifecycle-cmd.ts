@@ -2,7 +2,13 @@ import fs from "node:fs";
 import { openInBrowser } from "../browser.js";
 import { readCpaConfigWithWarnings } from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
-import { apiBaseUrl, managementUrl, readinessUrls, waitForAnyHttpOk, waitForHttpOk } from "../process/health.js";
+import {
+  apiBaseUrl,
+  managementUrl,
+  readinessUrls,
+  waitForAnyHttpOk,
+  waitForHttpOk,
+} from "../process/health.js";
 import { resolveRunning, runCpaTuiProcess, startDaemon, stopDaemon } from "../process/lifecycle.js";
 import { withMiniCpaLock } from "../process/lock.js";
 import { readCurrentRuntimeVersion } from "../process/runtime.js";
@@ -171,7 +177,7 @@ async function tailFollowMany(files: string[]): Promise<void> {
         const text = buf.toString();
         if (prefix) {
           for (const line of text.split(/\r?\n/)) {
-            if (line.length) process.stdout.write(prefix + line + "\n");
+            if (line.length) process.stdout.write(`${prefix + line}\n`);
           }
         } else {
           process.stdout.write(text);

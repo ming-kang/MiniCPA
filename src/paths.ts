@@ -22,19 +22,13 @@ function envPathOr(fallback: string, value: string | undefined): string {
 
 export function miniCpaRoot(): string {
   if (process.platform === "win32") {
-    const base = envPathOr(
-      path.join(os.homedir(), "AppData", "Local"),
-      process.env.LOCALAPPDATA,
-    );
+    const base = envPathOr(path.join(os.homedir(), "AppData", "Local"), process.env.LOCALAPPDATA);
     return path.join(base, MINICPA_DIR_NAME);
   }
   if (process.platform === "darwin") {
     return path.join(os.homedir(), "Library", "Application Support", MINICPA_DIR_NAME);
   }
-  const xdgData = envPathOr(
-    path.join(os.homedir(), ".local", "share"),
-    process.env.XDG_DATA_HOME,
-  );
+  const xdgData = envPathOr(path.join(os.homedir(), ".local", "share"), process.env.XDG_DATA_HOME);
   return path.join(xdgData, MINICPA_DIR_NAME);
 }
 
@@ -89,7 +83,7 @@ export function writeCliGlobalConfig(config: CliGlobalConfig): void {
   const dir = miniCpaRoot();
   ensureDir(dir);
   const merged: CliGlobalConfig = { ...readCliGlobalConfig(), ...config };
-  writeFileAtomic(cliConfigPath(), JSON.stringify(merged, null, 2) + "\n");
+  writeFileAtomic(cliConfigPath(), `${JSON.stringify(merged, null, 2)}\n`);
 }
 
 export function resolveCpaHome(): string {

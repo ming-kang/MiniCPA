@@ -17,6 +17,8 @@
     "build": "npm run clean:build && tsc -p tsconfig.build.json",
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
     "test": "tsc --noEmit && node scripts/run-tests.mjs",
     "prepublishOnly": "npm run audit:prod && npm test && npm run build"
@@ -52,6 +54,7 @@
     "yaml": "^2.7.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.5",
     "@types/node": "^24.0.0",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2"

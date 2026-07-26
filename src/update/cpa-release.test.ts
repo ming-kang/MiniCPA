@@ -35,10 +35,7 @@ describe("cpaReleaseAssetNames / candidates", () => {
       () => cpaAssetNameCandidates("7.0.0", "linux", "arm"),
       /Unsupported CPU architecture/,
     );
-    assert.throws(
-      () => cpaAssetNameCandidates("7.0.0", "freebsd", "x64"),
-      /Unsupported platform/,
-    );
+    assert.throws(() => cpaAssetNameCandidates("7.0.0", "freebsd", "x64"), /Unsupported platform/);
   });
 
   it("orders arm windows candidates aarch64 first", () => {

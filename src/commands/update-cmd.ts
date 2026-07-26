@@ -85,9 +85,7 @@ export async function runUpdate(opts: {
     if (binary.skipped) {
       console.log(`CPA already ${binary.version} (use --force to reinstall)`);
     } else {
-      console.log(
-        `CPA updated to ${binary.version}${binary.restarted ? " (restarted)" : ""}`,
-      );
+      console.log(`CPA updated to ${binary.version}${binary.restarted ? " (restarted)" : ""}`);
     }
 
     if (opts.binaryOnly) {

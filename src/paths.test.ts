@@ -97,46 +97,44 @@ describe("defaultCpaHome", () => {
 });
 
 describe("hardenCpaPermissions", () => {
-  it(
-    "tightens private data without removing the runtime execute bit",
-    { skip: process.platform === "win32" },
-    () => {
-      const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-permissions-"));
-      temps.push(home);
-      const layout = cpaLayout(home);
-      for (const dir of [layout.authsDir, layout.logsDir, layout.stateDir, layout.staticDir]) {
-        fs.mkdirSync(dir, { recursive: true, mode: 0o755 });
-        fs.chmodSync(dir, 0o755);
-      }
-      const privateFiles = [
-        layout.configFile,
-        layout.envFile,
-        path.join(layout.authsDir, "credential.json"),
-        path.join(layout.logsDir, "cpa.log"),
-        path.join(layout.stateDir, "install.json"),
-        layout.managementHtml,
-        `${layout.configFile}.bak.test`,
-      ];
-      for (const file of privateFiles) {
-        fs.writeFileSync(file, "private", { mode: 0o644 });
-        fs.chmodSync(file, 0o644);
-      }
-      const executable = path.join(home, executableName());
-      fs.writeFileSync(executable, "bin", { mode: 0o755 });
-      fs.chmodSync(executable, 0o755);
+  it("tightens private data without removing the runtime execute bit", {
+    skip: process.platform === "win32",
+  }, () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-permissions-"));
+    temps.push(home);
+    const layout = cpaLayout(home);
+    for (const dir of [layout.authsDir, layout.logsDir, layout.stateDir, layout.staticDir]) {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o755 });
+      fs.chmodSync(dir, 0o755);
+    }
+    const privateFiles = [
+      layout.configFile,
+      layout.envFile,
+      path.join(layout.authsDir, "credential.json"),
+      path.join(layout.logsDir, "cpa.log"),
+      path.join(layout.stateDir, "install.json"),
+      layout.managementHtml,
+      `${layout.configFile}.bak.test`,
+    ];
+    for (const file of privateFiles) {
+      fs.writeFileSync(file, "private", { mode: 0o644 });
+      fs.chmodSync(file, 0o644);
+    }
+    const executable = path.join(home, executableName());
+    fs.writeFileSync(executable, "bin", { mode: 0o755 });
+    fs.chmodSync(executable, 0o755);
 
-      hardenCpaPermissions(home);
+    hardenCpaPermissions(home);
 
-      assert.equal(fs.statSync(home).mode & 0o777, 0o700);
-      for (const dir of [layout.authsDir, layout.logsDir, layout.stateDir, layout.staticDir]) {
-        assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
-      }
-      for (const file of privateFiles) {
-        assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-      }
-      assert.equal(fs.statSync(executable).mode & 0o777, 0o755);
-    },
-  );
+    assert.equal(fs.statSync(home).mode & 0o777, 0o700);
+    for (const dir of [layout.authsDir, layout.logsDir, layout.stateDir, layout.staticDir]) {
+      assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+    }
+    for (const file of privateFiles) {
+      assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    }
+    assert.equal(fs.statSync(executable).mode & 0o777, 0o755);
+  });
 });
 
 describe("miniCpaTempDownloadDir", () => {

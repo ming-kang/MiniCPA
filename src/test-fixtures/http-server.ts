@@ -1,9 +1,6 @@
 import http from "node:http";
 
-export type FixtureHandler = (
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-) => void;
+export type FixtureHandler = (req: http.IncomingMessage, res: http.ServerResponse) => void;
 
 /**
  * Local HTTP fixture for tests: starts a server on 127.0.0.1:0, routes by

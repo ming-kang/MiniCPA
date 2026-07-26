@@ -7,8 +7,7 @@ export async function openInBrowser(url: string): Promise<void> {
       : process.platform === "darwin"
         ? "open"
         : "xdg-open";
-  const args =
-    process.platform === "win32" ? ["url.dll,FileProtocolHandler", url] : [url];
+  const args = process.platform === "win32" ? ["url.dll,FileProtocolHandler", url] : [url];
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(command, args, { detached: true, stdio: "ignore" });

@@ -2,12 +2,7 @@ import AdmZip from "adm-zip";
 import fs from "node:fs";
 import path from "node:path";
 import * as tar from "tar";
-import {
-  ensureDir,
-  executableName,
-  miniCpaTempDownloadDir,
-  miniCpaTempExtractDir,
-} from "../paths.js";
+import { executableName, miniCpaTempDownloadDir, miniCpaTempExtractDir } from "../paths.js";
 import {
   resolveRunning,
   startDaemon,
@@ -22,7 +17,7 @@ import {
   readCurrentRuntimeVersion,
   restoreRuntimeBinaryFromBackup,
 } from "../process/runtime.js";
-import { patchInstallState, readInstallState } from "../state.js";
+import { patchInstallState } from "../state.js";
 import { removeDirBestEffort, sha256File } from "../util.js";
 import {
   CPA_REPO,

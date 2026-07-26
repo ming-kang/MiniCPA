@@ -3,12 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import {
-  directorySizeBytes,
-  formatBytes,
-  rotateFileIfLarge,
-  tailFile,
-} from "./util.js";
+import { directorySizeBytes, formatBytes, rotateFileIfLarge, tailFile } from "./util.js";
 
 const temps: string[] = [];
 

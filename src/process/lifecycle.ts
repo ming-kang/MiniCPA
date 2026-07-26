@@ -39,11 +39,7 @@ export function resolveRunning(home: string): RunningInfo | undefined {
   }
 
   const currentStartMarker = readProcessStartMarker(record.pid);
-  if (
-    record.startMarker &&
-    currentStartMarker &&
-    record.startMarker !== currentStartMarker
-  ) {
+  if (record.startMarker && currentStartMarker && record.startMarker !== currentStartMarker) {
     clearPid(home);
     return undefined;
   }
@@ -105,9 +101,7 @@ function dumpRecentLogs(home: string): string {
 
 /** Resolves true when taskkill reported success (exit code 0). */
 async function runTaskkill(pid: number, force: boolean): Promise<boolean> {
-  const args = force
-    ? ["/PID", String(pid), "/T", "/F"]
-    : ["/PID", String(pid), "/T"];
+  const args = force ? ["/PID", String(pid), "/T", "/F"] : ["/PID", String(pid), "/T"];
   return new Promise<boolean>((resolve) => {
     const killer = spawn("taskkill", args, {
       windowsHide: true,
@@ -264,7 +258,9 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
     if (!ready) {
       if (!isProcessAlive(child.pid)) {
         clearPid(home);
-        throw new Error(`CPA exited before becoming ready.${dumpRecentLogs(home)}\n${logPathsHint(home)}`);
+        throw new Error(
+          `CPA exited before becoming ready.${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
+        );
       }
       // Leave process running for diagnostics; do not clear PID.
       throw new Error(

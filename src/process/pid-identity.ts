@@ -42,11 +42,11 @@ function runPowerShell(script: string, timeoutMs = 10_000): string | undefined {
     : ["powershell.exe", "pwsh.exe"];
   for (const shell of shells) {
     try {
-      const output = execFileSync(
-        shell,
-        ["-NoProfile", "-NonInteractive", "-Command", script],
-        { encoding: "utf8", windowsHide: true, timeout: timeoutMs },
-      ).trim();
+      const output = execFileSync(shell, ["-NoProfile", "-NonInteractive", "-Command", script], {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: timeoutMs,
+      }).trim();
       cachedPowerShell = shell;
       if (output) return output;
     } catch {
@@ -91,11 +91,11 @@ export function classifyProcessIdentity(pid: number, expectedExe: string): Proce
       const executable = readWindowsExecutablePath(pid);
       if (executable) return exePathsMatch(executable, expected) ? "match" : "mismatch";
 
-      const out = execFileSync(
-        "tasklist",
-        ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
-        { encoding: "utf8", windowsHide: true, timeout: 3000 },
-      ).trim();
+      const out = execFileSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 3000,
+      }).trim();
       const image = parseTasklistImageName(out);
       if (!image) return "mismatch";
       return imageMatchesExpectedExe(image, expected) ? "unknown" : "mismatch";
@@ -125,7 +125,10 @@ export function readProcessStartMarker(pid: number): string | undefined {
       const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
       const closeParen = stat.lastIndexOf(")");
       if (closeParen < 0) return undefined;
-      const fields = stat.slice(closeParen + 1).trim().split(/\s+/);
+      const fields = stat
+        .slice(closeParen + 1)
+        .trim()
+        .split(/\s+/);
       const startTicks = fields[19]; // proc(5) field 22; fields starts at field 3.
       if (!startTicks || !/^\d+$/.test(startTicks)) return undefined;
       let bootId = "boot";

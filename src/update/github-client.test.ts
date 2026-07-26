@@ -56,10 +56,7 @@ describe("ensureReleaseTag / isSafeReleaseTag", () => {
 
 describe("githubAuthToken", () => {
   it("prefers GITHUB_TOKEN over GH_TOKEN", () => {
-    assert.equal(
-      githubAuthToken({ GITHUB_TOKEN: "ghp_a", GH_TOKEN: "ghp_b" }),
-      "ghp_a",
-    );
+    assert.equal(githubAuthToken({ GITHUB_TOKEN: "ghp_a", GH_TOKEN: "ghp_b" }), "ghp_a");
   });
 
   it("falls back to GH_TOKEN", () => {
@@ -78,14 +75,8 @@ describe("repoFromPanelUrl", () => {
       repoFromPanelUrl("https://github.com/router-for-me/Cli-Proxy-API-Management-Center"),
       "router-for-me/Cli-Proxy-API-Management-Center",
     );
-    assert.equal(
-      repoFromPanelUrl("https://github.com/foo/bar.git"),
-      "foo/bar",
-    );
-    assert.equal(
-      repoFromPanelUrl("https://github.com/foo/bar/releases/latest"),
-      "foo/bar",
-    );
+    assert.equal(repoFromPanelUrl("https://github.com/foo/bar.git"), "foo/bar");
+    assert.equal(repoFromPanelUrl("https://github.com/foo/bar/releases/latest"), "foo/bar");
   });
 
   it("rejects non-github and spoofed URLs", () => {

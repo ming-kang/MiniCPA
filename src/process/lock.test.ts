@@ -88,11 +88,11 @@ describe("withMiniCpaLock", () => {
     fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
     fs.writeFileSync(
       lockPath(),
-      JSON.stringify({
+      `${JSON.stringify({
         pid: holderPid,
         command: "start",
         acquiredAt: new Date().toISOString(),
-      }) + "\n",
+      })}\n`,
     );
     await assert.rejects(
       () => withMiniCpaLock("update", async () => undefined),
@@ -123,16 +123,12 @@ describe("withMiniCpaLock", () => {
       "});",
     ].join("\n");
 
-    const child: ChildProcess = spawn(
-      process.execPath,
-      ["--import", "tsx", "-e", holderScript],
-      {
-        cwd: fileURLToPath(new URL("../..", import.meta.url)),
-        env: { ...process.env },
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
-      },
-    );
+    const child: ChildProcess = spawn(process.execPath, ["--import", "tsx", "-e", holderScript], {
+      cwd: fileURLToPath(new URL("../..", import.meta.url)),
+      env: { ...process.env },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
     if (!child.pid) throw new Error("failed to spawn lock holder");
     childPids.push(child.pid);
 
@@ -183,12 +179,12 @@ describe("withMiniCpaLock", () => {
     fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
     fs.writeFileSync(
       lockPath(),
-      JSON.stringify({
+      `${JSON.stringify({
         pid: holderPid,
         command: "start",
         acquiredAt: new Date().toISOString(),
         startMarker: "bogus-boot:1",
-      }) + "\n",
+      })}\n`,
     );
 
     let ran = false;
@@ -230,7 +226,7 @@ describe("preemptLock", () => {
   it("restores the lock when content changed since the stale decision", () => {
     configureIsolatedAppRoot();
     fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
-    const liveContent = JSON.stringify({ pid: process.pid, command: "live" }) + "\n";
+    const liveContent = `${JSON.stringify({ pid: process.pid, command: "live" })}\n`;
     fs.writeFileSync(lockPath(), liveContent);
 
     // Decision was made against different (stale) content.

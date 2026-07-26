@@ -114,10 +114,7 @@ describe("resolveRunnableExecutable", () => {
 
 describe("parseCpaVersionFromHelp", () => {
   it("extracts version line", () => {
-    assert.equal(
-      parseCpaVersionFromHelp("CLIProxyAPI Version: 7.2.66\nUsage:"),
-      "7.2.66",
-    );
+    assert.equal(parseCpaVersionFromHelp("CLIProxyAPI Version: 7.2.66\nUsage:"), "7.2.66");
   });
 
   it("returns undefined when missing", () => {
@@ -135,21 +132,19 @@ describe("readCurrentRuntimeVersion", () => {
     assert.equal(await readCurrentRuntimeVersion(home), undefined);
   });
 
-  it(
-    "does not rewrite install state while probing",
-    { skip: process.platform === "win32" },
-    async () => {
-      const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-runtime-"));
-      temps.push(home);
-      const executable = activeExecutablePath(home);
-      fs.writeFileSync(executable, "#!/bin/sh\necho 'CLIProxyAPI Version: 8.0.0'\n");
-      fs.chmodSync(executable, 0o755);
-      writeInstallState(home, { runtimeVersion: "7.0.0" });
+  it("does not rewrite install state while probing", {
+    skip: process.platform === "win32",
+  }, async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-runtime-"));
+    temps.push(home);
+    const executable = activeExecutablePath(home);
+    fs.writeFileSync(executable, "#!/bin/sh\necho 'CLIProxyAPI Version: 8.0.0'\n");
+    fs.chmodSync(executable, 0o755);
+    writeInstallState(home, { runtimeVersion: "7.0.0" });
 
-      assert.equal(await readCurrentRuntimeVersion(home), "8.0.0");
-      assert.equal(readInstallState(home).runtimeVersion, "7.0.0");
-    },
-  );
+    assert.equal(await readCurrentRuntimeVersion(home), "8.0.0");
+    assert.equal(readInstallState(home).runtimeVersion, "7.0.0");
+  });
 
   it("does not trust a recorded version when the binary cannot be probed", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-runtime-"));

@@ -42,17 +42,11 @@ describe("imageMatchesExpectedExe", () => {
 
 describe("exePathsMatch", () => {
   it("accepts the same resolved path", () => {
-    assert.equal(
-      exePathsMatch("/opt/cpa/cli-proxy-api", "/opt/cpa/cli-proxy-api"),
-      true,
-    );
+    assert.equal(exePathsMatch("/opt/cpa/cli-proxy-api", "/opt/cpa/cli-proxy-api"), true);
   });
 
   it("rejects a different binary with the same basename", () => {
-    assert.equal(
-      exePathsMatch("/opt/other/cli-proxy-api", "/opt/managed/cli-proxy-api"),
-      false,
-    );
+    assert.equal(exePathsMatch("/opt/other/cli-proxy-api", "/opt/managed/cli-proxy-api"), false);
   });
 });
 
@@ -75,9 +69,7 @@ describe("parseTasklistImageName", () => {
 
   it("returns undefined for INFO lines", () => {
     assert.equal(
-      parseTasklistImageName(
-        "INFO: No tasks are running which match the specified criteria.",
-      ),
+      parseTasklistImageName("INFO: No tasks are running which match the specified criteria."),
       undefined,
     );
   });

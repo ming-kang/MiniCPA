@@ -140,7 +140,7 @@ async function tryAcquireLock(command: string): Promise<void> {
     acquiredAt: new Date().toISOString(),
     startMarker: readProcessStartMarker(process.pid),
   };
-  const payload = JSON.stringify(record) + "\n";
+  const payload = `${JSON.stringify(record)}\n`;
 
   for (let attempt = 0; attempt < ACQUIRE_ATTEMPTS; attempt++) {
     if (attempt > 0) {
@@ -232,10 +232,7 @@ function releaseLock(): void {
 }
 
 /** Exclusive global lock for the one managed CPA instance. */
-export async function withMiniCpaLock<T>(
-  command: string,
-  fn: () => Promise<T>,
-): Promise<T> {
+export async function withMiniCpaLock<T>(command: string, fn: () => Promise<T>): Promise<T> {
   await tryAcquireLock(command);
   try {
     return await fn();

@@ -24,11 +24,9 @@ const API_TIMEOUT_MS = 30_000;
 const DOWNLOAD_TIMEOUT_MS = 300_000;
 
 /** Auth for remaining API fallback paths. Prefers GITHUB_TOKEN, then GH_TOKEN (gh CLI). */
-export function githubAuthToken(
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
+export function githubAuthToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const token = env.GITHUB_TOKEN || env.GH_TOKEN;
-  return token && token.trim() ? token.trim() : undefined;
+  return token?.trim() ? token.trim() : undefined;
 }
 
 function githubHeaders(mode: "json" | "download" | "browser" = "browser"): Record<string, string> {
@@ -57,9 +55,7 @@ export function ensureReleaseTag(tag: string): string {
   const trimmed = tag.trim();
   if (!trimmed) throw new Error("Empty release tag");
   if (!isSafeReleaseTag(trimmed)) {
-    throw new Error(
-      `Invalid release tag "${trimmed}". Use a version like 7.2.92 or v7.2.92.`,
-    );
+    throw new Error(`Invalid release tag "${trimmed}". Use a version like 7.2.92 or v7.2.92.`);
   }
   return trimmed.startsWith("v") || trimmed.startsWith("V")
     ? `v${trimmed.slice(1)}`
@@ -88,7 +84,7 @@ export function releaseAssetDownloadUrl(repo: string, asset: GhAsset): string {
   if (typeof asset.id === "number" && Number.isFinite(asset.id)) {
     return `https://api.github.com/repos/${repo}/releases/assets/${asset.id}`;
   }
-  if (asset.url && asset.url.includes("/releases/assets/")) {
+  if (asset.url?.includes("/releases/assets/")) {
     return asset.url;
   }
   return asset.browser_download_url;
@@ -103,9 +99,7 @@ export function parseReleaseTagFromLocation(location: string): string | undefine
   const raw = location.trim();
   if (!raw) return undefined;
 
-  const m =
-    raw.match(/\/releases\/tag\/([^/?#]+)/i) ||
-    raw.match(/(?:^|\/)tag\/([^/?#]+)/i);
+  const m = raw.match(/\/releases\/tag\/([^/?#]+)/i) || raw.match(/(?:^|\/)tag\/([^/?#]+)/i);
   if (!m?.[1]) return undefined;
   try {
     return decodeURIComponent(m[1]);

@@ -1,6 +1,11 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import { activeExecutablePath, backupExecutablePath, ensureDir, unlockProbePath } from "../paths.js";
+import {
+  activeExecutablePath,
+  backupExecutablePath,
+  ensureDir,
+  unlockProbePath,
+} from "../paths.js";
 import { buildCpaChildEnv } from "./child-env.js";
 
 export async function runCommand(

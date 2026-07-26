@@ -7,11 +7,7 @@ import { afterEach, describe, it } from "node:test";
 import zlib from "node:zlib";
 import * as tar from "tar";
 import { executableName } from "../paths.js";
-import {
-  extractArchive,
-  findSafeExtractedExecutable,
-  isUnsafeArchiveEntryName,
-} from "./binary.js";
+import { extractArchive, findSafeExtractedExecutable, isUnsafeArchiveEntryName } from "./binary.js";
 
 const temps: string[] = [];
 
@@ -138,23 +134,21 @@ describe("extractArchive (zip)", () => {
 });
 
 describe("extractArchive (tar)", () => {
-  it(
-    "filters symlink entries instead of following them",
-    { skip: process.platform === "win32" },
-    async () => {
-      const fixture = tempDir("minicpa-tar-src-");
-      const outside = tempDir("minicpa-tar-outside-");
-      fs.writeFileSync(path.join(outside, "target"), "outside-secret");
-      fs.symlinkSync(path.join(outside, "target"), path.join(fixture, executableName()));
-      const archive = path.join(tempDir("minicpa-tar-"), "payload.tar.gz");
-      await tar.c({ gzip: true, file: archive, cwd: fixture }, [executableName()]);
+  it("filters symlink entries instead of following them", {
+    skip: process.platform === "win32",
+  }, async () => {
+    const fixture = tempDir("minicpa-tar-src-");
+    const outside = tempDir("minicpa-tar-outside-");
+    fs.writeFileSync(path.join(outside, "target"), "outside-secret");
+    fs.symlinkSync(path.join(outside, "target"), path.join(fixture, executableName()));
+    const archive = path.join(tempDir("minicpa-tar-"), "payload.tar.gz");
+    await tar.c({ gzip: true, file: archive, cwd: fixture }, [executableName()]);
 
-      const dest = tempDir("minicpa-extract-");
-      // The symlink entry is filtered out, so no executable is found at all.
-      await assert.rejects(() => extractArchive(archive, dest), /not found/);
-      assert.equal(fs.existsSync(path.join(dest, executableName())), false);
-    },
-  );
+    const dest = tempDir("minicpa-extract-");
+    // The symlink entry is filtered out, so no executable is found at all.
+    await assert.rejects(() => extractArchive(archive, dest), /not found/);
+    assert.equal(fs.existsSync(path.join(dest, executableName())), false);
+  });
 
   it("extracts a nested tar layout", async () => {
     const fixture = tempDir("minicpa-tar-src-");

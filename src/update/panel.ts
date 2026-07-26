@@ -128,8 +128,7 @@ export async function checkPanelUpdate(home: string): Promise<{
   const { version: latest, expectedDigest } = await resolveLatestPanelAsset(home);
   const state = readInstallState(home);
   const intact =
-    isInstalledPanelIntact(layout.managementHtml, state) &&
-    state.panelSha256 === expectedDigest;
+    isInstalledPanelIntact(layout.managementHtml, state) && state.panelSha256 === expectedDigest;
   const current = intact ? state.panelVersion : undefined;
   return {
     current,

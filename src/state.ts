@@ -35,8 +35,7 @@ export function readInstallState(home: string): InstallState {
     >;
     return {
       cpaHome: home,
-      runtimeVersion:
-        typeof parsed.runtimeVersion === "string" ? parsed.runtimeVersion : undefined,
+      runtimeVersion: typeof parsed.runtimeVersion === "string" ? parsed.runtimeVersion : undefined,
       panelVersion: typeof parsed.panelVersion === "string" ? parsed.panelVersion : undefined,
       panelSha256: typeof parsed.panelSha256 === "string" ? parsed.panelSha256 : undefined,
       lastUpdateCheck:
@@ -57,7 +56,7 @@ export function writeInstallState(home: string, state: Omit<InstallState, "cpaHo
     panelSha256: state.panelSha256,
     lastUpdateCheck: state.lastUpdateCheck,
   };
-  writeFileAtomic(layout.installStateFile, JSON.stringify(clean, null, 2) + "\n");
+  writeFileAtomic(layout.installStateFile, `${JSON.stringify(clean, null, 2)}\n`);
 }
 
 /**
@@ -107,7 +106,7 @@ export function readPidRecord(home: string): PidRecord | undefined {
 export function writePidRecord(home: string, record: PidRecord): void {
   const layout = cpaLayout(home);
   ensureDir(layout.stateDir);
-  writeFileAtomic(layout.pidFile, JSON.stringify(record) + "\n");
+  writeFileAtomic(layout.pidFile, `${JSON.stringify(record)}\n`);
 }
 
 export function clearPid(home: string): void {

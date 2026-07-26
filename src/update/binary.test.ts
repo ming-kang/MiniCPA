@@ -69,7 +69,12 @@ describe("installBinaryPhase", () => {
 
     const result = await installBinaryPhase(
       home,
-      { version: "2.0.0", extractedExe: stagedExe(home, "new-binary"), wasRunning: false, currentVersion: "1.0.0" },
+      {
+        version: "2.0.0",
+        extractedExe: stagedExe(home, "new-binary"),
+        wasRunning: false,
+        currentVersion: "1.0.0",
+      },
       deps,
       silentUpdateReporter,
     );
@@ -89,7 +94,12 @@ describe("installBinaryPhase", () => {
 
     const result = await installBinaryPhase(
       home,
-      { version: "2.0.0", extractedExe: stagedExe(home, "new-binary"), wasRunning: true, currentVersion: "1.0.0" },
+      {
+        version: "2.0.0",
+        extractedExe: stagedExe(home, "new-binary"),
+        wasRunning: true,
+        currentVersion: "1.0.0",
+      },
       deps,
       silentUpdateReporter,
     );
@@ -108,7 +118,12 @@ describe("installBinaryPhase", () => {
       () =>
         installBinaryPhase(
           home,
-          { version: "2.0.0", extractedExe: stagedExe(home, "broken-binary"), wasRunning: true, currentVersion: "1.0.0" },
+          {
+            version: "2.0.0",
+            extractedExe: stagedExe(home, "broken-binary"),
+            wasRunning: true,
+            currentVersion: "1.0.0",
+          },
           deps,
           silentUpdateReporter,
         ),
@@ -134,7 +149,12 @@ describe("installBinaryPhase", () => {
       () =>
         installBinaryPhase(
           home,
-          { version: "2.0.0", extractedExe: stagedExe(home, "broken-binary"), wasRunning: true, currentVersion: "1.0.0" },
+          {
+            version: "2.0.0",
+            extractedExe: stagedExe(home, "broken-binary"),
+            wasRunning: true,
+            currentVersion: "1.0.0",
+          },
           deps,
           silentUpdateReporter,
         ),
@@ -160,7 +180,12 @@ describe("installBinaryPhase", () => {
       () =>
         installBinaryPhase(
           home,
-          { version: "2.0.0", extractedExe: stagedExe(home, "broken-binary"), wasRunning: true, currentVersion: "1.0.0" },
+          {
+            version: "2.0.0",
+            extractedExe: stagedExe(home, "broken-binary"),
+            wasRunning: true,
+            currentVersion: "1.0.0",
+          },
           deps,
           silentUpdateReporter,
         ),
