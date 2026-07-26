@@ -1,18 +1,12 @@
-import { spawn, execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
 import { activeExecutablePath, cpaLayout, ensureDir, hardenCpaPermissions } from "../paths.js";
 import { clearPid, readPidRecord, writePidRecord } from "../state.js";
 import { rotateFileIfLarge, sleep, tailFile } from "../util.js";
 import { isProcessAlive } from "./alive.js";
 import { buildCpaChildEnv } from "./child-env.js";
 import { readinessUrls, waitForAnyHttpOk } from "./health.js";
-import {
-  exePathsMatch,
-  imageMatchesExpectedExe,
-  parseTasklistImageName,
-  readProcessStartMarker,
-} from "./pid-identity.js";
+import { classifyProcessIdentity, readProcessStartMarker } from "./pid-identity.js";
 import { recoverUnlockProbeBinary, resolveRunnableExecutable } from "./runtime.js";
 
 export { isProcessAlive } from "./alive.js";
@@ -22,85 +16,6 @@ const STOP_GRACE_MS = 5_000;
 const STOP_KILL_WAIT_MS = 5_000;
 /** Windows antivirus / explorer can hold the exe briefly after stop. */
 export const FILE_UNLOCK_WAIT_MS = 30_000;
-
-export type ProcessIdentity = "match" | "mismatch" | "unknown";
-
-function readWindowsExecutablePath(pid: number): string | undefined {
-  const script = [
-    `$process = Get-Process -Id ${pid} -ErrorAction Stop`,
-    "if ($process.Path) { [Console]::Out.Write($process.Path) }",
-  ].join("; ");
-
-  for (const shell of ["powershell.exe", "pwsh.exe"]) {
-    try {
-      const output = execFileSync(
-        shell,
-        ["-NoProfile", "-NonInteractive", "-Command", script],
-        { encoding: "utf8", windowsHide: true, timeout: 3_000 },
-      ).trim();
-      if (output) return output;
-    } catch {
-      /* try the other PowerShell executable */
-    }
-  }
-  return undefined;
-}
-
-/**
- * Classify whether `pid` is definitively the managed CPA binary.
- * A basename-only signal is useful for detecting a mismatch, but never enough to
- * authorize termination: another MiniCPA or unrelated process can share that name.
- */
-export function classifyProcessIdentity(pid: number, expectedExe: string): ProcessIdentity {
-  const expected = expectedExe || "";
-  if (!expected) return "unknown";
-
-  try {
-    if (process.platform === "linux") {
-      try {
-        const exeLink = fs.readlinkSync(`/proc/${pid}/exe`);
-        return exePathsMatch(exeLink, expected) ? "match" : "mismatch";
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        // The process exited between the liveness and identity probes.
-        return code === "ENOENT" ? "mismatch" : "unknown";
-      }
-    }
-
-    if (process.platform === "win32") {
-      const executable = readWindowsExecutablePath(pid);
-      if (executable) return exePathsMatch(executable, expected) ? "match" : "mismatch";
-
-      const out = execFileSync(
-        "tasklist",
-        ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
-        { encoding: "utf8", windowsHide: true, timeout: 3000 },
-      ).trim();
-      const image = parseTasklistImageName(out);
-      if (!image) return "mismatch";
-      return imageMatchesExpectedExe(image, expected) ? "unknown" : "mismatch";
-    }
-
-    if (process.platform === "darwin") {
-      const out = execFileSync("ps", ["-p", String(pid), "-o", "comm="], {
-        encoding: "utf8",
-        timeout: 3000,
-      }).trim();
-      if (!out) return "mismatch";
-      if (path.isAbsolute(out) && exePathsMatch(out, expected)) return "match";
-      return imageMatchesExpectedExe(out, expected) ? "unknown" : "mismatch";
-    }
-  } catch {
-    return "unknown";
-  }
-
-  return "unknown";
-}
-
-/** Fail-closed kill guard: only true when identity is a definitive match. */
-export function processLooksLikeCpa(pid: number, expectedExe: string): boolean {
-  return classifyProcessIdentity(pid, expectedExe) === "match";
-}
 
 export type RunningInfo = {
   pid: number;

@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { writePidRecord } from "../state.js";
 import { isProcessAlive } from "./alive.js";
-import { classifyProcessIdentity, stopDaemon } from "./lifecycle.js";
+import { stopDaemon } from "./lifecycle.js";
 
 const tempHomes: string[] = [];
 const childPids: number[] = [];
@@ -25,10 +25,6 @@ afterEach(() => {
 });
 
 describe("process identity safety", () => {
-  it("recognizes the current executable by exact path", () => {
-    assert.equal(classifyProcessIdentity(process.pid, process.execPath), "match");
-  });
-
   it("refuses to stop an alive PID when ownership cannot be verified", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-lifecycle-"));
     tempHomes.push(home);

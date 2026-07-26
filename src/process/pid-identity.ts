@@ -46,6 +46,67 @@ function runPowerShell(script: string): string | undefined {
   return undefined;
 }
 
+export type ProcessIdentity = "match" | "mismatch" | "unknown";
+
+function readWindowsExecutablePath(pid: number): string | undefined {
+  const script = [
+    `$process = Get-Process -Id ${pid} -ErrorAction Stop`,
+    "if ($process.Path) { [Console]::Out.Write($process.Path) }",
+  ].join("; ");
+  return runPowerShell(script);
+}
+
+/**
+ * Classify whether `pid` is definitively the managed CPA binary.
+ * A basename-only signal is useful for detecting a mismatch, but never enough to
+ * authorize termination: another MiniCPA or unrelated process can share that name.
+ */
+export function classifyProcessIdentity(pid: number, expectedExe: string): ProcessIdentity {
+  const expected = expectedExe || "";
+  if (!expected) return "unknown";
+
+  try {
+    if (process.platform === "linux") {
+      try {
+        const exeLink = fs.readlinkSync(`/proc/${pid}/exe`);
+        return exePathsMatch(exeLink, expected) ? "match" : "mismatch";
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        // The process exited between the liveness and identity probes.
+        return code === "ENOENT" ? "mismatch" : "unknown";
+      }
+    }
+
+    if (process.platform === "win32") {
+      const executable = readWindowsExecutablePath(pid);
+      if (executable) return exePathsMatch(executable, expected) ? "match" : "mismatch";
+
+      const out = execFileSync(
+        "tasklist",
+        ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
+        { encoding: "utf8", windowsHide: true, timeout: 3000 },
+      ).trim();
+      const image = parseTasklistImageName(out);
+      if (!image) return "mismatch";
+      return imageMatchesExpectedExe(image, expected) ? "unknown" : "mismatch";
+    }
+
+    if (process.platform === "darwin") {
+      const out = execFileSync("ps", ["-p", String(pid), "-o", "comm="], {
+        encoding: "utf8",
+        timeout: 3000,
+      }).trim();
+      if (!out) return "mismatch";
+      if (path.isAbsolute(out) && exePathsMatch(out, expected)) return "match";
+      return imageMatchesExpectedExe(out, expected) ? "unknown" : "mismatch";
+    }
+  } catch {
+    return "unknown";
+  }
+
+  return "unknown";
+}
+
 /** Stable process-creation marker used to detect PID reuse. */
 export function readProcessStartMarker(pid: number): string | undefined {
   if (!Number.isInteger(pid) || pid <= 0) return undefined;

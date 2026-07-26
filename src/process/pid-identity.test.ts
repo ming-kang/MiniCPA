@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  classifyProcessIdentity,
   exePathsMatch,
   imageMatchesExpectedExe,
   parseTasklistImageName,
   readProcessStartMarker,
 } from "./pid-identity.js";
+
+describe("classifyProcessIdentity", () => {
+  it("recognizes the current executable by exact path", () => {
+    assert.equal(classifyProcessIdentity(process.pid, process.execPath), "match");
+  });
+});
 
 describe("imageMatchesExpectedExe", () => {
   it("matches exact basenames", () => {
