@@ -204,10 +204,12 @@ export async function httpFetch(
         dispatcher: getProxyAgent(),
       });
       if (attempt < retries && isRetryableHttpStatus(res.status)) {
+        // Cancel instead of draining: a misbehaving proxy can attach an
+        // arbitrarily large body to a retryable 5xx.
         try {
-          await res.arrayBuffer();
+          await res.body?.cancel();
         } catch {
-          /* ignore drain errors */
+          /* ignore cancellation errors */
         }
         await sleep(retryDelayMs(attempt, minDelayMs, maxDelayMs));
         continue;

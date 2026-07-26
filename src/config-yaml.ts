@@ -23,7 +23,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function coercePort(value: unknown): number {
+function parsePort(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     const n = Math.trunc(value);
     if (n >= 1 && n <= 65535) return n;
@@ -32,12 +32,12 @@ function coercePort(value: unknown): number {
     const n = Number.parseInt(value.trim(), 10);
     if (n >= 1 && n <= 65535) return n;
   }
-  return DEFAULT_PORT;
+  return undefined;
 }
 
-function coerceHost(value: unknown): string {
+function parseHost(value: unknown): string | undefined {
   if (typeof value === "string" && value.trim()) return value.trim();
-  return DEFAULT_HOST;
+  return undefined;
 }
 
 function coerceApiKeys(value: unknown): string[] | undefined {
@@ -49,18 +49,40 @@ function coerceApiKeys(value: unknown): string[] | undefined {
   return [];
 }
 
-/** Normalize a parsed YAML document into a safe CpaConfig (never throws on shape). */
-export function normalizeCpaConfig(doc: unknown): CpaConfig {
+/**
+ * Normalize a parsed YAML document into a safe CpaConfig (never throws on shape).
+ * Invalid `host`/`port` values fall back to defaults with a warning — CPA itself
+ * may interpret them differently, so readiness probes could target the wrong
+ * endpoint if warnings are ignored.
+ */
+export function normalizeCpaConfigWithWarnings(doc: unknown): {
+  config: CpaConfig;
+  warnings: string[];
+} {
+  const warnings: string[] = [];
   if (!isPlainObject(doc)) {
-    return { host: DEFAULT_HOST, port: DEFAULT_PORT };
+    return { config: { host: DEFAULT_HOST, port: DEFAULT_PORT }, warnings };
   }
   const remote = isPlainObject(doc["remote-management"])
     ? (doc["remote-management"] as Record<string, unknown>)
     : undefined;
 
+  const port = parsePort(doc.port);
+  if (port === undefined && doc.port !== undefined && doc.port !== null) {
+    warnings.push(
+      `invalid port ${JSON.stringify(doc.port)} in config.yaml — using default ${DEFAULT_PORT}`,
+    );
+  }
+  const host = parseHost(doc.host);
+  if (host === undefined && doc.host !== undefined && doc.host !== null) {
+    warnings.push(
+      `invalid host ${JSON.stringify(doc.host)} in config.yaml — using default ${DEFAULT_HOST}`,
+    );
+  }
+
   const config: CpaConfig = {
-    host: coerceHost(doc.host),
-    port: coercePort(doc.port),
+    host: host ?? DEFAULT_HOST,
+    port: port ?? DEFAULT_PORT,
   };
 
   if (typeof doc["auth-dir"] === "string") {
@@ -84,12 +106,20 @@ export function normalizeCpaConfig(doc: unknown): CpaConfig {
     }
   }
 
-  return config;
+  return { config, warnings };
 }
 
-export function readCpaConfig(configPath: string): CpaConfig {
+/** Normalize without warnings (callers that cannot surface them). */
+export function normalizeCpaConfig(doc: unknown): CpaConfig {
+  return normalizeCpaConfigWithWarnings(doc).config;
+}
+
+export function readCpaConfigWithWarnings(configPath: string): {
+  config: CpaConfig;
+  warnings: string[];
+} {
   if (!fs.existsSync(configPath)) {
-    return { host: DEFAULT_HOST, port: DEFAULT_PORT };
+    return { config: { host: DEFAULT_HOST, port: DEFAULT_PORT }, warnings: [] };
   }
   const text = fs.readFileSync(configPath, "utf8");
   let doc: unknown;
@@ -98,7 +128,11 @@ export function readCpaConfig(configPath: string): CpaConfig {
   } catch (err) {
     throw new Error(`Invalid YAML: ${(err as Error).message}`);
   }
-  return normalizeCpaConfig(doc);
+  return normalizeCpaConfigWithWarnings(doc);
+}
+
+export function readCpaConfig(configPath: string): CpaConfig {
+  return readCpaConfigWithWarnings(configPath).config;
 }
 
 export function getListenAddress(config: CpaConfig): { host: string; port: number } {

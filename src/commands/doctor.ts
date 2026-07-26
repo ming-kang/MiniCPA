@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { formatCliError } from "../cli-errors.js";
-import { getListenAddress, LEGACY_DEFAULT_API_KEY, readCpaConfig } from "../config-yaml.js";
+import { getListenAddress, LEGACY_DEFAULT_API_KEY, readCpaConfigWithWarnings } from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
 import { describeProxyEnv, hasProxyEnvConfigured, httpFetch } from "../http.js";
 import { backupExecutablePath, cliConfigPath, miniCpaTempRoot, unlockProbePath } from "../paths.js";
@@ -37,9 +37,12 @@ export async function runDoctor(): Promise<void> {
     ok = false;
   } else {
     try {
-      const cfg = readCpaConfig(ctx.layout.configFile);
+      const { config: cfg, warnings } = readCpaConfigWithWarnings(ctx.layout.configFile);
       const { host, port } = getListenAddress(cfg);
       console.log("[ ok ] config.yaml");
+      for (const warning of warnings) {
+        console.log(`[warn] ${warning}`);
+      }
       console.log(`[info] listen ${host}:${port}`);
       const apiKeys = cfg["api-keys"] ?? [];
       if (apiKeys.includes(LEGACY_DEFAULT_API_KEY)) {

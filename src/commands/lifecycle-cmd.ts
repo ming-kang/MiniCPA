@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { openInBrowser } from "../browser.js";
+import { readCpaConfigWithWarnings } from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
 import { apiBaseUrl, managementUrl, readinessUrls, waitForAnyHttpOk, waitForHttpOk } from "../process/health.js";
 import { resolveRunning, runCpaTuiProcess, startDaemon, stopDaemon } from "../process/lifecycle.js";
@@ -27,10 +28,22 @@ function printRunningSummary(ctx: ReturnType<typeof createContext>, pid: number)
 
 export async function runStart(opts: { noWait?: boolean }): Promise<void> {
   const ctx = createContext();
+  printConfigWarnings(ctx.layout.configFile);
   const running = await withMiniCpaLock("start", () =>
     startDaemon(ctx.home, { noWait: opts.noWait }),
   );
   printRunningSummary(ctx, running.pid);
+}
+
+/** Non-fatal: CPA is the authority on its config, but probes may target the wrong port. */
+function printConfigWarnings(configFile: string): void {
+  try {
+    for (const warning of readCpaConfigWithWarnings(configFile).warnings) {
+      console.error(`Warning: ${warning}`);
+    }
+  } catch {
+    /* startDaemon will surface config errors with better context */
+  }
 }
 
 export async function runStop(): Promise<void> {

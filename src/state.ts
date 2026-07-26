@@ -112,5 +112,11 @@ export function writePidRecord(home: string, record: PidRecord): void {
 
 export function clearPid(home: string): void {
   const layout = cpaLayout(home);
-  if (fs.existsSync(layout.pidFile)) fs.unlinkSync(layout.pidFile);
+  // Best-effort: transient EPERM/EBUSY (AV scan) must not crash read paths like
+  // `cpa status`, and a stale pid file is tolerated by resolveRunning.
+  try {
+    fs.unlinkSync(layout.pidFile);
+  } catch {
+    /* ignore */
+  }
 }
