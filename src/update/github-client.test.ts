@@ -3,10 +3,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { withHttpFixture } from "../test-fixtures/http-server.js";
+
+// Loopback fixture requests must bypass any developer shell proxy. Set before
+// the first httpFetch call so the lazily created proxy agent honors it.
+process.env.NO_PROXY = "127.0.0.1";
+process.env.no_proxy = "127.0.0.1";
 import {
   browserReleaseAssetUrl,
   downloadToFile,
   ensureReleaseTag,
+  fetchChecksums,
   githubAuthToken,
   isSafeReleaseTag,
   normalizeTagVersion,
@@ -15,6 +22,8 @@ import {
   parseReleaseTagFromLocation,
   releaseAssetDownloadUrl,
   repoFromPanelUrl,
+  resolveLatestReleaseTag,
+  type GhRelease,
 } from "./github-client.js";
 
 const tempDirs: string[] = [];
@@ -143,6 +152,122 @@ describe("downloadToFile", () => {
       /exceeds 4 B limit/,
     );
     assert.equal(fs.existsSync(dest), false);
+  });
+});
+
+describe("resolveLatestReleaseTag", () => {
+  it("reads the tag from a 302 Location header", async () => {
+    await withHttpFixture(
+      {
+        "/owner/repo/releases/latest": (_req, res) => {
+          res.statusCode = 302;
+          res.setHeader("location", "https://github.com/owner/repo/releases/tag/v7.2.92");
+          res.end();
+        },
+      },
+      async (baseUrl) => {
+        assert.equal(await resolveLatestReleaseTag("owner/repo", baseUrl), "v7.2.92");
+      },
+    );
+  });
+
+  it("fails clearly when no usable Location is present", async () => {
+    await withHttpFixture(
+      {
+        "/owner/repo/releases/latest": (_req, res) => {
+          res.statusCode = 200;
+          res.end("<html>releases page</html>");
+        },
+      },
+      async (baseUrl) => {
+        await assert.rejects(
+          () => resolveLatestReleaseTag("owner/repo", baseUrl),
+          /Could not resolve latest release tag/,
+        );
+      },
+    );
+  });
+
+  it("rejects unsafe tags from the Location header", async () => {
+    await withHttpFixture(
+      {
+        "/owner/repo/releases/latest": (_req, res) => {
+          res.statusCode = 302;
+          res.setHeader("location", "https://github.com/owner/repo/releases/tag/..%2Fevil");
+          res.end();
+        },
+      },
+      async (baseUrl) => {
+        await assert.rejects(
+          () => resolveLatestReleaseTag("owner/repo", baseUrl),
+          /not a safe version string/,
+        );
+      },
+    );
+  });
+});
+
+describe("fetchChecksums", () => {
+  function releaseWithChecksums(url: string): GhRelease {
+    return {
+      tag_name: "v7.0.0",
+      name: "v7.0.0",
+      published_at: "",
+      assets: [{ name: "checksums.txt", browser_download_url: url }],
+    };
+  }
+
+  it("downloads and parses checksums end-to-end", async () => {
+    const sum = "a".repeat(64);
+    await withHttpFixture(
+      {
+        "/checksums.txt": (_req, res) => {
+          res.statusCode = 200;
+          res.end(`${sum}  CLIProxyAPI_7.0.0_windows_amd64.zip\n`);
+        },
+      },
+      async (baseUrl) => {
+        const map = await fetchChecksums(
+          releaseWithChecksums(`${baseUrl}/checksums.txt`),
+          "owner/repo",
+        );
+        assert.equal(map.get("CLIProxyAPI_7.0.0_windows_amd64.zip"), sum);
+      },
+    );
+  });
+
+  it("gives an actionable error on HTTP failure", async () => {
+    await withHttpFixture(
+      {
+        "/checksums.txt": (_req, res) => {
+          res.statusCode = 404;
+          res.end();
+        },
+      },
+      async (baseUrl) => {
+        await assert.rejects(
+          () => fetchChecksums(releaseWithChecksums(`${baseUrl}/checksums.txt`), "owner/repo"),
+          /Failed to download checksums\.txt \(HTTP 404\)/,
+        );
+      },
+    );
+  });
+
+  it("rejects an empty or unparseable checksums file", async () => {
+    await withHttpFixture(
+      {
+        "/checksums.txt": (_req, res) => {
+          res.statusCode = 200;
+          res.end("this is not a checksums file\n");
+        },
+      },
+      async (baseUrl) => {
+        await assert.rejects(
+          () => fetchChecksums(releaseWithChecksums(`${baseUrl}/checksums.txt`), "owner/repo"),
+          /empty or unparseable/,
+        );
+      },
+    );
   });
 });
 

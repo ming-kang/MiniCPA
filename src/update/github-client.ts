@@ -128,9 +128,13 @@ function formatGitHubApiError(status: number, repo: string, context: string): st
 /**
  * Resolve the latest release tag via github.com redirect (no REST rate limit).
  * Uses redirect: "manual" and reads the Location header.
+ * `baseUrl` is overridable for tests only.
  */
-export async function resolveLatestReleaseTag(repo: string): Promise<string> {
-  const url = `https://github.com/${repo}/releases/latest`;
+export async function resolveLatestReleaseTag(
+  repo: string,
+  baseUrl = "https://github.com",
+): Promise<string> {
+  const url = `${baseUrl}/${repo}/releases/latest`;
   const res = await httpFetch(url, {
     headers: githubHeaders("browser"),
     redirect: "manual",

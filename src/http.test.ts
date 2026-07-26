@@ -4,11 +4,19 @@ import {
   describeProxyEnv,
   formatNetworkError,
   hasProxyEnvConfigured,
+  httpFetch,
   isRetryableHttpStatus,
   isRetryableNetworkError,
+  NetworkError,
   redactProxyUrl,
   retryDelayMs,
 } from "./http.js";
+import { withHttpFixture } from "./test-fixtures/http-server.js";
+
+// Loopback fixture requests must bypass any developer shell proxy. Set before
+// the first httpFetch call so the lazily created proxy agent honors it.
+process.env.NO_PROXY = "127.0.0.1";
+process.env.no_proxy = "127.0.0.1";
 
 describe("hasProxyEnvConfigured", () => {
   it("detects upper and lower case proxy vars", () => {
@@ -73,6 +81,67 @@ describe("formatNetworkError", () => {
         else delete process.env[key];
       }
     }
+  });
+});
+
+describe("httpFetch", () => {
+  it("retries a retryable status and returns the recovered response", async () => {
+    let hits = 0;
+    await withHttpFixture(
+      {
+        "/flaky": (_req, res) => {
+          hits += 1;
+          if (hits === 1) {
+            res.statusCode = 503;
+            res.end("try again with a body that should be cancelled, not drained");
+            return;
+          }
+          res.statusCode = 200;
+          res.end("recovered");
+        },
+      },
+      async (baseUrl) => {
+        const res = await httpFetch(`${baseUrl}/flaky`, undefined, {
+          retries: 2,
+          minDelayMs: 10,
+          maxDelayMs: 20,
+        });
+        assert.equal(res.status, 200);
+        assert.equal(await res.text(), "recovered");
+        assert.equal(hits, 2);
+      },
+    );
+  });
+
+  it("returns non-retryable statuses as-is", async () => {
+    await withHttpFixture(
+      {
+        "/gone": (_req, res) => {
+          res.statusCode = 404;
+          res.end("nope");
+        },
+      },
+      async (baseUrl) => {
+        const res = await httpFetch(`${baseUrl}/gone`, undefined, { retries: 2 });
+        assert.equal(res.status, 404);
+        await res.body?.cancel();
+      },
+    );
+  });
+
+  it("throws NetworkError for a refused connection", async () => {
+    // Acquire a port that is guaranteed closed by opening and closing a fixture.
+    let closedPort = 0;
+    await withHttpFixture({}, async (baseUrl) => {
+      closedPort = Number(new URL(baseUrl).port);
+    });
+    await assert.rejects(
+      () =>
+        httpFetch(`http://127.0.0.1:${closedPort}/`, undefined, {
+          retries: 0,
+        }),
+      (err: unknown) => err instanceof NetworkError,
+    );
   });
 });
 
