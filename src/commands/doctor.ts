@@ -153,6 +153,18 @@ export async function runDoctor(): Promise<void> {
     );
   }
 
+  try {
+    for (const entry of fs.readdirSync(ctx.layout.stateDir)) {
+      if (entry.endsWith(".replace.bak")) {
+        console.log(
+          `[warn] atomic-write backup residue in state dir (${entry}) — recovered automatically on next write`,
+        );
+      }
+    }
+  } catch {
+    /* state dir may not exist yet */
+  }
+
   const tempRoot = miniCpaTempRoot();
   const tempSize = directorySizeBytes(tempRoot);
   if (tempSize > 10 * 1024 * 1024) {

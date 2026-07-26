@@ -91,15 +91,20 @@ export function findSafeExtractedExecutable(destDir: string, exeName: string): s
   throw new Error(`${exeName} not found in extract directory`);
 }
 
-function isUnsafeArchiveEntryName(entryName: string): boolean {
+export function isUnsafeArchiveEntryName(entryName: string): boolean {
   const normalized = entryName.replace(/\\/g, "/");
   if (path.posix.isAbsolute(normalized) || path.win32.isAbsolute(normalized)) return true;
   const parts = normalized.split("/");
   return parts.some((p) => p === "..");
 }
 
-async function extractArchive(archivePath: string, destDir: string): Promise<string> {
+export async function extractArchive(
+  archivePath: string,
+  destDir: string,
+  options?: { maxExtractedBytes?: number },
+): Promise<string> {
   const exeName = executableName();
+  const maxExtractedBytes = options?.maxExtractedBytes ?? MAX_EXTRACTED_EXECUTABLE_BYTES;
   fs.mkdirSync(destDir, { recursive: true });
 
   if (archivePath.endsWith(".zip")) {
@@ -111,11 +116,19 @@ async function extractArchive(archivePath: string, destDir: string): Promise<str
     if (isUnsafeArchiveEntryName(entry.entryName)) {
       throw new Error(`Unsafe zip entry path: ${entry.entryName}`);
     }
-    if (entry.header.size > MAX_EXTRACTED_EXECUTABLE_BYTES) {
+    if (entry.header.size > maxExtractedBytes) {
       throw new Error(`${exeName} in ${archivePath} exceeds extraction size limit`);
     }
+    const data = entry.getData();
+    // The declared header size is attacker-controlled; re-check the inflated bytes.
+    if (data.length > maxExtractedBytes) {
+      throw new Error(
+        `${exeName} in ${archivePath} exceeds extraction size limit ` +
+          `(declared ${entry.header.size}, actual ${data.length})`,
+      );
+    }
     const out = path.join(destDir, exeName);
-    fs.writeFileSync(out, entry.getData());
+    fs.writeFileSync(out, data);
     return out;
   }
 
@@ -130,7 +143,7 @@ async function extractArchive(archivePath: string, destDir: string): Promise<str
         if (type === "SymbolicLink" || type === "Link") return false;
         const base = path.posix.basename(entryPath.replace(/\\/g, "/"));
         const size = (entry as { size?: number }).size;
-        if (typeof size === "number" && size > MAX_EXTRACTED_EXECUTABLE_BYTES) {
+        if (typeof size === "number" && size > maxExtractedBytes) {
           throw new Error(`${exeName} in ${archivePath} exceeds extraction size limit`);
         }
         // Allow directories so nested layouts extract parents; tar may still need them.
