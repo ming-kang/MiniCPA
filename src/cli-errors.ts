@@ -1,17 +1,12 @@
-import { formatNetworkError } from "./http.js";
+import { formatNetworkError, NetworkError } from "./http.js";
+import { BinaryUpdateError } from "./update/binary.js";
 
-function formatCliError(err: unknown): string {
+export function formatCliError(err: unknown): string {
+  // Messages of these types are already user-ready (enriched / suffixed).
+  if (err instanceof BinaryUpdateError) return err.message;
+  if (err instanceof NetworkError) return err.message;
   if (err instanceof Error) {
     const message = err.message || "Error";
-    // Already enriched by httpFetch / BinaryUpdateError
-    if (
-      message.includes("Hint:") ||
-      message.includes("←") ||
-      message.includes("Previous CPA") ||
-      message.includes("Also failed")
-    ) {
-      return message;
-    }
     if (err.cause != null || /fetch failed|network|ECONN|ETIMEDOUT|UND_ERR/i.test(message)) {
       return formatNetworkError(err);
     }

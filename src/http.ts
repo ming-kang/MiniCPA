@@ -6,6 +6,20 @@ import {
 } from "undici";
 import { sleep } from "./util.js";
 
+/**
+ * Network failure whose message was already enriched by formatNetworkError
+ * (cause chain, host, proxy hint). The CLI error formatter passes it through.
+ */
+export class NetworkError extends Error {
+  readonly url?: string;
+
+  constructor(message: string, options?: { cause?: unknown; url?: string }) {
+    super(message, options?.cause !== undefined ? { cause: options.cause } : undefined);
+    this.name = "NetworkError";
+    this.url = options?.url;
+  }
+}
+
 let sharedProxyAgent: EnvHttpProxyAgent | undefined;
 
 function getProxyAgent(): EnvHttpProxyAgent {
@@ -202,10 +216,10 @@ export async function httpFetch(
     } catch (err) {
       lastError = err;
       if (attempt >= retries || !isRetryableNetworkError(err)) {
-        throw new Error(formatNetworkError(err, url), { cause: err });
+        throw new NetworkError(formatNetworkError(err, url), { cause: err, url });
       }
       await sleep(retryDelayMs(attempt, minDelayMs, maxDelayMs));
     }
   }
-  throw new Error(formatNetworkError(lastError, url), { cause: lastError });
+  throw new NetworkError(formatNetworkError(lastError, url), { cause: lastError, url });
 }
