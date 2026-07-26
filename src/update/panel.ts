@@ -7,12 +7,12 @@ import { readInstallState, type InstallState, patchInstallState } from "../state
 import { sha256File } from "../util.js";
 import {
   downloadToFile,
-  fetchLatestReleaseWithAssets,
+  fetchLatestReleaseViaApi,
   normalizeTagVersion,
   parseGithubDigest,
   releaseAssetDownloadUrl,
   repoFromPanelUrl,
-} from "./github.js";
+} from "./github-client.js";
 
 const MAX_PANEL_BYTES = 20 * 1024 * 1024;
 
@@ -85,7 +85,7 @@ export async function checkPanelUpdate(home: string): Promise<{
   const layout = cpaLayout(home);
   const cfg = readCpaConfig(layout.configFile);
   const repo = repoFromPanelUrl(getPanelRepository(cfg));
-  const release = await fetchLatestReleaseWithAssets(repo);
+  const release = await fetchLatestReleaseViaApi(repo);
   const latest = normalizeTagVersion(release.tag_name);
   const asset = release.assets.find((candidate) => candidate.name === "management.html");
   if (!asset) throw new Error(`management.html not found in ${repo} ${release.tag_name}`);
@@ -110,7 +110,7 @@ export async function updatePanel(
   const layout = cpaLayout(home);
   const cfg = readCpaConfig(layout.configFile);
   const repo = repoFromPanelUrl(getPanelRepository(cfg));
-  const release = await fetchLatestReleaseWithAssets(repo);
+  const release = await fetchLatestReleaseViaApi(repo);
   const version = normalizeTagVersion(release.tag_name);
   const asset = release.assets.find((candidate) => candidate.name === "management.html");
   if (!asset) throw new Error(`management.html not found in ${repo} ${release.tag_name}`);

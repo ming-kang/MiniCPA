@@ -23,16 +23,20 @@ import {
 import { patchInstallState, readInstallState } from "../state.js";
 import { sha256File } from "../util.js";
 import {
+  CPA_REPO,
   cpaAssetNameCandidates,
+  cpaReleaseAssetNames,
+  fetchCpaReleaseByTag,
+  listReleaseAssetCandidates,
+  type PickedReleaseAsset,
+} from "./cpa-release.js";
+import {
   downloadToFile,
   fetchChecksums,
-  fetchCpaReleaseByTag,
-  fetchLatestCpaRelease,
-  listReleaseAssetCandidates,
+  fetchLatestRelease,
   normalizeTagVersion,
   type GhRelease,
-  type PickedReleaseAsset,
-} from "./github.js";
+} from "./github-client.js";
 
 const MAX_BINARY_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const MAX_EXTRACTED_EXECUTABLE_BYTES = 512 * 1024 * 1024;
@@ -178,7 +182,7 @@ export async function checkBinaryUpdate(home: string): Promise<{
   upToDate: boolean;
 }> {
   const current = await readCurrentRuntimeVersion(home);
-  const release = await fetchLatestCpaRelease();
+  const release = await fetchLatestRelease(CPA_REPO, cpaReleaseAssetNames);
   const latest = normalizeTagVersion(release.tag_name);
   return {
     current,
@@ -235,7 +239,7 @@ export async function updateBinary(
 
   const release: GhRelease = options?.version
     ? await fetchCpaReleaseByTag(options.version)
-    : await fetchLatestCpaRelease();
+    : await fetchLatestRelease(CPA_REPO, cpaReleaseAssetNames);
 
   const version = normalizeTagVersion(release.tag_name);
   const alreadyLatest = !options?.version && !!currentVersion && currentVersion === version;
@@ -262,7 +266,7 @@ export async function updateBinary(
     const assetName = picked.assetName;
 
     if (!options?.insecure) {
-      const checksums = await fetchChecksums(release);
+      const checksums = await fetchChecksums(release, CPA_REPO);
       verifyArchiveChecksum(checksums, archivePath, assetName);
     } else {
       console.error("Warning: --insecure skips archive integrity verification");

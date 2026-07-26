@@ -20,7 +20,6 @@ export type GhRelease = {
   assets: GhAsset[];
 };
 
-export const CPA_REPO = "router-for-me/CLIProxyAPI";
 const API_TIMEOUT_MS = 30_000;
 const DOWNLOAD_TIMEOUT_MS = 300_000;
 
@@ -161,25 +160,6 @@ export async function resolveLatestReleaseTag(repo: string): Promise<string> {
   );
 }
 
-/** Known public CPA binary asset names for a version (plus checksums). */
-export function cpaReleaseAssetNames(version: string): string[] {
-  const v = normalizeTagVersion(version);
-  return [
-    // Current upstream naming (aarch64) first, then historical aliases.
-    `CLIProxyAPI_${v}_windows_amd64.zip`,
-    `CLIProxyAPI_${v}_windows_aarch64.zip`,
-    `CLIProxyAPI_${v}_windows_arm64.zip`,
-    `CLIProxyAPI_${v}_darwin_amd64.tar.gz`,
-    `CLIProxyAPI_${v}_darwin_aarch64.tar.gz`,
-    `CLIProxyAPI_${v}_linux_amd64.tar.gz`,
-    `CLIProxyAPI_${v}_linux_aarch64.tar.gz`,
-    `CLIProxyAPI_${v}_linux_arm64.tar.gz`,
-    `CLIProxyAPI_${v}_linux_amd64_no-plugin.tar.gz`,
-    `CLIProxyAPI_${v}_linux_amd64_portable.tar.gz`,
-    "checksums.txt",
-  ];
-}
-
 /** Build a release object with browser download URLs (no API asset list needed). */
 export function synthesizePublicRelease(
   repo: string,
@@ -198,11 +178,6 @@ export function synthesizePublicRelease(
   };
 }
 
-function defaultAssetNamesForRepo(repo: string, tag: string): string[] {
-  if (repo === CPA_REPO) return cpaReleaseAssetNames(tag);
-  return ["management.html"];
-}
-
 function validateReleaseMetadata(repo: string, release: GhRelease): GhRelease {
   if (!release || !isSafeReleaseTag(release.tag_name) || !Array.isArray(release.assets)) {
     throw new Error(`GitHub returned invalid release metadata for ${repo}`);
@@ -219,7 +194,8 @@ function validateReleaseMetadata(repo: string, release: GhRelease): GhRelease {
   return release;
 }
 
-async function fetchLatestReleaseViaApi(repo: string): Promise<GhRelease> {
+/** Fetch full latest-release metadata via the REST API, including GitHub asset digests. */
+export async function fetchLatestReleaseViaApi(repo: string): Promise<GhRelease> {
   const res = await httpFetch(`https://api.github.com/repos/${repo}/releases/latest`, {
     headers: githubHeaders("json"),
     signal: AbortSignal.timeout(API_TIMEOUT_MS),
@@ -230,19 +206,37 @@ async function fetchLatestReleaseViaApi(repo: string): Promise<GhRelease> {
   return validateReleaseMetadata(repo, (await res.json()) as GhRelease);
 }
 
-/** Fetch full latest-release metadata, including GitHub asset digests. */
-export async function fetchLatestReleaseWithAssets(repo: string): Promise<GhRelease> {
-  return fetchLatestReleaseViaApi(repo);
+/** Release metadata for a specific tag via the REST API. */
+export async function fetchReleaseByTagViaApi(
+  repo: string,
+  normalizedTag: string,
+): Promise<GhRelease> {
+  const res = await httpFetch(
+    `https://api.github.com/repos/${repo}/releases/tags/${normalizedTag}`,
+    {
+      headers: githubHeaders("json"),
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    },
+  );
+  if (!res.ok) {
+    if (res.status === 404) throw new Error(`Release not found: ${normalizedTag}`);
+    throw new Error(formatGitHubApiError(res.status, repo, `releases/tags/${normalizedTag}`));
+  }
+  return validateReleaseMetadata(repo, (await res.json()) as GhRelease);
 }
 
 /**
  * Latest release metadata. Prefers github.com redirect + synthetic browser asset URLs
  * (avoids REST rate limits). Falls back to the GitHub REST API when browser discovery fails.
+ * `assetNamesForTag` supplies the asset names to synthesize for a resolved tag.
  */
-export async function fetchLatestRelease(repo: string): Promise<GhRelease> {
+export async function fetchLatestRelease(
+  repo: string,
+  assetNamesForTag: (tag: string) => string[],
+): Promise<GhRelease> {
   try {
     const tag = await resolveLatestReleaseTag(repo);
-    return synthesizePublicRelease(repo, tag, defaultAssetNamesForRepo(repo, tag));
+    return synthesizePublicRelease(repo, tag, assetNamesForTag(tag));
   } catch (browserErr) {
     try {
       return await fetchLatestReleaseViaApi(repo);
@@ -256,43 +250,6 @@ export async function fetchLatestRelease(repo: string): Promise<GhRelease> {
       );
     }
   }
-}
-
-export async function fetchLatestCpaRelease(): Promise<GhRelease> {
-  return fetchLatestRelease(CPA_REPO);
-}
-
-async function fetchCpaReleaseByTagViaApi(normalizedTag: string): Promise<GhRelease> {
-  const res = await httpFetch(
-    `https://api.github.com/repos/${CPA_REPO}/releases/tags/${normalizedTag}`,
-    {
-      headers: githubHeaders("json"),
-      signal: AbortSignal.timeout(API_TIMEOUT_MS),
-    },
-  );
-  if (!res.ok) {
-    if (res.status === 404) throw new Error(`Release not found: ${normalizedTag}`);
-    throw new Error(formatGitHubApiError(res.status, CPA_REPO, `releases/tags/${normalizedTag}`));
-  }
-  return validateReleaseMetadata(CPA_REPO, (await res.json()) as GhRelease);
-}
-
-/**
- * CPA release for a specific tag. Synthesizes browser download URLs by default.
- * With a token, API is tried first; 404 fails immediately; rate-limit/network may fall through.
- */
-export async function fetchCpaReleaseByTag(tag: string): Promise<GhRelease> {
-  const normalized = ensureReleaseTag(tag);
-  if (githubAuthToken()) {
-    try {
-      return await fetchCpaReleaseByTagViaApi(normalized);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (/Release not found|API 404/i.test(message)) throw err;
-      // Rate limit / network — public browser URLs may still work.
-    }
-  }
-  return synthesizePublicRelease(CPA_REPO, normalized, cpaReleaseAssetNames(normalized));
 }
 
 export function repoFromPanelUrl(panelRepoUrl: string): string {
@@ -419,84 +376,6 @@ export async function downloadToFile(
   }
 }
 
-export type PickedReleaseAsset = {
-  assetName: string;
-  /** Browser release URL when available; API asset URL only as fallback. */
-  url: string;
-  asset: GhAsset;
-};
-
-/** Ordered platform asset name candidates (current upstream names first). */
-export function cpaAssetNameCandidates(
-  version: string,
-  platform: NodeJS.Platform,
-  arch: string,
-): string[] {
-  const v = normalizeTagVersion(version);
-  const candidates: string[] = [];
-  if (arch !== "x64" && arch !== "arm64") {
-    throw new Error(`Unsupported CPU architecture for CPA updates: ${platform}/${arch}`);
-  }
-  if (platform !== "win32" && platform !== "darwin" && platform !== "linux") {
-    throw new Error(`Unsupported platform for CPA updates: ${platform}/${arch}`);
-  }
-
-  if (platform === "win32") {
-    if (arch === "arm64") {
-      candidates.push(`CLIProxyAPI_${v}_windows_aarch64.zip`);
-      candidates.push(`CLIProxyAPI_${v}_windows_arm64.zip`);
-    }
-    candidates.push(`CLIProxyAPI_${v}_windows_amd64.zip`);
-  } else if (platform === "darwin") {
-    if (arch === "arm64") candidates.push(`CLIProxyAPI_${v}_darwin_aarch64.tar.gz`);
-    candidates.push(`CLIProxyAPI_${v}_darwin_amd64.tar.gz`);
-  } else {
-    if (arch === "arm64") {
-      candidates.push(`CLIProxyAPI_${v}_linux_aarch64.tar.gz`);
-      candidates.push(`CLIProxyAPI_${v}_linux_arm64.tar.gz`);
-    }
-    candidates.push(`CLIProxyAPI_${v}_linux_amd64.tar.gz`);
-    candidates.push(`CLIProxyAPI_${v}_linux_amd64_no-plugin.tar.gz`);
-    candidates.push(`CLIProxyAPI_${v}_linux_amd64_portable.tar.gz`);
-  }
-  return candidates;
-}
-
-/** All candidate assets that exist on the release (or synthetic browser URLs). */
-export function listReleaseAssetCandidates(
-  release: GhRelease,
-  platform: NodeJS.Platform,
-  arch: string,
-  repo: string = CPA_REPO,
-): PickedReleaseAsset[] {
-  const candidates = cpaAssetNameCandidates(release.tag_name, platform, arch);
-  const picked: PickedReleaseAsset[] = [];
-
-  for (const name of candidates) {
-    const asset = release.assets.find((a) => a.name === name);
-    if (asset) {
-      picked.push({
-        assetName: asset.name,
-        url: releaseAssetDownloadUrl(repo, asset),
-        asset,
-      });
-    }
-  }
-
-  if (picked.length === 0 && release.assets.length === 0) {
-    // Fully synthetic release: construct browser URLs for every candidate.
-    for (const name of candidates) {
-      const asset: GhAsset = {
-        name,
-        browser_download_url: browserReleaseAssetUrl(repo, release.tag_name, name),
-      };
-      picked.push({ assetName: name, url: asset.browser_download_url, asset });
-    }
-  }
-
-  return picked;
-}
-
 /** Parse GitHub checksums.txt body into map of filename → sha256. */
 export function parseChecksumsText(text: string): Map<string, string> {
   const map = new Map<string, string>();
@@ -515,7 +394,7 @@ export function parseGithubDigest(digest: string | undefined): string | undefine
 
 export async function fetchChecksums(
   release: GhRelease,
-  repo: string = CPA_REPO,
+  repo: string,
 ): Promise<Map<string, string>> {
   let asset = release.assets.find((a) => a.name === "checksums.txt");
   if (!asset) {
