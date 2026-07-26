@@ -103,17 +103,18 @@ function dumpRecentLogs(home: string): string {
   return parts.length ? `\n${parts.join("\n")}` : "";
 }
 
-async function runTaskkill(pid: number, force: boolean): Promise<void> {
+/** Resolves true when taskkill reported success (exit code 0). */
+async function runTaskkill(pid: number, force: boolean): Promise<boolean> {
   const args = force
     ? ["/PID", String(pid), "/T", "/F"]
     : ["/PID", String(pid), "/T"];
-  await new Promise<void>((resolve) => {
+  return new Promise<boolean>((resolve) => {
     const killer = spawn("taskkill", args, {
       windowsHide: true,
       stdio: "ignore",
     });
-    killer.on("close", () => resolve());
-    killer.on("error", () => resolve());
+    killer.on("close", (code) => resolve(code === 0));
+    killer.on("error", () => resolve(false));
   });
 }
 
@@ -317,10 +318,14 @@ export async function stopDaemon(home: string): Promise<boolean> {
 
   if (process.platform === "win32") {
     assertSafeToStop(home, pid);
-    await runTaskkill(pid, false);
-    const deadline = Date.now() + STOP_GRACE_MS;
-    while (Date.now() < deadline && isProcessAlive(pid)) {
-      await sleep(200);
+    // Graceful taskkill (no /F) cannot signal windowless detached children;
+    // when it reports failure, skip the grace wait and force-kill directly.
+    const graceful = await runTaskkill(pid, false);
+    if (graceful) {
+      const deadline = Date.now() + STOP_GRACE_MS;
+      while (Date.now() < deadline && isProcessAlive(pid)) {
+        await sleep(200);
+      }
     }
     if (isProcessAlive(pid)) {
       assertSafeToStop(home, pid);
@@ -361,7 +366,8 @@ export async function stopDaemon(home: string): Promise<boolean> {
     );
   }
 
-  await waitForBinaryUnlocked(home);
+  // Plain stop is done once the process is dead. Only the update path needs the
+  // binary file to be unlocked (it calls waitForBinaryUnlocked itself).
   clearPid(home);
   return true;
 }
