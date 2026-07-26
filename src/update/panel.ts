@@ -12,6 +12,7 @@ import {
   parseGithubDigest,
   releaseAssetDownloadUrl,
   repoFromPanelUrl,
+  type GhAsset,
 } from "./github-client.js";
 
 const MAX_PANEL_BYTES = 20 * 1024 * 1024;
@@ -77,19 +78,53 @@ export function assertPanelContentSane(filePath: string, expectedDigest?: string
   }
 }
 
+type ResolvedPanelAsset = {
+  repo: string;
+  /** Normalized latest release version. */
+  version: string;
+  asset: GhAsset;
+  /** Required GitHub SHA-256 asset digest. */
+  expectedDigest: string;
+};
+
+/** Shared preamble: config → repo → latest release → management.html asset → digest. */
+async function resolveLatestPanelAsset(home: string): Promise<ResolvedPanelAsset> {
+  const layout = cpaLayout(home);
+  const cfg = readCpaConfig(layout.configFile);
+  const repo = repoFromPanelUrl(getPanelRepository(cfg));
+  const release = await fetchLatestReleaseViaApi(repo);
+  const version = normalizeTagVersion(release.tag_name);
+  const asset = release.assets.find((candidate) => candidate.name === "management.html");
+  if (!asset) throw new Error(`management.html not found in ${repo} ${release.tag_name}`);
+  const expectedDigest = requireGithubAssetDigest(asset.digest);
+  return { repo, version, asset, expectedDigest };
+}
+
+/**
+ * True when the recorded install matches the latest digest and is intact on disk.
+ * `checkPanelUpdate` intentionally omits the version equality: `current` reports
+ * the installed version whenever the on-disk panel is verifiably the recorded one.
+ */
+export function isPanelCurrent(
+  state: InstallState,
+  managementHtml: string,
+  version: string,
+  expectedDigest: string,
+): boolean {
+  return (
+    state.panelVersion === version &&
+    state.panelSha256 === expectedDigest &&
+    isInstalledPanelIntact(managementHtml, state)
+  );
+}
+
 export async function checkPanelUpdate(home: string): Promise<{
   current?: string;
   latest: string;
   upToDate: boolean;
 }> {
   const layout = cpaLayout(home);
-  const cfg = readCpaConfig(layout.configFile);
-  const repo = repoFromPanelUrl(getPanelRepository(cfg));
-  const release = await fetchLatestReleaseViaApi(repo);
-  const latest = normalizeTagVersion(release.tag_name);
-  const asset = release.assets.find((candidate) => candidate.name === "management.html");
-  if (!asset) throw new Error(`management.html not found in ${repo} ${release.tag_name}`);
-  const expectedDigest = requireGithubAssetDigest(asset.digest);
+  const { version: latest, expectedDigest } = await resolveLatestPanelAsset(home);
   const state = readInstallState(home);
   const intact =
     isInstalledPanelIntact(layout.managementHtml, state) &&
@@ -108,21 +143,10 @@ export async function updatePanel(
   options?: { force?: boolean },
 ): Promise<PanelUpdateResult> {
   const layout = cpaLayout(home);
-  const cfg = readCpaConfig(layout.configFile);
-  const repo = repoFromPanelUrl(getPanelRepository(cfg));
-  const release = await fetchLatestReleaseViaApi(repo);
-  const version = normalizeTagVersion(release.tag_name);
-  const asset = release.assets.find((candidate) => candidate.name === "management.html");
-  if (!asset) throw new Error(`management.html not found in ${repo} ${release.tag_name}`);
-  const expectedDigest = requireGithubAssetDigest(asset.digest);
+  const { repo, version, asset, expectedDigest } = await resolveLatestPanelAsset(home);
   const state = readInstallState(home);
 
-  if (
-    state.panelVersion === version &&
-    state.panelSha256 === expectedDigest &&
-    isInstalledPanelIntact(layout.managementHtml, state) &&
-    !options?.force
-  ) {
+  if (isPanelCurrent(state, layout.managementHtml, version, expectedDigest) && !options?.force) {
     return { version, changed: false, skipped: true };
   }
 

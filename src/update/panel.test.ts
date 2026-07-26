@@ -4,7 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { assertPanelContentSane, isInstalledPanelIntact, requireGithubAssetDigest } from "./panel.js";
+import {
+  assertPanelContentSane,
+  isInstalledPanelIntact,
+  isPanelCurrent,
+  requireGithubAssetDigest,
+} from "./panel.js";
 
 const temps: string[] = [];
 
@@ -47,6 +52,27 @@ describe("isInstalledPanelIntact", () => {
       false,
     );
     assert.equal(isInstalledPanelIntact(file, { panelVersion: "1.2.3" }), false);
+  });
+});
+
+describe("isPanelCurrent", () => {
+  it("requires version, digest, and on-disk integrity to all match", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-panel-"));
+    temps.push(dir);
+    const file = path.join(dir, "management.html");
+    const content = "<html>panel</html>";
+    fs.writeFileSync(file, content);
+    const digest = crypto.createHash("sha256").update(content).digest("hex");
+    const state = { cpaHome: dir, panelVersion: "1.2.3", panelSha256: digest };
+
+    assert.equal(isPanelCurrent(state, file, "1.2.3", digest), true);
+    // Newer release version → not current even though the file is intact.
+    assert.equal(isPanelCurrent(state, file, "1.2.4", digest), false);
+    // Digest changed upstream (re-published asset) → not current.
+    assert.equal(isPanelCurrent(state, file, "1.2.3", "b".repeat(64)), false);
+    // On-disk file tampered → not current.
+    fs.writeFileSync(file, "<html>tampered</html>");
+    assert.equal(isPanelCurrent(state, file, "1.2.3", digest), false);
   });
 });
 
