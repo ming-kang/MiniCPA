@@ -1,6 +1,6 @@
 {
   "name": "@astralyn/minicpa",
-  "version": "0.0.5",
+  "version": "0.1.0",
   "description": "Thin cpa CLI: layout, lifecycle, and updates for CLIProxyAPI",
   "license": "MIT",
   "author": "ming-kang",
