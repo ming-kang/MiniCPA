@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "./node-version-guard.js";
 import { Command } from "commander";
 import { readFileSync } from "node:fs";
 import path from "node:path";
