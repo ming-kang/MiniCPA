@@ -14,6 +14,7 @@ import {
   repoFromPanelUrl,
   type GhAsset,
 } from "./github-client.js";
+import { silentUpdateReporter, type UpdateReporter } from "./reporter.js";
 
 const MAX_PANEL_BYTES = 20 * 1024 * 1024;
 
@@ -140,8 +141,9 @@ export async function checkPanelUpdate(home: string): Promise<{
 /** Replace management.html. Skips when already latest unless force. */
 export async function updatePanel(
   home: string,
-  options?: { force?: boolean },
+  options?: { force?: boolean; reporter?: UpdateReporter },
 ): Promise<PanelUpdateResult> {
+  const reporter = options?.reporter ?? silentUpdateReporter;
   const layout = cpaLayout(home);
   const { repo, version, asset, expectedDigest } = await resolveLatestPanelAsset(home);
   const state = readInstallState(home);
@@ -156,6 +158,7 @@ export async function updatePanel(
     await downloadToFile(releaseAssetDownloadUrl(repo, asset), cachePath, {
       label: "management.html",
       maxBytes: MAX_PANEL_BYTES,
+      onProgress: (event) => reporter.progress?.(event),
     });
 
     assertPanelContentSane(cachePath, expectedDigest);

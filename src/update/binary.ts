@@ -13,6 +13,8 @@ import {
   startDaemon,
   stopDaemon,
   waitForBinaryUnlocked,
+  type RunningInfo,
+  type StartOptions,
 } from "../process/lifecycle.js";
 import {
   clearRuntimeBinaryBackup,
@@ -37,6 +39,7 @@ import {
   normalizeTagVersion,
   type GhRelease,
 } from "./github-client.js";
+import { silentUpdateReporter, type UpdateReporter } from "./reporter.js";
 
 const MAX_BINARY_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const MAX_EXTRACTED_EXECUTABLE_BYTES = 512 * 1024 * 1024;
@@ -194,6 +197,7 @@ export async function checkBinaryUpdate(home: string): Promise<{
 async function downloadFirstAvailableAsset(
   candidates: PickedReleaseAsset[],
   downloadDir: string,
+  reporter: UpdateReporter,
 ): Promise<{ picked: PickedReleaseAsset; archivePath: string }> {
   if (candidates.length === 0) {
     throw new Error("No release asset candidates for this platform");
@@ -205,6 +209,7 @@ async function downloadFirstAvailableAsset(
       await downloadToFile(picked.url, archivePath, {
         label: picked.assetName,
         maxBytes: MAX_BINARY_ARCHIVE_BYTES,
+        onProgress: (event) => reporter.progress?.(event),
       });
       return { picked, archivePath };
     } catch (err) {
@@ -222,6 +227,100 @@ async function downloadFirstAvailableAsset(
   throw lastError ?? new Error("All release asset candidates failed to download");
 }
 
+/** Process-lifecycle seam so update phase-2 failures can be tested with fakes. */
+export type BinaryUpdateDeps = {
+  stopDaemon(home: string): Promise<boolean>;
+  startDaemon(home: string, options?: StartOptions): Promise<RunningInfo>;
+  resolveRunning(home: string): RunningInfo | undefined;
+  waitForBinaryUnlocked(home: string): Promise<void>;
+};
+
+export const defaultBinaryUpdateDeps: BinaryUpdateDeps = {
+  stopDaemon,
+  startDaemon,
+  resolveRunning,
+  waitForBinaryUnlocked,
+};
+
+/**
+ * Phase 2 of a binary update: brief downtime for the in-place replace.
+ * stop → wait for file unlock → install → restart → record state → clear `.bak`.
+ * On failure: stop any half-started process, restore `.bak`, rewrite state, restart.
+ */
+export async function installBinaryPhase(
+  home: string,
+  args: {
+    version: string;
+    extractedExe: string;
+    wasRunning: boolean;
+    currentVersion?: string;
+  },
+  deps: BinaryUpdateDeps = defaultBinaryUpdateDeps,
+  reporter: UpdateReporter = silentUpdateReporter,
+): Promise<{ restarted: boolean }> {
+  const { version, extractedExe, wasRunning, currentVersion } = args;
+
+  if (wasRunning) {
+    reporter.info("Stopping CPA for binary replace…");
+    await deps.stopDaemon(home);
+  }
+
+  try {
+    await deps.waitForBinaryUnlocked(home);
+    installRuntimeBinary(home, version, extractedExe);
+
+    let restarted = false;
+    if (wasRunning) {
+      reporter.info("Restarting CPA…");
+      // startDaemon waits for HTTP ready by default.
+      await deps.startDaemon(home);
+      restarted = true;
+    }
+
+    // Only record the new version after a healthy install (+ restart when needed).
+    patchInstallState(home, {
+      runtimeVersion: version,
+      lastUpdateCheck: new Date().toISOString(),
+    });
+
+    clearRuntimeBinaryBackup(home);
+    return { restarted };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    reporter.warn("Update failed; restoring previous binary…");
+
+    // Half-started new process may still be running after a failed restart.
+    if (deps.resolveRunning(home)) {
+      try {
+        await deps.stopDaemon(home);
+      } catch {
+        /* best-effort */
+      }
+    }
+
+    restoreRuntimeBinaryFromBackup(home);
+
+    patchInstallState(home, {
+      runtimeVersion: currentVersion,
+      lastUpdateCheck: new Date().toISOString(),
+    });
+
+    if (wasRunning) {
+      try {
+        await deps.startDaemon(home);
+        throw new BinaryUpdateError(msg, true);
+      } catch (restartErr) {
+        if (restartErr instanceof BinaryUpdateError) throw restartErr;
+        const restartMessage =
+          restartErr instanceof Error ? restartErr.message : String(restartErr);
+        throw new BinaryUpdateError(`${msg}\nRestart error: ${restartMessage}`, false);
+      }
+    }
+
+    throw err;
+  }
+}
+
 /**
  * Replace CPA binary in place.
  * - Download + checksum + extract happen **before** stopping a running CPA.
@@ -232,9 +331,17 @@ async function downloadFirstAvailableAsset(
  */
 export async function updateBinary(
   home: string,
-  options?: { version?: string; force?: boolean; insecure?: boolean },
+  options?: {
+    version?: string;
+    force?: boolean;
+    insecure?: boolean;
+    reporter?: UpdateReporter;
+    deps?: BinaryUpdateDeps;
+  },
 ): Promise<BinaryUpdateResult> {
-  const wasRunning = !!resolveRunning(home);
+  const reporter = options?.reporter ?? silentUpdateReporter;
+  const deps = options?.deps ?? defaultBinaryUpdateDeps;
+  const wasRunning = !!deps.resolveRunning(home);
   const currentVersion = await readCurrentRuntimeVersion(home);
 
   const release: GhRelease = options?.version
@@ -262,78 +369,29 @@ export async function updateBinary(
   const staging = miniCpaTempExtractDir();
 
   try {
-    const { picked, archivePath } = await downloadFirstAvailableAsset(candidates, downloadDir);
+    const { picked, archivePath } = await downloadFirstAvailableAsset(
+      candidates,
+      downloadDir,
+      reporter,
+    );
     const assetName = picked.assetName;
 
     if (!options?.insecure) {
       const checksums = await fetchChecksums(release, CPA_REPO);
       verifyArchiveChecksum(checksums, archivePath, assetName);
     } else {
-      console.error("Warning: --insecure skips archive integrity verification");
+      reporter.warn("Warning: --insecure skips archive integrity verification");
     }
 
     const extractedExe = await extractArchive(archivePath, staging);
 
-    // Phase 2: brief downtime for in-place replace.
-    if (wasRunning) {
-      console.log("Stopping CPA for binary replace…");
-      await stopDaemon(home);
-    }
-
-    try {
-      await waitForBinaryUnlocked(home);
-      installRuntimeBinary(home, version, extractedExe);
-
-      let restarted = false;
-      if (wasRunning) {
-        console.log("Restarting CPA…");
-        // startDaemon waits for HTTP ready by default.
-        await startDaemon(home);
-        restarted = true;
-      }
-
-      // Only record the new version after a healthy install (+ restart when needed).
-      patchInstallState(home, {
-        runtimeVersion: version,
-        lastUpdateCheck: new Date().toISOString(),
-      });
-
-      clearRuntimeBinaryBackup(home);
-      return { version, changed: true, skipped: false, restarted };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error("Update failed; restoring previous binary…");
-
-      // Half-started new process may still be running after a failed restart.
-      if (resolveRunning(home)) {
-        try {
-          await stopDaemon(home);
-        } catch {
-          /* best-effort */
-        }
-      }
-
-      restoreRuntimeBinaryFromBackup(home);
-
-      patchInstallState(home, {
-        runtimeVersion: currentVersion,
-        lastUpdateCheck: new Date().toISOString(),
-      });
-
-      if (wasRunning) {
-        try {
-          await startDaemon(home);
-          throw new BinaryUpdateError(msg, true);
-        } catch (restartErr) {
-          if (restartErr instanceof BinaryUpdateError) throw restartErr;
-          const restartMessage =
-            restartErr instanceof Error ? restartErr.message : String(restartErr);
-          throw new BinaryUpdateError(`${msg}\nRestart error: ${restartMessage}`, false);
-        }
-      }
-
-      throw err;
-    }
+    const { restarted } = await installBinaryPhase(
+      home,
+      { version, extractedExe, wasRunning, currentVersion },
+      deps,
+      reporter,
+    );
+    return { version, changed: true, skipped: false, restarted };
   } finally {
     fs.rmSync(staging, { recursive: true, force: true });
     fs.rmSync(downloadDir, { recursive: true, force: true });

@@ -3,6 +3,7 @@ import { createContext, printHome } from "../context.js";
 import { withMiniCpaLock } from "../process/lock.js";
 import { checkBinaryUpdate, updateBinary } from "../update/binary.js";
 import { checkPanelUpdate, updatePanel } from "../update/panel.js";
+import { consoleUpdateReporter } from "../update/reporter.js";
 
 export function assertUpdateScopeFlags(opts: {
   all?: boolean;
@@ -67,9 +68,10 @@ export async function runUpdate(opts: {
   const ctx = createContext();
   printHome(ctx);
 
+  const reporter = consoleUpdateReporter();
   await withMiniCpaLock("update", async () => {
     if (opts.panelOnly) {
-      printPanelResult(await updatePanel(ctx.home, { force: opts.force }));
+      printPanelResult(await updatePanel(ctx.home, { force: opts.force, reporter }));
       return;
     }
 
@@ -78,6 +80,7 @@ export async function runUpdate(opts: {
       version: opts.version,
       force: opts.force,
       insecure: opts.insecure,
+      reporter,
     });
     if (binary.skipped) {
       console.log(`CPA already ${binary.version} (use --force to reinstall)`);
@@ -92,6 +95,6 @@ export async function runUpdate(opts: {
       return;
     }
 
-    printPanelResult(await updatePanel(ctx.home, { force: opts.force }));
+    printPanelResult(await updatePanel(ctx.home, { force: opts.force, reporter }));
   });
 }

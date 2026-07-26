@@ -277,16 +277,23 @@ export function normalizeTagVersion(tag: string): string {
 }
 
 export type DownloadOptions = {
-  /** Shown in progress line */
+  /** Shown in progress events / error messages. */
   label?: string;
   timeoutMs?: number;
   /** Override Accept / auth for GitHub API asset downloads. */
   apiAsset?: boolean;
   /** Refuse a response larger than this many bytes (both declared and streamed). */
   maxBytes?: number;
+  /** Called per chunk (done: false) and once after completion (done: true). */
+  onProgress?: (event: {
+    label: string;
+    receivedBytes: number;
+    totalBytes: number;
+    done: boolean;
+  }) => void;
 };
 
-/** Stream download to disk with optional progress on stderr. Honors proxy env via httpFetch. */
+/** Stream download to disk with optional progress callback. Honors proxy env via httpFetch. */
 export async function downloadToFile(
   url: string,
   dest: string,
@@ -329,7 +336,7 @@ export async function downloadToFile(
 
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   let received = 0;
-  let lastPct = -1;
+  const onProgress = options?.onProgress;
 
   const nodeBody = Readable.fromWeb(res.body as import("node:stream/web").ReadableStream);
   const limiter = new Transform({
@@ -340,24 +347,14 @@ export async function downloadToFile(
         callback(new Error(`Download exceeds ${formatBytes(maxBytes)} limit: ${label}`));
         return;
       }
-      if (total > 0) {
-        const pct = Math.min(100, Math.floor((received / total) * 100));
-        if (pct !== lastPct && (pct % 5 === 0 || pct === 100)) {
-          lastPct = pct;
-          process.stderr.write(
-            `\rDownloading ${label}: ${pct}% (${formatBytes(received)} / ${formatBytes(total)})`,
-          );
-        }
-      } else if (received === n || received % (2 * 1024 * 1024) < n) {
-        process.stderr.write(`\rDownloading ${label}: ${formatBytes(received)}`);
-      }
+      onProgress?.({ label, receivedBytes: received, totalBytes: total, done: false });
       callback(null, chunk);
     },
   });
 
   try {
     await pipeline(nodeBody, limiter, fs.createWriteStream(dest));
-    if (total > 0 || received > 0) process.stderr.write("\n");
+    onProgress?.({ label, receivedBytes: received, totalBytes: total, done: true });
     if (received === 0) {
       try {
         fs.unlinkSync(dest);
