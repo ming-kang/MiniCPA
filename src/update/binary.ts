@@ -23,7 +23,7 @@ import {
   restoreRuntimeBinaryFromBackup,
 } from "../process/runtime.js";
 import { patchInstallState, readInstallState } from "../state.js";
-import { sha256File } from "../util.js";
+import { removeDirBestEffort, sha256File } from "../util.js";
 import {
   CPA_REPO,
   cpaAssetNameCandidates,
@@ -393,7 +393,8 @@ export async function updateBinary(
     );
     return { version, changed: true, skipped: false, restarted };
   } finally {
-    fs.rmSync(staging, { recursive: true, force: true });
-    fs.rmSync(downloadDir, { recursive: true, force: true });
+    // Never let temp cleanup turn a completed update into a reported failure.
+    removeDirBestEffort(staging, (message) => reporter.warn(message));
+    removeDirBestEffort(downloadDir, (message) => reporter.warn(message));
   }
 }

@@ -4,7 +4,7 @@ import { getPanelRepository, readCpaConfig } from "../config-yaml.js";
 import { writeFileAtomic } from "../fs-atomic.js";
 import { cpaLayout, ensureDir, miniCpaTempDownloadDir } from "../paths.js";
 import { readInstallState, type InstallState, patchInstallState } from "../state.js";
-import { sha256File } from "../util.js";
+import { removeDirBestEffort, sha256File } from "../util.js";
 import {
   downloadToFile,
   fetchLatestReleaseViaApi,
@@ -174,6 +174,7 @@ export async function updatePanel(
 
     return { version, changed: true, skipped: false };
   } finally {
-    fs.rmSync(downloadDir, { recursive: true, force: true });
+    // Never let temp cleanup turn a completed update into a reported failure.
+    removeDirBestEffort(downloadDir, (message) => reporter.warn(message));
   }
 }

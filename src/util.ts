@@ -121,6 +121,19 @@ function tryUnlink(file: string): void {
   }
 }
 
+/**
+ * Remove a directory tree without letting cleanup failures mask a caller's
+ * result (Windows AV can hold fresh files with EBUSY/EPERM).
+ */
+export function removeDirBestEffort(dir: string, warn?: (message: string) => void): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    warn?.(`Warning: could not remove temporary directory ${dir}: ${message}`);
+  }
+}
+
 export function sha256File(file: string): string {
   const hash = crypto.createHash("sha256");
   hash.update(fs.readFileSync(file));
