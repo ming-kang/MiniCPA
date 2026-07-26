@@ -61,13 +61,19 @@ export function resolveRunning(home: string): RunningInfo | undefined {
     return undefined;
   }
 
+  // A matching spawn-time start marker (boot id + start ticks) is PID-reuse-proof,
+  // so it alone verifies ownership when the executable probe is inconclusive.
+  // With both probes inconclusive we stay fail-closed for kill decisions.
+  const markerVerified =
+    !!record.startMarker && !!currentStartMarker && record.startMarker === currentStartMarker;
+  const markerDegraded = !!record.startMarker && !currentStartMarker;
+  const identityUnknown = identity === "unknown" ? !markerVerified : markerDegraded;
+
   return {
     pid: record.pid,
     exe: exe || record.exe,
     startedAt: record.startedAt || undefined,
-    identityUnknown:
-      identity === "unknown" ||
-      (!!record.startMarker && !currentStartMarker),
+    identityUnknown,
   };
 }
 

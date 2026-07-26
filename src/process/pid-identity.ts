@@ -30,14 +30,24 @@ export function imageMatchesExpectedExe(imageOrComm: string, expectedExe: string
   return false;
 }
 
-function runPowerShell(script: string): string | undefined {
-  for (const shell of ["powershell.exe", "pwsh.exe"]) {
+/**
+ * PowerShell cold starts routinely exceed a few seconds on throttled machines;
+ * remember which shell answered so later probes skip the dead candidate.
+ */
+let cachedPowerShell: string | undefined;
+
+function runPowerShell(script: string, timeoutMs = 10_000): string | undefined {
+  const shells = cachedPowerShell
+    ? [cachedPowerShell, ...["powershell.exe", "pwsh.exe"].filter((s) => s !== cachedPowerShell)]
+    : ["powershell.exe", "pwsh.exe"];
+  for (const shell of shells) {
     try {
       const output = execFileSync(
         shell,
         ["-NoProfile", "-NonInteractive", "-Command", script],
-        { encoding: "utf8", windowsHide: true, timeout: 3_000 },
+        { encoding: "utf8", windowsHide: true, timeout: timeoutMs },
       ).trim();
+      cachedPowerShell = shell;
       if (output) return output;
     } catch {
       /* try the other PowerShell executable */
