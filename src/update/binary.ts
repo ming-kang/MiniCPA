@@ -133,6 +133,9 @@ export async function extractArchive(
   }
 
   if (archivePath.endsWith(".tar.gz") || archivePath.endsWith(".tgz")) {
+    // A throw inside the tar filter escapes as an uncaught stream error, so
+    // record violations and fail after extraction finishes instead.
+    let oversizedEntry: string | undefined;
     await tar.x({
       file: archivePath,
       cwd: destDir,
@@ -144,13 +147,17 @@ export async function extractArchive(
         const base = path.posix.basename(entryPath.replace(/\\/g, "/"));
         const size = (entry as { size?: number }).size;
         if (typeof size === "number" && size > maxExtractedBytes) {
-          throw new Error(`${exeName} in ${archivePath} exceeds extraction size limit`);
+          oversizedEntry = entryPath;
+          return false;
         }
         // Allow directories so nested layouts extract parents; tar may still need them.
         if (type === "Directory" || entryPath.endsWith("/")) return true;
         return base === exeName;
       },
     });
+    if (oversizedEntry) {
+      throw new Error(`${exeName} in ${archivePath} exceeds extraction size limit`);
+    }
     return findSafeExtractedExecutable(destDir, exeName);
   }
 
