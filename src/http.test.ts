@@ -50,20 +50,28 @@ describe("formatNetworkError", () => {
         code: "UND_ERR_CONNECT_TIMEOUT",
       }),
     });
-    const previous = process.env.HTTPS_PROXY;
-    delete process.env.HTTPS_PROXY;
-    delete process.env.HTTP_PROXY;
-    delete process.env.ALL_PROXY;
-    delete process.env.https_proxy;
-    delete process.env.http_proxy;
-    delete process.env.all_proxy;
+    const proxyKeys = [
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "ALL_PROXY",
+      "https_proxy",
+      "http_proxy",
+      "all_proxy",
+    ] as const;
+    const previous = new Map<string, string | undefined>(
+      proxyKeys.map((key) => [key, process.env[key]]),
+    );
+    for (const key of proxyKeys) delete process.env[key];
     try {
       const message = formatNetworkError(err, "https://github.com/foo");
       assert.match(message, /github\.com/);
       assert.match(message, /UND_ERR_CONNECT_TIMEOUT|Connect Timeout/);
       assert.match(message, /HTTPS_PROXY/);
     } finally {
-      if (previous !== undefined) process.env.HTTPS_PROXY = previous;
+      for (const [key, value] of previous) {
+        if (value !== undefined) process.env[key] = value;
+        else delete process.env[key];
+      }
     }
   });
 });

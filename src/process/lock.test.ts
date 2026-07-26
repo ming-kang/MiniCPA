@@ -31,7 +31,7 @@ afterEach(() => {
   }
   for (const pid of childPids.splice(0)) {
     try {
-      process.kill(pid, "SIGTERM");
+      process.kill(pid, "SIGKILL");
     } catch {
       /* ignore */
     }
@@ -45,13 +45,10 @@ afterEach(() => {
 });
 
 function spawnLiveHolder(): number {
-  const child =
-    process.platform === "win32"
-      ? spawn("ping", ["-n", "30", "127.0.0.1"], {
-          stdio: "ignore",
-          windowsHide: true,
-        })
-      : spawn("sleep", ["30"], { stdio: "ignore" });
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
   if (!child.pid) throw new Error("failed to spawn holder");
   childPids.push(child.pid);
   return child.pid;
