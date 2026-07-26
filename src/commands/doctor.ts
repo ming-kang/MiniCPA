@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { getListenAddress, LEGACY_DEFAULT_API_KEY, readCpaConfig } from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
 import { describeProxyEnv, hasProxyEnvConfigured, httpFetch } from "../http.js";
-import { activeExecutablePath, backupExecutablePath, cliConfigPath, miniCpaTempRoot } from "../paths.js";
+import { backupExecutablePath, cliConfigPath, miniCpaTempRoot, unlockProbePath } from "../paths.js";
 import { readinessUrls, waitForAnyHttpOk } from "../process/health.js";
 import { resolveRunning } from "../process/lifecycle.js";
 import { readCurrentRuntimeVersion, resolveRunnableExecutable } from "../process/runtime.js";
@@ -145,7 +145,7 @@ export async function runDoctor(): Promise<void> {
     );
   }
 
-  const unlockProbe = `${activeExecutablePath(ctx.home)}.unlock-probe`;
+  const unlockProbe = unlockProbePath(ctx.home);
   if (fs.existsSync(unlockProbe)) {
     console.log(
       `[warn] unlock-probe residue present (${unlockProbe}) — run cpa start to recover or rename to the active binary`,

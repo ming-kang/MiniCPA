@@ -1,6 +1,12 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import { activeExecutablePath, cpaLayout, ensureDir, hardenCpaPermissions } from "../paths.js";
+import {
+  activeExecutablePath,
+  cpaLayout,
+  ensureDir,
+  hardenCpaPermissions,
+  unlockProbePath,
+} from "../paths.js";
 import { clearPid, readPidRecord, writePidRecord } from "../state.js";
 import { rotateFileIfLarge, sleep, tailFile } from "../util.js";
 import { isProcessAlive } from "./alive.js";
@@ -130,7 +136,7 @@ export async function waitForBinaryUnlocked(
   let delay = 150;
   while (Date.now() < deadline) {
     recoverUnlockProbeBinary(home);
-    const probe = `${target}.unlock-probe`;
+    const probe = unlockProbePath(home);
     try {
       fs.renameSync(target, probe);
       try {

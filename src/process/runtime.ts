@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import { activeExecutablePath, backupExecutablePath, ensureDir } from "../paths.js";
+import { activeExecutablePath, backupExecutablePath, ensureDir, unlockProbePath } from "../paths.js";
 import { buildCpaChildEnv } from "./child-env.js";
 
 export async function runCommand(
@@ -166,7 +166,7 @@ export function clearRuntimeBinaryBackup(home: string): void {
 /** If a crash left the binary as `*.unlock-probe`, restore the canonical name. */
 export function recoverUnlockProbeBinary(home: string): boolean {
   const active = activeExecutablePath(home);
-  const probe = `${active}.unlock-probe`;
+  const probe = unlockProbePath(home);
   if (fs.existsSync(active) || !fs.existsSync(probe)) return false;
   try {
     fs.renameSync(probe, active);

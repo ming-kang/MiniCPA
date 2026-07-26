@@ -205,6 +205,11 @@ export function backupExecutablePath(home: string): string {
   return `${activeExecutablePath(home)}.bak`;
 }
 
+/** Transient name the active binary takes during the Windows unlock probe. */
+export function unlockProbePath(home: string): string {
+  return `${activeExecutablePath(home)}.unlock-probe`;
+}
+
 /** Create a MiniCPA-private directory (0700 on POSIX). */
 export function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
