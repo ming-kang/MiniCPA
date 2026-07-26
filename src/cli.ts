@@ -19,10 +19,9 @@ import {
   parseLogLineCount,
 } from "./commands/lifecycle-cmd.js";
 import { assertUpdateScopeFlags, runUpdate, runUpdateCheck } from "./commands/update-cmd.js";
+import { runVersion } from "./commands/version-cmd.js";
 import { createContext } from "./context.js";
 import { miniCpaRoot, miniCpaTempRoot } from "./paths.js";
-import { readCurrentRuntimeVersion } from "./process/runtime.js";
-import { readInstallState } from "./state.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -163,13 +162,7 @@ program
 
 program.command("version").description("Show MiniCPA and CPA runtime versions").action(
   withCliErrors(async () => {
-    const ctx = createContext();
-    const state = readInstallState(ctx.home);
-    const runtime = await readCurrentRuntimeVersion(ctx.home);
-    console.log(`minicpa   ${pkg.version}`);
-    console.log(`CPA home  ${ctx.home}`);
-    console.log(`cpa       ${runtime ?? "(not installed)"}`);
-    console.log(`panel     ${state.panelVersion ?? "-"}`);
+    await runVersion(pkg.version);
   }),
 );
 
@@ -180,13 +173,17 @@ program.command("home").description("Print the single CPA instance directory").a
   }),
 );
 
-program.command("root").description("Print MiniCPA root (persistent data)").action(() => {
-  console.log(miniCpaRoot());
-});
+program.command("root").description("Print MiniCPA root (persistent data)").action(
+  withCliErrors(async () => {
+    console.log(miniCpaRoot());
+  }),
+);
 
-program.command("temp").description("Print private staging directory").action(() => {
-  console.log(miniCpaTempRoot());
-});
+program.command("temp").description("Print private staging directory").action(
+  withCliErrors(async () => {
+    console.log(miniCpaTempRoot());
+  }),
+);
 
 try {
   await program.parseAsync(process.argv);

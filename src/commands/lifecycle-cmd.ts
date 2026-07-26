@@ -1,11 +1,10 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs";
+import { openInBrowser } from "../browser.js";
 import { createContext, printHome } from "../context.js";
-import { buildCpaChildEnv } from "../process/child-env.js";
 import { apiBaseUrl, managementUrl, readinessUrls, waitForAnyHttpOk, waitForHttpOk } from "../process/health.js";
-import { resolveRunning, startDaemon, stopDaemon } from "../process/lifecycle.js";
+import { resolveRunning, runCpaTuiProcess, startDaemon, stopDaemon } from "../process/lifecycle.js";
 import { withMiniCpaLock } from "../process/lock.js";
-import { readCurrentRuntimeVersion, resolveRunnableExecutable } from "../process/runtime.js";
+import { readCurrentRuntimeVersion } from "../process/runtime.js";
 import { tailFile } from "../util.js";
 
 export function parseLogLineCount(value: string): number {
@@ -86,26 +85,6 @@ export async function runOpen(): Promise<void> {
   }
   await openInBrowser(url);
   console.log(url);
-}
-
-async function openInBrowser(url: string): Promise<void> {
-  const command =
-    process.platform === "win32"
-      ? "rundll32.exe"
-      : process.platform === "darwin"
-        ? "open"
-        : "xdg-open";
-  const args =
-    process.platform === "win32" ? ["url.dll,FileProtocolHandler", url] : [url];
-
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, { detached: true, stdio: "ignore" });
-    child.once("error", reject);
-    child.once("spawn", () => {
-      child.unref();
-      resolve();
-    });
-  });
 }
 
 export async function runLogs(opts: {
@@ -214,24 +193,5 @@ export async function runTui(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  const exe = resolveRunnableExecutable(ctx.home);
-  const child = spawn(exe, ["-config", ctx.layout.configFile, "-tui"], {
-    cwd: ctx.home,
-    stdio: "inherit",
-    env: buildCpaChildEnv(),
-  });
-  await new Promise<void>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code, signal) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(
-        new Error(
-          signal ? `CPA TUI terminated by ${signal}` : `CPA TUI exited with code ${code ?? 1}`,
-        ),
-      );
-    });
-  });
+  await runCpaTuiProcess(ctx.home);
 }

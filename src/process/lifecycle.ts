@@ -271,6 +271,31 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
   return { pid: child.pid, exe, startedAt };
 }
 
+/** Run the official CPA terminal UI attached to the current terminal. */
+export async function runCpaTuiProcess(home: string): Promise<void> {
+  const layout = cpaLayout(home);
+  const exe = resolveRunnableExecutable(home);
+  const child = spawn(exe, ["-config", layout.configFile, "-tui"], {
+    cwd: home,
+    stdio: "inherit",
+    env: buildCpaChildEnv(),
+  });
+  await new Promise<void>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          signal ? `CPA TUI terminated by ${signal}` : `CPA TUI exited with code ${code ?? 1}`,
+        ),
+      );
+    });
+  });
+}
+
 export async function stopDaemon(home: string): Promise<boolean> {
   const running = resolveRunning(home);
   if (!running) {
