@@ -3,7 +3,7 @@ import path from "node:path";
 import { getPanelRepository, readCpaConfig } from "../config-yaml.js";
 import { writeFileAtomic } from "../fs-atomic.js";
 import { cpaLayout, ensureDir, miniCpaTempDownloadDir } from "../paths.js";
-import { readInstallState, type InstallState, writeInstallState } from "../state.js";
+import { readInstallState, type InstallState, patchInstallState } from "../state.js";
 import { sha256File } from "../util.js";
 import {
   downloadToFile,
@@ -139,10 +139,7 @@ export async function updatePanel(
     ensureDir(layout.staticDir);
     writeFileAtomic(layout.managementHtml, fs.readFileSync(cachePath));
 
-    const next = readInstallState(home);
-    writeInstallState(home, {
-      ...next,
-      cpaHome: home,
+    patchInstallState(home, {
       panelVersion: version,
       panelSha256: sha256File(layout.managementHtml),
       lastUpdateCheck: new Date().toISOString(),

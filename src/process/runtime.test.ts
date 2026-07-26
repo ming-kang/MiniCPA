@@ -32,7 +32,7 @@ describe("readCurrentRuntimeVersion", () => {
   it("does not trust a recorded version when the binary is missing", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-runtime-"));
     temps.push(home);
-    writeInstallState(home, { cpaHome: home, runtimeVersion: "7.0.0" });
+    writeInstallState(home, { runtimeVersion: "7.0.0" });
 
     assert.equal(fs.existsSync(activeExecutablePath(home)), false);
     assert.equal(await readCurrentRuntimeVersion(home), undefined);
@@ -47,7 +47,7 @@ describe("readCurrentRuntimeVersion", () => {
       const executable = activeExecutablePath(home);
       fs.writeFileSync(executable, "#!/bin/sh\necho 'CLIProxyAPI Version: 8.0.0'\n");
       fs.chmodSync(executable, 0o755);
-      writeInstallState(home, { cpaHome: home, runtimeVersion: "7.0.0" });
+      writeInstallState(home, { runtimeVersion: "7.0.0" });
 
       assert.equal(await readCurrentRuntimeVersion(home), "8.0.0");
       assert.equal(readInstallState(home).runtimeVersion, "7.0.0");
@@ -59,7 +59,7 @@ describe("readCurrentRuntimeVersion", () => {
     temps.push(home);
     const executable = activeExecutablePath(home);
     fs.writeFileSync(executable, "not an executable");
-    writeInstallState(home, { cpaHome: home, runtimeVersion: "7.0.0" });
+    writeInstallState(home, { runtimeVersion: "7.0.0" });
 
     assert.equal(await readCurrentRuntimeVersion(home), undefined);
   });

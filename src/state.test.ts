@@ -3,7 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { readInstallState, readPidRecord, writeInstallState, writePidRecord } from "./state.js";
+import {
+  patchInstallState,
+  readInstallState,
+  readPidRecord,
+  writeInstallState,
+  writePidRecord,
+} from "./state.js";
 
 const temps: string[] = [];
 
@@ -26,8 +32,30 @@ describe("readInstallState", () => {
   it("round-trips via writeInstallState", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-state-"));
     temps.push(home);
-    writeInstallState(home, { cpaHome: home, runtimeVersion: "1.2.3" });
+    writeInstallState(home, { runtimeVersion: "1.2.3" });
     assert.equal(readInstallState(home).runtimeVersion, "1.2.3");
+  });
+});
+
+describe("patchInstallState", () => {
+  it("merges without touching absent keys", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-state-"));
+    temps.push(home);
+    writeInstallState(home, { runtimeVersion: "1.0.0", panelVersion: "2.0.0" });
+    patchInstallState(home, { runtimeVersion: "1.1.0" });
+    const state = readInstallState(home);
+    assert.equal(state.runtimeVersion, "1.1.0");
+    assert.equal(state.panelVersion, "2.0.0");
+  });
+
+  it("clears a field when the patch sets it to undefined", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-state-"));
+    temps.push(home);
+    writeInstallState(home, { runtimeVersion: "1.0.0", panelVersion: "2.0.0" });
+    patchInstallState(home, { runtimeVersion: undefined });
+    const state = readInstallState(home);
+    assert.equal(state.runtimeVersion, undefined);
+    assert.equal(state.panelVersion, "2.0.0");
   });
 });
 

@@ -20,7 +20,7 @@ import {
   readCurrentRuntimeVersion,
   restoreRuntimeBinaryFromBackup,
 } from "../process/runtime.js";
-import { readInstallState, writeInstallState } from "../state.js";
+import { patchInstallState, readInstallState } from "../state.js";
 import { sha256File } from "../util.js";
 import {
   downloadToFile,
@@ -279,10 +279,7 @@ export async function updateBinary(
       }
 
       // Only record the new version after a healthy install (+ restart when needed).
-      const next = readInstallState(home);
-      writeInstallState(home, {
-        ...next,
-        cpaHome: home,
+      patchInstallState(home, {
         runtimeVersion: version,
         lastUpdateCheck: new Date().toISOString(),
       });
@@ -304,10 +301,7 @@ export async function updateBinary(
 
       restoreRuntimeBinaryFromBackup(home);
 
-      const next = readInstallState(home);
-      writeInstallState(home, {
-        ...next,
-        cpaHome: home,
+      patchInstallState(home, {
         runtimeVersion: currentVersion,
         lastUpdateCheck: new Date().toISOString(),
       });

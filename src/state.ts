@@ -47,7 +47,7 @@ export function readInstallState(home: string): InstallState {
   }
 }
 
-export function writeInstallState(home: string, state: InstallState): void {
+export function writeInstallState(home: string, state: Omit<InstallState, "cpaHome">): void {
   const layout = cpaLayout(home);
   ensureDir(layout.stateDir);
   const clean: InstallState = {
@@ -58,6 +58,23 @@ export function writeInstallState(home: string, state: InstallState): void {
     lastUpdateCheck: state.lastUpdateCheck,
   };
   writeFileAtomic(layout.installStateFile, JSON.stringify(clean, null, 2) + "\n");
+}
+
+/**
+ * Read-merge-write helper. A key explicitly present in `patch` with value
+ * `undefined` clears that field (writeInstallState drops undefined fields);
+ * keys absent from `patch` keep their current value.
+ */
+export function patchInstallState(
+  home: string,
+  patch: Partial<Omit<InstallState, "cpaHome">>,
+): InstallState {
+  const merged: InstallState = { ...readInstallState(home) };
+  for (const key of Object.keys(patch) as (keyof typeof patch)[]) {
+    merged[key] = patch[key];
+  }
+  writeInstallState(home, merged);
+  return { ...merged, cpaHome: home };
 }
 
 export function readPidRecord(home: string): PidRecord | undefined {
