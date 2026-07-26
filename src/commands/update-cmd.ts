@@ -1,3 +1,4 @@
+import { formatCliError } from "../cli-errors.js";
 import { createContext, printHome } from "../context.js";
 import { withMiniCpaLock } from "../process/lock.js";
 import { checkBinaryUpdate, updateBinary } from "../update/binary.js";
@@ -37,7 +38,7 @@ export async function runUpdateCheck(): Promise<void> {
     );
   } catch (err) {
     panelError = true;
-    console.log(`Panel       error (${(err as Error).message})`);
+    console.log(`Panel       error (${formatCliError(err)})`);
   }
 
   // Exit 1 when outdated or when panel check failed (do not treat errors as up-to-date).

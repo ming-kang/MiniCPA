@@ -77,10 +77,7 @@ export async function runOpen(): Promise<void> {
   const url = managementUrl(ctx.home);
   const ok = await waitForHttpOk(url, 3000);
   if (!ok) {
-    console.error(`CPA does not appear reachable at ${url}`);
-    console.error("Run: cpa start");
-    process.exitCode = 1;
-    return;
+    throw new Error(`CPA does not appear reachable at ${url}. Run: cpa start`);
   }
   await openInBrowser(url);
   console.log(url);
@@ -102,9 +99,7 @@ export async function runLogs(opts: {
       : [outFile, errFile].filter((f) => fs.existsSync(f) || f === outFile);
     const existing = files.filter((f) => fs.existsSync(f));
     if (existing.length === 0) {
-      console.error(`No log files yet under ${ctx.layout.logsDir}`);
-      process.exitCode = 1;
-      return;
+      throw new Error(`No log files yet under ${ctx.layout.logsDir}`);
     }
     await tailFollowMany(existing);
     return;
@@ -112,9 +107,7 @@ export async function runLogs(opts: {
 
   if (opts.errOnly) {
     if (!fs.existsSync(errFile)) {
-      console.error(`Log not found: ${errFile}`);
-      process.exitCode = 1;
-      return;
+      throw new Error(`Log not found: ${errFile}`);
     }
     printTail(errFile, n);
     return;
@@ -123,9 +116,7 @@ export async function runLogs(opts: {
   const hasOut = fs.existsSync(outFile);
   const hasErr = fs.existsSync(errFile);
   if (!hasOut && !hasErr) {
-    console.error(`No log files yet under ${ctx.layout.logsDir}`);
-    process.exitCode = 1;
-    return;
+    throw new Error(`No log files yet under ${ctx.layout.logsDir}`);
   }
 
   if (hasOut) {
@@ -188,9 +179,7 @@ export async function runTui(): Promise<void> {
   const ctx = createContext();
   const running = resolveRunning(ctx.home);
   if (!running) {
-    console.error("CPA is not running. Run: cpa start");
-    process.exitCode = 1;
-    return;
+    throw new Error("CPA is not running. Run: cpa start");
   }
   await runCpaTuiProcess(ctx.home);
 }

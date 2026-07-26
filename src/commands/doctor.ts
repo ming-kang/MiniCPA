@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { formatCliError } from "../cli-errors.js";
 import { getListenAddress, LEGACY_DEFAULT_API_KEY, readCpaConfig } from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
 import { describeProxyEnv, hasProxyEnvConfigured, httpFetch } from "../http.js";
@@ -50,7 +51,7 @@ export async function runDoctor(): Promise<void> {
         console.log("[warn] non-loopback host with legacy default api-key is unsafe");
       }
     } catch (err) {
-      console.log(`[fail] config.yaml parse error: ${(err as Error).message}`);
+      console.log(`[fail] config.yaml parse error: ${formatCliError(err)}`);
       ok = false;
     }
   }
@@ -215,7 +216,7 @@ export async function runDoctor(): Promise<void> {
       console.log(`[warn] GitHub API HTTP ${res.status}`);
     }
   } catch (err) {
-    console.log(`[warn] GitHub unreachable: ${(err as Error).message}`);
+    console.log(`[warn] GitHub unreachable: ${formatCliError(err)}`);
   }
 
   process.exitCode = ok ? 0 : 1;
