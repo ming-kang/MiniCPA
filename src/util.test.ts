@@ -6,7 +6,6 @@ import { afterEach, describe, it } from "node:test";
 import {
   directorySizeBytes,
   formatBytes,
-  parseCpaVersionFromHelp,
   rotateFileIfLarge,
   tailFile,
 } from "./util.js";
@@ -24,19 +23,6 @@ function tempDir(): string {
   temps.push(dir);
   return dir;
 }
-
-describe("parseCpaVersionFromHelp", () => {
-  it("extracts version line", () => {
-    assert.equal(
-      parseCpaVersionFromHelp("CLIProxyAPI Version: 7.2.66\nUsage:"),
-      "7.2.66",
-    );
-  });
-
-  it("returns undefined when missing", () => {
-    assert.equal(parseCpaVersionFromHelp("no version here"), undefined);
-  });
-});
 
 describe("formatBytes", () => {
   it("formats units", () => {

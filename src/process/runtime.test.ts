@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { activeExecutablePath } from "../paths.js";
 import { readInstallState, writeInstallState } from "../state.js";
-import { readCurrentRuntimeVersion } from "./runtime.js";
+import { parseCpaVersionFromHelp, readCurrentRuntimeVersion } from "./runtime.js";
 
 const temps: string[] = [];
 
@@ -13,6 +13,19 @@ afterEach(() => {
   for (const dir of temps.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe("parseCpaVersionFromHelp", () => {
+  it("extracts version line", () => {
+    assert.equal(
+      parseCpaVersionFromHelp("CLIProxyAPI Version: 7.2.66\nUsage:"),
+      "7.2.66",
+    );
+  });
+
+  it("returns undefined when missing", () => {
+    assert.equal(parseCpaVersionFromHelp("no version here"), undefined);
+  });
 });
 
 describe("readCurrentRuntimeVersion", () => {
