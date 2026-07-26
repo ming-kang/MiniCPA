@@ -298,14 +298,21 @@ export async function installBinaryPhase(
       }
     }
 
-    restoreRuntimeBinaryFromBackup(home);
+    const restored = restoreRuntimeBinaryFromBackup(home);
 
+    // Never record a version when no binary is on disk to back it.
     patchInstallState(home, {
-      runtimeVersion: currentVersion,
+      runtimeVersion: restored ? currentVersion : undefined,
       lastUpdateCheck: new Date().toISOString(),
     });
 
     if (wasRunning) {
+      if (!restored) {
+        throw new BinaryUpdateError(
+          `${msg}\nBackup missing; previous binary not restored. Run: cpa update`,
+          false,
+        );
+      }
       try {
         await deps.startDaemon(home);
         throw new BinaryUpdateError(msg, true);

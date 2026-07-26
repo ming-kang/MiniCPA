@@ -190,5 +190,7 @@ export function resolveRunnableExecutable(home: string): string {
   recoverUnlockProbeBinary(home);
   const active = activeExecutablePath(home);
   if (fs.existsSync(active)) return active;
+  // A crash between move-aside and rename can leave only `.bak`; use it.
+  if (restoreRuntimeBinaryFromBackup(home) && fs.existsSync(active)) return active;
   throw new Error(`CPA binary not found under ${home}. Run: cpa update`);
 }
