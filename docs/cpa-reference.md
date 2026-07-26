@@ -31,10 +31,11 @@ MiniCPA manages one instance. `cpa home` prints its location. `--home` and `CPA_
 
 - `cpa start`, `stop`, `restart`, `init`, and `update` take one exclusive lock at `<cpa root>/state/cpa.lock` (atomic create via `O_EXCL` / `wx`).
 - If another MiniCPA command holds the lock, you get an error naming its PID — wait and retry.
-- Stale locks (dead PID) are preempted automatically, then re-claimed with exclusive create.
-- PID ownership requires an exact executable-path match. If MiniCPA cannot verify ownership, it preserves the PID record to avoid a duplicate start and **refuses to terminate the process**.
-- Stop waits for process death after force-kill before clearing the PID file.
-- Windows stop: soft `taskkill /T`, grace period, then `/F`. Unlock probes recover `*.unlock-probe` residue. MiniCPA waits up to ~30s (backoff) for the binary file lock; if still locked, the command fails with a clear error.
+- Stale locks (dead PID, or PID reuse detected via a process start marker) are preempted safely: the lock is renamed aside, its content re-verified against the stale decision, and only then removed. A freshly created but not-yet-written lock is waited out, never deleted.
+- PID ownership requires an exact executable-path match **or** a matching spawn-time start marker (boot id + process start time, immune to PID reuse). If neither can be verified, MiniCPA preserves the PID record to avoid a duplicate start and **refuses to terminate the process**.
+- Stop waits for process death after force-kill before clearing the PID file. `cpa stop` no longer waits for the binary **file** to become unlocked — that wait belongs to `cpa update`, which performs it before replacing the binary.
+- Windows stop: soft `taskkill /T`; when the graceful signal cannot be delivered (typical for the windowless background process), MiniCPA force-kills immediately instead of waiting out the grace period, so stop completes in about a second. Unlock probes recover `*.unlock-probe` residue; the update path waits up to ~30s (backoff) for the binary file lock.
+- `cpa start` and `cpa doctor` print warnings when `host`/`port` in `config.yaml` are invalid and defaults were substituted.
 - Readiness probes try `/management.html` then `/` so binary-only installs can start without a panel.
 - On `cpa start`, logs larger than **50 MiB** are rotated to `cpa.log.1` / `cpa.err.log.1` (keeps two generations).
 
@@ -44,7 +45,9 @@ MiniCPA manages one instance. `cpa home` prints its location. `--home` and `CPA_
 - Release discovery prefers `github.com/releases/latest` redirects and browser download URLs; REST API is fallback only.
 - Asset names try current upstream labels (`aarch64`, `no-plugin`) then legacy aliases (`arm64`, `portable`); 404s try the next candidate.
 - Binary path: **download → checksum → extract** while CPA may still be running, then **stop → replace → restart** only for the install window. Network/checksum failures do **not** stop a running instance.
-- On install failure, MiniCPA restores `.bak` when present (running or not), rewrites prior `runtimeVersion`, and if it was running: stop → restore → start.
+- On install failure, MiniCPA restores `.bak` when present (running or not) and rewrites the prior `runtimeVersion` **only when the restore succeeded** — install state never claims a version with no binary on disk. If it was running: stop → restore → start.
+- `cpa start` auto-recovers from crash residue: `*.unlock-probe` renames and, when the active binary is missing, the `.bak` rollback copy.
+- Failures while removing temp staging after an update are reported as warnings, never as an update failure; `cpa clean` removes the residue.
 - Outbound GitHub/API calls retry transient errors (429/5xx/timeouts) a few times with backoff.
 - Binary integrity: downloads release `checksums.txt` and verifies the **archive** SHA-256. Panel updates fetch GitHub release metadata and require the published asset SHA-256 digest; a missing digest fails closed.
 - Already-latest versions are **skipped** unless you pass `--force` (or `--version` for a specific binary tag).

@@ -6,7 +6,7 @@ MiniCPA manages **one CPA instance**. `cpa update` replaces that instance's bina
 
 ## Install
 
-Requires **Node.js 24+**.
+Requires **Node.js 24+** (older Node versions exit immediately with a clear error).
 
 ```bash
 npm install -g @astralyn/minicpa
@@ -59,7 +59,8 @@ See [docs/cpa-reference.md](docs/cpa-reference.md) for startup details, single-i
 
 | Command | Notes |
 |---------|--------|
-| `cpa start` | Waits until HTTP is ready (`--no-wait` to skip). Exclusive single-instance lock. Rotates logs ≥ 50 MiB. |
+| `cpa start` | Waits until HTTP is ready (`--no-wait` to skip). Exclusive single-instance lock. Rotates logs ≥ 50 MiB. Warns on invalid `host`/`port` in config.yaml. |
+| `cpa stop` | Stops the process only — it does not wait for the binary file to unlock (update handles that), so Windows stop is fast. |
 | `cpa logs` | stdout + stderr; `--err` for error log only; `-f` follow |
 | `cpa update` | **Default: binary + panel.** Download/verify first, then stop/replace/restart if needed. Binary checksums and the panel's GitHub SHA-256 asset digest are required unless `--insecure` is used for the binary. |
 | `cpa update --binary` / `--panel` / `--all` | Limit scope (**mutually exclusive**) |
