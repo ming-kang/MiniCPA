@@ -18,16 +18,19 @@ export function parseLogLineCount(value: string): number {
   return parsed;
 }
 
+function printRunningSummary(ctx: ReturnType<typeof createContext>, pid: number): void {
+  printHome(ctx);
+  console.log(`Running   PID=${pid}`);
+  console.log(`API       ${apiBaseUrl(ctx.home)}`);
+  console.log(`Manage    ${managementUrl(ctx.home)}`);
+}
+
 export async function runStart(opts: { noWait?: boolean }): Promise<void> {
   const ctx = createContext();
   const running = await withMiniCpaLock("start", () =>
     startDaemon(ctx.home, { noWait: opts.noWait }),
   );
-  const base = apiBaseUrl(ctx.home);
-  printHome(ctx);
-  console.log(`Running   PID=${running.pid}`);
-  console.log(`API       ${base}`);
-  console.log(`Manage    ${managementUrl(ctx.home)}`);
+  printRunningSummary(ctx, running.pid);
 }
 
 export async function runStop(): Promise<void> {
@@ -43,11 +46,7 @@ export async function runRestart(opts: { noWait?: boolean }): Promise<void> {
     await stopDaemon(ctx.home);
     return startDaemon(ctx.home, { noWait: opts.noWait });
   });
-  const base = apiBaseUrl(ctx.home);
-  printHome(ctx);
-  console.log(`Running   PID=${running.pid}`);
-  console.log(`API       ${base}`);
-  console.log(`Manage    ${managementUrl(ctx.home)}`);
+  printRunningSummary(ctx, running.pid);
 }
 
 export async function runStatus(): Promise<void> {

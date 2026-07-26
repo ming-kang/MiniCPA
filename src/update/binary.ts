@@ -23,6 +23,7 @@ import {
 import { patchInstallState, readInstallState } from "../state.js";
 import { sha256File } from "../util.js";
 import {
+  cpaAssetNameCandidates,
   downloadToFile,
   fetchChecksums,
   fetchCpaReleaseByTag,
@@ -244,6 +245,15 @@ export async function updateBinary(
   }
 
   const candidates = listReleaseAssetCandidates(release, process.platform, process.arch);
+  if (candidates.length === 0) {
+    throw new Error(
+      `No release asset for ${process.platform}/${process.arch}. Tried: ${cpaAssetNameCandidates(
+        release.tag_name,
+        process.platform,
+        process.arch,
+      ).join(", ")}`,
+    );
+  }
   const downloadDir = miniCpaTempDownloadDir("binary-");
   const staging = miniCpaTempExtractDir();
 

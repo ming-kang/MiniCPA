@@ -16,7 +16,6 @@ import {
   parseChecksumsText,
   parseGithubDigest,
   parseReleaseTagFromLocation,
-  pickReleaseAsset,
   releaseAssetDownloadUrl,
   repoFromPanelUrl,
   synthesizePublicRelease,
@@ -180,7 +179,7 @@ describe("parseChecksumsText / parseGithubDigest", () => {
   });
 });
 
-describe("pickReleaseAsset", () => {
+describe("listReleaseAssetCandidates", () => {
   const names = [
     "CLIProxyAPI_7.0.0_windows_amd64.zip",
     "CLIProxyAPI_7.0.0_windows_aarch64.zip",
@@ -191,8 +190,8 @@ describe("pickReleaseAsset", () => {
   ];
   const rel = release("v7.0.0", names);
 
-  it("picks windows amd64 via browser release URL", () => {
-    const picked = pickReleaseAsset(rel, "win32", "x64");
+  it("puts windows amd64 first via browser release URL", () => {
+    const picked = listReleaseAssetCandidates(rel, "win32", "x64")[0]!;
     assert.equal(picked.assetName, "CLIProxyAPI_7.0.0_windows_amd64.zip");
     assert.match(
       picked.url,
@@ -202,23 +201,23 @@ describe("pickReleaseAsset", () => {
   });
 
   it("prefers windows aarch64 when available", () => {
-    const { assetName } = pickReleaseAsset(rel, "win32", "arm64");
+    const { assetName } = listReleaseAssetCandidates(rel, "win32", "arm64")[0]!;
     assert.equal(assetName, "CLIProxyAPI_7.0.0_windows_aarch64.zip");
   });
 
-  it("picks darwin aarch64", () => {
-    const { assetName } = pickReleaseAsset(rel, "darwin", "arm64");
+  it("prefers darwin aarch64", () => {
+    const { assetName } = listReleaseAssetCandidates(rel, "darwin", "arm64")[0]!;
     assert.equal(assetName, "CLIProxyAPI_7.0.0_darwin_aarch64.tar.gz");
   });
 
-  it("picks linux amd64", () => {
-    const { assetName } = pickReleaseAsset(rel, "linux", "x64");
+  it("prefers linux amd64", () => {
+    const { assetName } = listReleaseAssetCandidates(rel, "linux", "x64")[0]!;
     assert.equal(assetName, "CLIProxyAPI_7.0.0_linux_amd64.tar.gz");
   });
 
-  it("throws when no asset", () => {
+  it("returns no candidates when the release has only unrelated assets", () => {
     const empty = release("v1.0.0", ["unrelated.txt"]);
-    assert.throws(() => pickReleaseAsset(empty, "win32", "x64"), /No release asset/);
+    assert.equal(listReleaseAssetCandidates(empty, "win32", "x64").length, 0);
   });
 
   it("lists multiple candidates for synthetic release", () => {

@@ -44,6 +44,14 @@ export async function runUpdateCheck(): Promise<void> {
   process.exitCode = binary.upToDate && panelUpToDate && !panelError ? 0 : 1;
 }
 
+function printPanelResult(result: { version: string; skipped: boolean }): void {
+  console.log(
+    result.skipped
+      ? `Panel already ${result.version} (use --force to reinstall)`
+      : `Panel updated to ${result.version}`,
+  );
+}
+
 export async function runUpdate(opts: {
   /** Update panel only */
   panelOnly?: boolean;
@@ -58,18 +66,9 @@ export async function runUpdate(opts: {
   const ctx = createContext();
   printHome(ctx);
 
-  if (opts.panelOnly && opts.binaryOnly) {
-    throw new Error("Use only one of --panel or --binary");
-  }
-
   await withMiniCpaLock("update", async () => {
     if (opts.panelOnly) {
-      const result = await updatePanel(ctx.home, { force: opts.force });
-      console.log(
-        result.skipped
-          ? `Panel already ${result.version} (use --force to reinstall)`
-          : `Panel updated to ${result.version}`,
-      );
+      printPanelResult(await updatePanel(ctx.home, { force: opts.force }));
       return;
     }
 
@@ -92,11 +91,6 @@ export async function runUpdate(opts: {
       return;
     }
 
-    const panel = await updatePanel(ctx.home, { force: opts.force });
-    console.log(
-      panel.skipped
-        ? `Panel already ${panel.version} (use --force to reinstall)`
-        : `Panel updated to ${panel.version}`,
-    );
+    printPanelResult(await updatePanel(ctx.home, { force: opts.force }));
   });
 }

@@ -462,21 +462,6 @@ export function cpaAssetNameCandidates(
   return candidates;
 }
 
-export function pickReleaseAsset(
-  release: GhRelease,
-  platform: NodeJS.Platform,
-  arch: string,
-  repo: string = CPA_REPO,
-): PickedReleaseAsset {
-  const candidates = listReleaseAssetCandidates(release, platform, arch, repo);
-  if (candidates.length === 0) {
-    throw new Error(
-      `No release asset for ${platform}/${arch}. Tried: ${cpaAssetNameCandidates(release.tag_name, platform, arch).join(", ")}`,
-    );
-  }
-  return candidates[0]!;
-}
-
 /** All candidate assets that exist on the release (or synthetic browser URLs). */
 export function listReleaseAssetCandidates(
   release: GhRelease,

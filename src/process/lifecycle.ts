@@ -15,13 +15,11 @@ import { readinessUrls, waitForAnyHttpOk } from "./health.js";
 import { classifyProcessIdentity, readProcessStartMarker } from "./pid-identity.js";
 import { recoverUnlockProbeBinary, resolveRunnableExecutable } from "./runtime.js";
 
-export { isProcessAlive } from "./alive.js";
-
 const DEFAULT_READY_MS = 15_000;
 const STOP_GRACE_MS = 5_000;
 const STOP_KILL_WAIT_MS = 5_000;
 /** Windows antivirus / explorer can hold the exe briefly after stop. */
-export const FILE_UNLOCK_WAIT_MS = 30_000;
+const FILE_UNLOCK_WAIT_MS = 30_000;
 
 export type RunningInfo = {
   pid: number;

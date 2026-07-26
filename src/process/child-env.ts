@@ -30,7 +30,3 @@ export function buildCpaChildEnv(
   }
   return childEnv;
 }
-
-export function strippedEnvKeys(): readonly string[] {
-  return STRIPPED_ENV_KEYS;
-}

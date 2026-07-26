@@ -80,5 +80,6 @@ export function apiBaseUrl(home: string): string {
 /** Prefer panel URL, then root — works for binary-only installs without management.html. */
 export function readinessUrls(home: string): string[] {
   const base = apiBaseUrl(home);
-  return [`${base}/management.html`, `${base}/`, base];
+  // `base` and `${base}/` are the same HTTP request; probe it once.
+  return [`${base}/management.html`, `${base}/`];
 }

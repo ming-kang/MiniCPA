@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildCpaChildEnv, strippedEnvKeys } from "./child-env.js";
+import { buildCpaChildEnv } from "./child-env.js";
 
 describe("buildCpaChildEnv", () => {
   it("strips known tokens in every case while keeping unrelated values", () => {
@@ -21,9 +21,8 @@ describe("buildCpaChildEnv", () => {
     assert.equal(child.PATH, "/usr/bin");
     assert.equal(child.HOME, "/home/user");
     assert.equal(child.CPA_HOME, "/data/cpa");
-    assert.equal(
-      Object.keys(child).some((key) => strippedEnvKeys().some((stripped) => stripped === key.toUpperCase())),
-      false,
-    );
+    for (const value of Object.values(child)) {
+      assert.doesNotMatch(String(value), /^secret-/);
+    }
   });
 });
