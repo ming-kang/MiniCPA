@@ -182,14 +182,16 @@ describe("readinessUrls", () => {
     }
   });
 
-  it("puts managementUrl first and the API root second", () => {
+  it("puts managementUrl first and the API root second, followed by IPv6 loopback for wildcards", () => {
     const home = makeHome('host: "0.0.0.0"\nport: 9123\n');
     const urls = readinessUrls(home);
-    assert.equal(urls.length, 2);
+    assert.equal(urls.length, 4);
     assert.equal(urls[0], managementUrl(home));
     assert.equal(urls[0], "http://127.0.0.1:9123/management.html");
     assert.equal(urls[1], `${apiBaseUrl(home)}/`);
     assert.equal(urls[1], "http://127.0.0.1:9123/");
+    assert.equal(urls[2], "http://[::1]:9123/management.html");
+    assert.equal(urls[3], "http://[::1]:9123/");
   });
 
   it("brackets IPv6 listen hosts consistently across both entries", () => {

@@ -21,20 +21,24 @@ const PROBE_PASS_INTERVAL_MS = 300;
  */
 const loopbackDispatcher = new Agent();
 
+export function isWildcardListenHost(host: string): boolean {
+  const lower = host.trim().toLowerCase();
+  return (
+    lower === "0.0.0.0" ||
+    lower === "::" ||
+    lower === "[::]" ||
+    lower === "::0" ||
+    lower === "[::0]"
+  );
+}
+
 /**
  * Map wildcard listen addresses to a loopback host for local HTTP probes.
  * Concrete IPv6 literals are returned with brackets for URL use.
  */
 export function normalizeListenHost(host: string): string {
   const trimmed = host.trim();
-  const lower = trimmed.toLowerCase();
-  if (
-    lower === "0.0.0.0" ||
-    lower === "::" ||
-    lower === "[::]" ||
-    lower === "::0" ||
-    lower === "[::0]"
-  ) {
+  if (isWildcardListenHost(trimmed)) {
     return "127.0.0.1";
   }
   // IPv6 literal without brackets → bracket for URL host part
@@ -110,7 +114,16 @@ export function apiBaseUrl(home: string): string {
 
 /** Prefer panel URL, then root — works for binary-only installs without management.html. */
 export function readinessUrls(home: string): string[] {
-  const base = resolveBase(home);
-  // `base` and `${base}/` are the same HTTP request; probe it once.
-  return [`${base}${PANEL_PATH}`, `${base}/`];
+  const layout = cpaLayout(home);
+  const cfg = readCpaConfig(layout.configFile);
+  const { host, port } = getListenAddress(cfg);
+  const primaryBase = formatHttpBase(host, port);
+  const urls = [`${primaryBase}${PANEL_PATH}`, `${primaryBase}/`];
+
+  if (isWildcardListenHost(host)) {
+    const ipv6Base = `http://[::1]:${port}`;
+    urls.push(`${ipv6Base}${PANEL_PATH}`, `${ipv6Base}/`);
+  }
+
+  return [...new Set(urls)];
 }

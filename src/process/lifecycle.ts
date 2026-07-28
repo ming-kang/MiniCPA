@@ -367,8 +367,9 @@ export async function stopDaemon(home: string): Promise<boolean> {
     );
   }
 
-  // resolveRunning above already verified ownership; re-check only immediately
-  // before each force kill, where PID reuse would actually be destructive.
+  // Verify ownership immediately before sending any signal (graceful or force).
+  assertSafeToStop(home, pid);
+
   if (process.platform === "win32") {
     // Graceful taskkill (no /F) cannot signal windowless detached children;
     // when it reports failure, skip the grace wait and force-kill directly.
