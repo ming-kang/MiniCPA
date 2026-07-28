@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { httpFetch } from "../http.js";
+import { formatNetworkError, httpFetch, NetworkError } from "../http.js";
 import { formatBytes } from "../util.js";
 
 export type GhAsset = {
@@ -22,6 +22,10 @@ export type GhRelease = {
 
 const API_TIMEOUT_MS = 30_000;
 const DOWNLOAD_TIMEOUT_MS = 300_000;
+/** Abort a download that has received no bytes for this long (well under the total budget). */
+const DOWNLOAD_STALL_MS = 60_000;
+const DOWNLOAD_STALL_CHECK_MS = 5_000;
+const GITHUB_API_BASE_URL = "https://api.github.com";
 
 /** Auth for remaining API fallback paths. Prefers GITHUB_TOKEN, then GH_TOKEN (gh CLI). */
 export function githubAuthToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
@@ -29,7 +33,9 @@ export function githubAuthToken(env: NodeJS.ProcessEnv = process.env): string | 
   return token?.trim() ? token.trim() : undefined;
 }
 
-function githubHeaders(mode: "json" | "download" | "browser" = "browser"): Record<string, string> {
+export function githubHeaders(
+  mode: "json" | "download" | "browser" = "browser",
+): Record<string, string> {
   const headers: Record<string, string> = {
     "User-Agent": "MiniCPA",
   };
@@ -176,11 +182,22 @@ export function synthesizePublicRelease(
   };
 }
 
-function validateReleaseMetadata(repo: string, release: GhRelease): GhRelease {
-  if (!release || !isSafeReleaseTag(release.tag_name) || !Array.isArray(release.assets)) {
+function validateReleaseMetadata(repo: string, release: unknown): GhRelease {
+  // Narrow before touching any field: a 200 with `{}`, `[]` or null must produce
+  // this message, not a TypeError from deep inside a helper.
+  if (
+    release === null ||
+    typeof release !== "object" ||
+    Array.isArray(release) ||
+    typeof (release as { tag_name?: unknown }).tag_name !== "string"
+  ) {
     throw new Error(`GitHub returned invalid release metadata for ${repo}`);
   }
-  for (const asset of release.assets) {
+  const candidate = release as GhRelease;
+  if (!isSafeReleaseTag(candidate.tag_name) || !Array.isArray(candidate.assets)) {
+    throw new Error(`GitHub returned invalid release metadata for ${repo}`);
+  }
+  for (const asset of candidate.assets) {
     if (
       !asset ||
       typeof asset.name !== "string" ||
@@ -189,19 +206,25 @@ function validateReleaseMetadata(repo: string, release: GhRelease): GhRelease {
       throw new Error(`GitHub returned an invalid release asset for ${repo}`);
     }
   }
-  return release;
+  return candidate;
 }
 
-/** Fetch full latest-release metadata via the REST API, including GitHub asset digests. */
-export async function fetchLatestReleaseViaApi(repo: string): Promise<GhRelease> {
-  const res = await httpFetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+/**
+ * Fetch full latest-release metadata via the REST API, including GitHub asset digests.
+ * `apiBaseUrl` is overridable for tests only.
+ */
+export async function fetchLatestReleaseViaApi(
+  repo: string,
+  apiBaseUrl = GITHUB_API_BASE_URL,
+): Promise<GhRelease> {
+  const res = await httpFetch(`${apiBaseUrl}/repos/${repo}/releases/latest`, {
     headers: githubHeaders("json"),
     signal: AbortSignal.timeout(API_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new Error(formatGitHubApiError(res.status, repo, "releases/latest"));
   }
-  return validateReleaseMetadata(repo, (await res.json()) as GhRelease);
+  return validateReleaseMetadata(repo, (await res.json()) as unknown);
 }
 
 /** Release metadata for a specific tag via the REST API. */
@@ -220,7 +243,7 @@ export async function fetchReleaseByTagViaApi(
     if (res.status === 404) throw new Error(`Release not found: ${normalizedTag}`);
     throw new Error(formatGitHubApiError(res.status, repo, `releases/tags/${normalizedTag}`));
   }
-  return validateReleaseMetadata(repo, (await res.json()) as GhRelease);
+  return validateReleaseMetadata(repo, (await res.json()) as unknown);
 }
 
 /**
@@ -278,8 +301,8 @@ export type DownloadOptions = {
   /** Shown in progress events / error messages. */
   label?: string;
   timeoutMs?: number;
-  /** Override Accept / auth for GitHub API asset downloads. */
-  apiAsset?: boolean;
+  /** Abort when no byte arrives for this long (default 60s, well under timeoutMs). */
+  stallTimeoutMs?: number;
   /** Refuse a response larger than this many bytes (both declared and streamed). */
   maxBytes?: number;
   /** Called per chunk (done: false) and once after completion (done: true). */
@@ -299,7 +322,7 @@ export async function downloadToFile(
 ): Promise<void> {
   const timeoutMs = options?.timeoutMs ?? DOWNLOAD_TIMEOUT_MS;
   const label = options?.label ?? path.basename(dest);
-  const useApiAsset = options?.apiAsset ?? isApiAssetUrl(url);
+  const useApiAsset = isApiAssetUrl(url);
 
   const res = await httpFetch(url, {
     headers: githubHeaders(useApiAsset ? "download" : "browser"),
@@ -337,8 +360,10 @@ export async function downloadToFile(
   const onProgress = options?.onProgress;
 
   const nodeBody = Readable.fromWeb(res.body as import("node:stream/web").ReadableStream);
+  let lastChunkAt = Date.now();
   const limiter = new Transform({
     transform(chunk: Buffer | string, _encoding, callback): void {
+      lastChunkAt = Date.now();
       const n = typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
       received += n;
       if (maxBytes !== undefined && received > maxBytes) {
@@ -350,25 +375,49 @@ export async function downloadToFile(
     },
   });
 
+  // The total AbortSignal.timeout above bounds the whole transfer; this watchdog
+  // fails fast on a connection that opened and then went silent.
+  const stallMs = options?.stallTimeoutMs ?? DOWNLOAD_STALL_MS;
+  const stallSeconds = Math.max(1, Math.round(stallMs / 1_000));
+  const stallTimer = setInterval(
+    () => {
+      if (Date.now() - lastChunkAt >= stallMs) {
+        nodeBody.destroy(new Error(`Download stalled (no data for ${stallSeconds}s): ${label}`));
+      }
+    },
+    Math.min(DOWNLOAD_STALL_CHECK_MS, stallMs),
+  );
+  stallTimer.unref?.();
+
   try {
     await pipeline(nodeBody, limiter, fs.createWriteStream(dest));
-    onProgress?.({ label, receivedBytes: received, totalBytes: total, done: true });
-    if (received === 0) {
-      try {
-        fs.unlinkSync(dest);
-      } catch {
-        /* ignore */
-      }
-      throw new Error(`Download failed (empty file): ${label}`);
-    }
   } catch (err) {
     try {
       fs.unlinkSync(dest);
     } catch {
       /* ignore */
     }
-    throw err;
+    // The size limiter's own error is a policy decision, not a transport failure:
+    // callers match on its text, so it must pass through untouched.
+    if (isSizeLimitError(err)) throw err;
+    throw new NetworkError(formatNetworkError(err, url), { cause: err, url });
+  } finally {
+    clearInterval(stallTimer);
   }
+
+  onProgress?.({ label, receivedBytes: received, totalBytes: total, done: true });
+  if (received === 0) {
+    try {
+      fs.unlinkSync(dest);
+    } catch {
+      /* ignore */
+    }
+    throw new Error(`Download failed (empty file): ${label}`);
+  }
+}
+
+function isSizeLimitError(err: unknown): boolean {
+  return err instanceof Error && /^Download exceeds .* limit: /.test(err.message);
 }
 
 /** Parse GitHub checksums.txt body into map of filename → sha256. */
@@ -376,15 +425,64 @@ export function parseChecksumsText(text: string): Map<string, string> {
   const map = new Map<string, string>();
   for (const line of text.split(/\r?\n/)) {
     const m = line.trim().match(/^([a-f0-9]{64})\s+(.+)$/i);
-    if (m) map.set(m[2]!.trim(), m[1]!.toLowerCase());
+    // sha256sum -b writes "<hash> *<file>": the marker is binary mode, not the name.
+    if (m) map.set(m[2]!.trim().replace(/^\*/, ""), m[1]!.toLowerCase());
   }
   return map;
 }
 
 export function parseGithubDigest(digest: string | undefined): string | undefined {
-  if (!digest) return undefined;
+  // API payloads are untrusted: a non-string digest must not throw on .trim().
+  if (!digest || typeof digest !== "string") return undefined;
   const m = digest.trim().match(/^sha256:([a-f0-9]{64})$/i);
   return m?.[1]?.toLowerCase();
+}
+
+export type GithubReachability = {
+  ok: boolean;
+  status?: number;
+  remaining?: number;
+  authenticated: boolean;
+};
+
+/**
+ * Probe the GitHub API with this client's headers — including Authorization when
+ * GITHUB_TOKEN/GH_TOKEN is set, which is what makes the reported rate limit the one
+ * MiniCPA actually gets. Transport errors propagate; the caller reports them.
+ * `apiBaseUrl` is overridable for tests only.
+ */
+export async function checkGithubReachability(
+  apiBaseUrl = GITHUB_API_BASE_URL,
+): Promise<GithubReachability> {
+  // Same predicate githubHeaders() uses, so a blank token never reads as authenticated.
+  const authenticated = githubAuthToken() !== undefined;
+  const res = await httpFetch(
+    `${apiBaseUrl}/rate_limit`,
+    {
+      headers: githubHeaders("json"),
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    },
+    { retries: 1, minDelayMs: 200, maxDelayMs: 1_000 },
+  );
+  const result: GithubReachability = { ok: res.ok, status: res.status, authenticated };
+  if (!res.ok) {
+    try {
+      await res.body?.cancel();
+    } catch {
+      /* ignore cancellation errors */
+    }
+    return result;
+  }
+  try {
+    const body = (await res.json()) as { resources?: { core?: { remaining?: unknown } } };
+    const remaining = body?.resources?.core?.remaining;
+    if (typeof remaining === "number" && Number.isFinite(remaining)) {
+      result.remaining = remaining;
+    }
+  } catch {
+    /* rate_limit body is diagnostics only; reachability already established */
+  }
+  return result;
 }
 
 export async function fetchChecksums(

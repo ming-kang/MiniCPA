@@ -1,5 +1,5 @@
 /** Secrets used by MiniCPA for GitHub/npm — must not leak into CPA children. */
-const STRIPPED_ENV_KEYS = [
+export const STRIPPED_ENV_KEYS = [
   "GITHUB_TOKEN",
   "GH_TOKEN",
   "GH_ENTERPRISE_TOKEN",

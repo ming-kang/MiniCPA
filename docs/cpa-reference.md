@@ -9,7 +9,7 @@ When MiniCPA starts CPA:
 - **Binary** = `<home>/cli-proxy-api` (or `.exe` on Windows) — replaced in place by `cpa update`
 - **Logs** = `<home>/logs/cpa.log` and `<home>/logs/cpa.err.log`
 - **Child env** = parent env minus MiniCPA secrets (`GITHUB_TOKEN`, `GH_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_PAT`, `NPM_TOKEN`, `NPM_AUTH_TOKEN`, `NODE_AUTH_TOKEN`, …) in any environment-variable casing — including version probes via `cli-proxy-api --help`
-- **Outbound HTTP (update / doctor GitHub probe)** honors shell proxy env: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` (case-insensitive). Local `cpa start` readiness checks stay direct to loopback and do not use the proxy.
+- **Outbound HTTP (update / doctor GitHub probe)** honors shell proxy env: `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` (case-insensitive). `ALL_PROXY` is a fallback for both schemes **only** when it is an `http://` or `https://` URL; any other scheme (`socks5://`, …) is not applied and `cpa doctor` labels it `(scheme not applied)` — set `HTTP_PROXY`/`HTTPS_PROXY` instead. Local `cpa start` / `cpa status` readiness probes use a dedicated direct dispatcher, so they are unaffected by proxy env vars, including under `NODE_USE_ENV_PROXY` / `--use-env-proxy`.
 
 Default `config.yaml` from `cpa init` uses `auth-dir: auths` (relative to home). Optional `.env` in the same directory is loaded by CPA at startup.
 
@@ -35,6 +35,7 @@ MiniCPA manages one instance. `cpa home` prints its location. `--home` and `CPA_
 - PID ownership requires an exact executable-path match **or** a matching spawn-time start marker (boot id + process start time, immune to PID reuse). If neither can be verified, MiniCPA preserves the PID record to avoid a duplicate start and **refuses to terminate the process**.
 - Stop waits for process death after force-kill before clearing the PID file. `cpa stop` no longer waits for the binary **file** to become unlocked — that wait belongs to `cpa update`, which performs it before replacing the binary.
 - Windows stop: soft `taskkill /T`; when the graceful signal cannot be delivered (typical for the windowless background process), MiniCPA force-kills immediately instead of waiting out the grace period, so stop completes in about a second. Unlock probes recover `*.unlock-probe` residue; the update path waits up to ~30s (backoff) for the binary file lock.
+- CPA is spawned **detached** and outlives the `cpa` process — including `npm uninstall -g @astralyn/minicpa`. Run `cpa stop` before removing MiniCPA; afterwards only `taskkill /PID <pid> /F` (Windows) or `kill <pid>` can end it, using the PID in `<cpa home>/state/cpa.pid`. Uninstalling never deletes `cpa root`, so `config.yaml` (with its generated api-key) and the `auths/` OAuth tokens stay on disk until you remove them.
 - `cpa start` and `cpa doctor` print warnings when `host`/`port` in `config.yaml` are invalid and defaults were substituted.
 - Readiness probes try `/management.html` then `/` so binary-only installs can start without a panel.
 - On `cpa start`, logs larger than **50 MiB** are rotated to `cpa.log.1` / `cpa.err.log.1` (keeps two generations).
@@ -56,7 +57,7 @@ MiniCPA manages one instance. `cpa home` prints its location. `--home` and `CPA_
 
 ## Temp cleanup
 
-- `cpa clean` deletes only **old** staging entries under MiniCPA's private temp root (`cpa temp`, under `cpa root`). It never touches instance home, config, auths, or a running process. Avoid cleaning during an active update.
+- `cpa clean` deletes only **old** staging entries under MiniCPA's private temp root (`cpa temp`, under `cpa root`). It never touches instance home, config, auths, or a running process. It takes the same exclusive lock as `cpa update`, so it cannot run in the middle of an update — it reports the in-flight command instead.
 - `cpa doctor` reports temp size and suggests `cpa clean` when residue is large.
 
 ## Troubleshooting
@@ -65,8 +66,9 @@ MiniCPA manages one instance. `cpa home` prints its location. `--home` and `CPA_
 |---------|-------------|
 | `cpa start` says HTTP not ready | `cpa logs --err`, check port in `config.yaml`, `cpa restart` |
 | Port already in use | Change `port` in `config.yaml`, or stop the other process |
-| `cpa open` cannot reach UI | `cpa status` / `cpa start`; confirm `management.html` via `cpa doctor` |
-| Another cpa … is running | Wait for the other command, or remove stale `state/cpa.lock` only if that PID is dead |
+| `cpa open` cannot reach UI | `cpa status` / `cpa start`; confirm `management.html` via `cpa doctor`. On a binary-only install `cpa open` reports that the management panel is not installed and points at `cpa update --panel`. When no browser launcher is available (`xdg-open` missing on a headless/WSL box), the URL is printed, a warning is written to stderr, and the command still succeeds |
+| Another cpa … is running | Wait for the other command to finish. Otherwise run `cpa doctor`: it names the lock file, the holder PID and command, when the lock was acquired, and whether the holder process is still alive. Remove `<cpa root>/state/cpa.lock` by hand when doctor reports the holder is not alive — or when doctor still shows it held but you are certain no `cpa` command is running (the lock fails closed when a live PID's identity cannot be verified, so it will not preempt itself) |
+| `cpa doctor` reports lock preempt residue | `cpa.lock.preempt.*` files beside the lock are left behind when a stale-lock cleanup could not delete its copy (typically Windows `EBUSY`). Safe to delete when no `cpa` command is running |
 | Update checksum / integrity error | Retry; if GitHub asset is broken, temporary `--insecure` then re-check later |
 | Update failed mid-way | `cpa status`; if not running, `cpa start`. Re-run `cpa update --force` if binary looks broken. `cpa doctor` if `.bak` remains |
 | GitHub rate limit on update | Binary discovery prefers `github.com/releases`. Panel integrity requires GitHub release metadata; if API 403/429 occurs, set `GITHUB_TOKEN` or `GH_TOKEN`, then retry (token is not passed into CPA) |
@@ -88,3 +90,5 @@ cpa clean   # wipe temp only (not instance home)
 cpa doctor  # layout + binary + HTTP + GitHub probe
 cpa logs -f # follow stdout + stderr
 ```
+
+`cpa logs` prints the last `-n, --lines <n>` lines of each log file (default `80`; must be a positive whole number). `--err` limits it to `cpa.err.log`. `-f`/`--follow` streams new output instead and ignores `--lines`.

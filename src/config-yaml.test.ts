@@ -1,11 +1,23 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, it } from "node:test";
 import {
   LEGACY_DEFAULT_API_KEY,
   normalizeCpaConfig,
   normalizeCpaConfigWithWarnings,
   getListenAddress,
+  readCpaConfigWithWarnings,
 } from "./config-yaml.js";
+
+const temps: string[] = [];
+
+afterEach(() => {
+  for (const dir of temps.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe("normalizeCpaConfigWithWarnings", () => {
   it("warns when invalid port/host values are replaced by defaults", () => {
@@ -66,5 +78,24 @@ describe("normalizeCpaConfig", () => {
   it("rejects out-of-range ports", () => {
     assert.equal(normalizeCpaConfig({ port: 0 }).port, 8317);
     assert.equal(normalizeCpaConfig({ port: 99999 }).port, 8317);
+  });
+});
+
+describe("readCpaConfigWithWarnings", () => {
+  it("names the offending file when the YAML cannot be parsed", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-config-yaml-"));
+    temps.push(dir);
+    const configPath = path.join(dir, "config.yaml");
+    fs.writeFileSync(configPath, "host: '127.0.0.1\nport: [8317\n");
+
+    assert.throws(
+      () => readCpaConfigWithWarnings(configPath),
+      (err: unknown) => {
+        assert.ok(err instanceof Error);
+        assert.match(err.message, /^Invalid YAML in /);
+        assert.ok(err.message.includes(configPath));
+        return true;
+      },
+    );
   });
 });

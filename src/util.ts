@@ -72,7 +72,10 @@ export function rotateFileIfLarge(
     try {
       fs.renameSync(from, to);
     } catch {
-      tryUnlink(from);
+      // Leave the un-moved sibling in place: never delete a rotated log just
+      // because it could not be shifted. rename() replaces the destination on
+      // both POSIX and Windows (MOVEFILE_REPLACE_EXISTING), so the next
+      // rotation simply overwrites this generation.
     }
   }
   try {
@@ -97,11 +100,13 @@ export function tailFile(file: string, maxLines = 40, maxBytes = 8 * 1024 * 1024
     while (position > 0 && bytesRead < maxBytes && lineBreaks <= maxLines) {
       const length = Math.min(64 * 1024, position, maxBytes - bytesRead);
       position -= length;
-      const chunk = Buffer.allocUnsafe(length);
-      fs.readSync(fd, chunk, 0, length, position);
-      chunks.unshift(chunk);
-      bytesRead += length;
-      for (const byte of chunk) {
+      const chunk = Buffer.alloc(length);
+      const n = fs.readSync(fd, chunk, 0, length, position);
+      if (n === 0) break;
+      const read = chunk.subarray(0, n);
+      chunks.unshift(read);
+      bytesRead += n;
+      for (const byte of read) {
         if (byte === 0x0a) lineBreaks += 1;
       }
     }
@@ -110,6 +115,9 @@ export function tailFile(file: string, maxLines = 40, maxBytes = 8 * 1024 * 1024
   }
 
   const lines = Buffer.concat(chunks).toString("utf8").split(/\r?\n/);
+  // A newline-terminated file yields one trailing empty element; drop exactly
+  // one so it does not consume a slot of the requested line budget.
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
   return lines.slice(-maxLines).join("\n").trimEnd();
 }
 

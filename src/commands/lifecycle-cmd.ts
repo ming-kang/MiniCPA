@@ -9,9 +9,13 @@ import {
   waitForAnyHttpOk,
   waitForHttpOk,
 } from "../process/health.js";
-import { resolveRunning, runCpaTuiProcess, startDaemon, stopDaemon } from "../process/lifecycle.js";
+import { inspectRunning, startDaemon, stopDaemon } from "../process/lifecycle.js";
 import { withMiniCpaLock } from "../process/lock.js";
-import { readCurrentRuntimeVersion } from "../process/runtime.js";
+import {
+  inspectRunnableExecutable,
+  readCurrentRuntimeVersion,
+  runRuntimeAttached,
+} from "../process/runtime.js";
 import { tailFile } from "../util.js";
 
 export function parseLogLineCount(value: string): number {
@@ -70,7 +74,8 @@ export async function runRestart(opts: { noWait?: boolean }): Promise<void> {
 
 export async function runStatus(): Promise<void> {
   const ctx = createContext();
-  const running = resolveRunning(ctx.home);
+  // Read-only: an unlocked command must not repair (or race) the instance home.
+  const running = inspectRunning(ctx.home);
   const version = await readCurrentRuntimeVersion(ctx.home);
   printHome(ctx);
   console.log(`Version   ${version ?? "(not installed)"}`);
@@ -91,15 +96,52 @@ export async function runStatus(): Promise<void> {
   }
 }
 
-export async function runOpen(): Promise<void> {
+/**
+ * Name of the missing launcher when a browser could not be spawned at all.
+ *
+ * Node reports this as `spawn <command> ENOENT`; a headless Linux box, a WSL
+ * shell or a container simply has no `xdg-open`, which must not turn `cpa open`
+ * into a failed command — the URL is already on stdout.
+ */
+function missingBrowserCommand(err: unknown): string | undefined {
+  const errno = err as NodeJS.ErrnoException;
+  const message = typeof errno?.message === "string" ? errno.message : "";
+  const match = /^spawn (.+) ENOENT$/.exec(message);
+  if (match?.[1]) return match[1];
+  if (errno?.code === "ENOENT") return errno.path || "browser launcher";
+  return undefined;
+}
+
+export async function runOpen(deps?: {
+  openInBrowser?: (url: string) => Promise<void>;
+}): Promise<void> {
   const ctx = createContext();
   const url = managementUrl(ctx.home);
   const ok = await waitForHttpOk(url, 3000);
   if (!ok) {
+    // A binary-only install (`cpa update --binary`) serves the API but has no
+    // management.html, so "run cpa start" would be a no-op remedy.
+    const serverUp = await waitForAnyHttpOk(readinessUrls(ctx.home), 2000);
+    if (serverUp) {
+      throw new Error(
+        "Management panel not installed (management.html missing). Run: cpa update --panel",
+      );
+    }
     throw new Error(`CPA does not appear reachable at ${url}. Run: cpa start`);
   }
-  await openInBrowser(url);
+  // Print before launching: the URL is the useful output even when no browser
+  // can be started.
   console.log(url);
+  const open = deps?.openInBrowser ?? openInBrowser;
+  try {
+    await open(url);
+  } catch (err) {
+    const missing = missingBrowserCommand(err);
+    if (missing === undefined) throw err;
+    console.error(
+      `Warning: could not launch a browser (${missing} not found) — open the URL above manually`,
+    );
+  }
 }
 
 export async function runLogs(opts: {
@@ -153,7 +195,39 @@ function printTail(file: string, n: number): void {
   console.log(tailFile(file, n));
 }
 
-async function tailFollowMany(files: string[]): Promise<void> {
+/**
+ * Read at most `maxBytes` from `pos`, reporting how far the cursor really moved.
+ *
+ * A log rotated between stat() and read() returns fewer bytes than requested, so
+ * the cursor must advance by the bytes actually read (advancing by the requested
+ * length skips real log content) and the buffer must be zero-filled and sliced
+ * (an unread tail of an 8 MiB `allocUnsafe` buffer is raw heap memory).
+ *
+ * @internal exported for tests only
+ */
+export function readLogChunk(
+  file: string,
+  pos: number,
+  maxBytes: number,
+): { text: string; next: number } {
+  const len = Math.max(0, maxBytes);
+  if (len === 0) return { text: "", next: pos };
+  const buf = Buffer.alloc(len);
+  const fd = fs.openSync(file, "r");
+  let read: number;
+  try {
+    read = fs.readSync(fd, buf, 0, len, pos);
+  } finally {
+    fs.closeSync(fd);
+  }
+  // Nothing there any more: the file was rotated/truncated under us, so restart
+  // from the top instead of stranding the cursor past the new end.
+  if (read === 0) return { text: "", next: 0 };
+  return { text: buf.subarray(0, read).toString(), next: pos + read };
+}
+
+/** @internal exported for tests only */
+export async function tailFollowMany(files: string[]): Promise<void> {
   const state = new Map(files.map((f) => [f, fs.existsSync(f) ? fs.statSync(f).size : 0]));
   console.log(`Following ${files.join(" + ")} (Ctrl+C to exit)`);
 
@@ -164,17 +238,10 @@ async function tailFollowMany(files: string[]): Promise<void> {
       let pos = state.get(file) ?? 0;
       if (stat.size < pos) pos = 0;
       if (stat.size > pos) {
-        const fd = fs.openSync(file, "r");
-        const len = Math.min(stat.size - pos, 8 * 1024 * 1024);
-        const buf = Buffer.allocUnsafe(len);
-        try {
-          fs.readSync(fd, buf, 0, len, pos);
-        } finally {
-          fs.closeSync(fd);
-        }
-        state.set(file, pos + len);
+        const { text, next } = readLogChunk(file, pos, Math.min(stat.size - pos, 8 * 1024 * 1024));
+        state.set(file, next);
+        if (!text) continue;
         const prefix = files.length > 1 ? `[${file.endsWith(".err.log") ? "err" : "out"}] ` : "";
-        const text = buf.toString();
         if (prefix) {
           for (const line of text.split(/\r?\n/)) {
             if (line.length) process.stdout.write(`${prefix + line}\n`);
@@ -186,19 +253,58 @@ async function tailFollowMany(files: string[]): Promise<void> {
     }
   }, 500);
 
-  await new Promise<void>(() => {
-    process.on("SIGINT", () => {
-      clearInterval(interval);
-      process.exit(0);
+  let onSigint: (() => void) | undefined;
+  try {
+    await new Promise<void>((resolve) => {
+      // process.exit() here would discard queued stdout writes (a piped stdout is
+      // asynchronous on Windows); resolving lets Node drain and exit on its own.
+      onSigint = (): void => {
+        clearInterval(interval);
+        process.exitCode = 130;
+        resolve();
+      };
+      process.once("SIGINT", onSigint);
     });
-  });
+  } finally {
+    clearInterval(interval);
+    if (onSigint) process.removeListener("SIGINT", onSigint);
+  }
 }
 
-export async function runTui(): Promise<void> {
+export type TuiDeps = {
+  inspectRunning?: typeof inspectRunning;
+  runRuntimeAttached?: typeof runRuntimeAttached;
+};
+
+/**
+ * Attach the official CPA terminal UI to this terminal.
+ *
+ * `cpa tui` holds no MiniCPA lock, so every step here is a read: it resolves the
+ * executable with inspectRunnableExecutable instead of the repairing
+ * resolveRunnableExecutable, which would rename a crashed unlock probe or copy
+ * `.bak` over the very binary a lock-holding `cpa update` is replacing.
+ */
+export async function runTui(deps?: TuiDeps): Promise<void> {
   const ctx = createContext();
-  const running = resolveRunning(ctx.home);
+  const inspect = deps?.inspectRunning ?? inspectRunning;
+  const running = inspect(ctx.home);
   if (!running) {
     throw new Error("CPA is not running. Run: cpa start");
   }
-  await runCpaTuiProcess(ctx.home);
+  const found = inspectRunnableExecutable(ctx.home);
+  if (!found) {
+    throw new Error(`CPA binary not found under ${ctx.home}. Run: cpa update`);
+  }
+  if (found.kind !== "active") {
+    // Recovering the residue here would be a write from an unlocked command, so
+    // report it and run the file where it lies; `cpa start` renames it back.
+    console.error(
+      `Warning: the active binary is missing; running the TUI from ${found.path} — run: cpa start to recover it`,
+    );
+  }
+  const run = deps?.runRuntimeAttached ?? runRuntimeAttached;
+  await run(found.path, ["-config", ctx.layout.configFile, "-tui"], {
+    cwd: ctx.home,
+    label: "CPA TUI",
+  });
 }

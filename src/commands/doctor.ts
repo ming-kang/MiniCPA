@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { formatCliError } from "../cli-errors.js";
 import {
   getListenAddress,
@@ -6,29 +7,78 @@ import {
   readCpaConfigWithWarnings,
 } from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
-import { describeProxyEnv, hasProxyEnvConfigured, httpFetch } from "../http.js";
-import { backupExecutablePath, cliConfigPath, miniCpaTempRoot, unlockProbePath } from "../paths.js";
+import { writeFileAtomic } from "../fs-atomic.js";
+import { describeProxyEnv, hasProxyEnvConfigured } from "../http.js";
+import {
+  activeExecutablePath,
+  backupExecutablePath,
+  cliConfigPath,
+  miniCpaTempRoot,
+  unlockProbePath,
+} from "../paths.js";
 import { readinessUrls, waitForAnyHttpOk } from "../process/health.js";
-import { resolveRunning } from "../process/lifecycle.js";
-import { readCurrentRuntimeVersion, resolveRunnableExecutable } from "../process/runtime.js";
+import { inspectRunning } from "../process/lifecycle.js";
+import { inspectMiniCpaLock, listLockPreemptResidue } from "../process/lock.js";
+import { findRunnableExecutable, readCurrentRuntimeVersion } from "../process/runtime.js";
 import { readInstallState } from "../state.js";
+import { checkGithubReachability, type GithubReachability } from "../update/github-client.js";
 import { DEFAULT_LOG_ROTATE_BYTES, directorySizeBytes, formatBytes } from "../util.js";
 
-export async function runDoctor(): Promise<void> {
+/** Transient file used to prove the home is writable on Windows. */
+const WRITE_PROBE_NAME = ".minicpa-write-probe";
+
+/**
+ * Report whether the instance home can actually be written to.
+ *
+ * `fs.access(W_OK)` only consults FILE_ATTRIBUTE_READONLY on Windows and ignores
+ * the ACL, so it reports success for exactly the directory this check exists to
+ * catch. Windows therefore gets a real write probe instead.
+ */
+function reportHomeWritable(home: string): boolean {
+  if (!fs.existsSync(home)) {
+    console.log("[fail] CPA home missing — run: cpa init");
+    return false;
+  }
+
+  if (process.platform === "win32") {
+    const probe = path.join(home, WRITE_PROBE_NAME);
+    try {
+      writeFileAtomic(probe, "");
+      console.log("[ ok ] CPA home writable");
+      return true;
+    } catch {
+      console.log("[fail] CPA home not writable");
+      return false;
+    } finally {
+      try {
+        fs.unlinkSync(probe);
+      } catch {
+        /* the probe may never have been created */
+      }
+    }
+  }
+
+  try {
+    fs.accessSync(home, fs.constants.W_OK);
+    console.log("[ ok ] CPA home writable");
+    return true;
+  } catch {
+    console.log("[fail] CPA home not writable");
+    return false;
+  }
+}
+
+export type DoctorDeps = {
+  checkGithubReachability?: () => Promise<GithubReachability>;
+};
+
+export async function runDoctor(deps?: DoctorDeps): Promise<void> {
   const ctx = createContext();
   printHome(ctx);
   let ok = true;
 
   // Layout / write access
-  try {
-    fs.accessSync(ctx.home, fs.constants.W_OK);
-    console.log("[ ok ] CPA home writable");
-  } catch {
-    if (!fs.existsSync(ctx.home)) {
-      console.log("[fail] CPA home missing — run: cpa init");
-    } else {
-      console.log("[fail] CPA home not writable");
-    }
+  if (!reportHomeWritable(ctx.home)) {
     ok = false;
   }
 
@@ -63,17 +113,27 @@ export async function runDoctor(): Promise<void> {
     }
   }
 
-  try {
-    const exe = resolveRunnableExecutable(ctx.home);
-    console.log(`[ ok ] binary ${exe}`);
-  } catch {
+  // Read-only lookup: diagnosing the home must never repair it, or doctor would
+  // report on residue it created itself two lines earlier.
+  const exe = findRunnableExecutable(ctx.home);
+  const activeExe = activeExecutablePath(ctx.home);
+  if (exe === undefined) {
     console.log("[fail] cli-proxy-api missing — run: cpa update");
     ok = false;
+  } else if (exe === activeExe) {
+    console.log(`[ ok ] binary ${exe}`);
+  } else {
+    console.log(`[warn] active binary missing; only ${exe} present — run: cpa start or cpa update`);
   }
 
   const version = await readCurrentRuntimeVersion(ctx.home);
   const state = readInstallState(ctx.home);
   console.log(`[info] cpa runtime ${version ?? "-"} (state=${state.runtimeVersion ?? "-"})`);
+  if (exe === activeExe && !version) {
+    console.log(
+      "[warn] binary present but not runnable (version probe failed) — run: cpa update --force",
+    );
+  }
   if (state.runtimeVersion && !version) {
     console.log("[warn] install state has runtimeVersion but binary is missing/unprobeable");
   } else if (state.runtimeVersion && version && state.runtimeVersion !== version) {
@@ -189,20 +249,46 @@ export async function runDoctor(): Promise<void> {
     console.log(`[info] temp empty (${tempRoot})`);
   }
 
-  const running = resolveRunning(ctx.home);
+  // A held lock is normal while another command runs, so it never fails the
+  // report — but it is the only way a user can see what is blocking them.
+  const lock = inspectMiniCpaLock();
+  if (lock.state === "held") {
+    const holderGone =
+      lock.holderAlive === false ? " (holder process is NOT alive — safe to delete this file)" : "";
+    console.log(
+      `[warn] MiniCPA lock held by PID=${lock.pid} (cpa ${lock.command}) since ` +
+        `${lock.acquiredAt || "unknown"} — ${lock.path}${holderGone}`,
+    );
+  } else if (lock.state === "unreadable") {
+    console.log(`[warn] MiniCPA lock file unreadable: ${lock.path}`);
+  }
+  for (const residue of listLockPreemptResidue()) {
+    console.log(
+      `[warn] lock preempt residue (${residue}) — safe to delete when no cpa command is running`,
+    );
+  }
+
+  const running = inspectRunning(ctx.home);
   if (running) {
     if (running.identityUnknown) {
       console.log(`[warn] running PID=${running.pid} (identity probe inconclusive — not cleared)`);
     } else {
       console.log(`[ ok ] running PID=${running.pid}`);
     }
-    const urls = readinessUrls(ctx.home);
-    const reachable = await waitForAnyHttpOk(urls, 3000);
-    if (!reachable) {
-      console.log(`[fail] HTTP not reachable (tried ${urls.join(", ")})`);
+    try {
+      const urls = readinessUrls(ctx.home);
+      const reachable = await waitForAnyHttpOk(urls, 3000);
+      if (!reachable) {
+        console.log(`[fail] HTTP not reachable (tried ${urls.join(", ")})`);
+        ok = false;
+      } else {
+        console.log(`[ ok ] HTTP ${urls[0]}`);
+      }
+    } catch (err) {
+      // A broken config.yaml is already reported above; re-throwing it here would
+      // drop the remaining sections of the report.
+      console.log(`[fail] cannot derive listen address: ${formatCliError(err)}`);
       ok = false;
-    } else {
-      console.log(`[ ok ] HTTP ${urls[0]}`);
     }
   } else {
     console.log("[info] not running (cpa start)");
@@ -214,30 +300,27 @@ export async function runDoctor(): Promise<void> {
     console.log("[info] proxy env none (HTTP(S)_PROXY / ALL_PROXY not set)");
   }
 
-  // Optional: GitHub reachability (non-fatal)
+  // Optional: GitHub reachability (non-fatal). Uses the update client's headers,
+  // so a configured GITHUB_TOKEN/GH_TOKEN reports the quota MiniCPA really gets.
+  const probeGithub =
+    deps?.checkGithubReachability ?? ((): Promise<GithubReachability> => checkGithubReachability());
   try {
-    const res = await httpFetch(
-      "https://api.github.com/rate_limit",
-      {
-        headers: { "User-Agent": "MiniCPA", Accept: "application/vnd.github+json" },
-        signal: AbortSignal.timeout(10_000),
-      },
-      { retries: 1, minDelayMs: 200, maxDelayMs: 1_000 },
-    );
-    if (res.ok) {
-      const body = (await res.json()) as { resources?: { core?: { remaining?: number } } };
-      const remaining = body.resources?.core?.remaining;
-      console.log(
-        `[ ok ] GitHub API${remaining !== undefined ? ` (rate remaining=${remaining})` : ""}`,
-      );
-      if (remaining !== undefined && remaining < 5) {
+    const reach = await probeGithub();
+    if (reach.ok) {
+      const identity = reach.authenticated ? "authenticated" : "anonymous";
+      const detail =
+        reach.remaining !== undefined
+          ? ` (rate remaining=${reach.remaining}, ${identity})`
+          : ` (${identity})`;
+      console.log(`[ ok ] GitHub API${detail}`);
+      if (reach.remaining !== undefined && reach.remaining < 5) {
         console.log(
           "[info] REST rate low (updates use github.com/releases by default; " +
             "GITHUB_TOKEN/GH_TOKEN only needed for API fallback)",
         );
       }
     } else {
-      console.log(`[warn] GitHub API HTTP ${res.status}`);
+      console.log(`[warn] GitHub API HTTP ${reach.status}`);
     }
   } catch (err) {
     console.log(`[warn] GitHub unreachable: ${formatCliError(err)}`);

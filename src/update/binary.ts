@@ -2,7 +2,12 @@ import AdmZip from "adm-zip";
 import fs from "node:fs";
 import path from "node:path";
 import * as tar from "tar";
-import { executableName, miniCpaTempDownloadDir, miniCpaTempExtractDir } from "../paths.js";
+import {
+  activeExecutablePath,
+  executableName,
+  miniCpaTempDownloadDir,
+  miniCpaTempExtractDir,
+} from "../paths.js";
 import {
   resolveRunning,
   startDaemon,
@@ -167,9 +172,7 @@ export function verifyArchiveChecksum(
   checksums: Map<string, string>,
   archivePath: string,
   archiveName: string,
-  options?: { insecure?: boolean },
 ): void {
-  if (options?.insecure) return;
   if (checksums.size === 0) {
     throw new Error("No checksums available (use --insecure to skip integrity check)");
   }
@@ -188,7 +191,6 @@ export function verifyArchiveChecksum(
 
 export type BinaryUpdateResult = {
   version: string;
-  changed: boolean;
   skipped: boolean;
   /** True if process was stopped for the update and started again. */
   restarted: boolean;
@@ -280,9 +282,14 @@ export async function installBinaryPhase(
     await deps.stopDaemon(home);
   }
 
+  // Whether there was anything to roll back to at all. A fresh install has no
+  // previous binary, so a leftover file under the active name after a failure is
+  // the half-installed NEW one and must not be reported as a usable rollback.
+  const hadPreviousBinary = fs.existsSync(activeExecutablePath(home));
+
   try {
     await deps.waitForBinaryUnlocked(home);
-    installRuntimeBinary(home, version, extractedExe);
+    installRuntimeBinary(home, extractedExe);
 
     let restarted = false;
     if (wasRunning) {
@@ -314,15 +321,24 @@ export async function installBinaryPhase(
     }
 
     const restored = restoreRuntimeBinaryFromBackup(home);
+    // `.bak` presence is not the same question as "is a usable previous binary on
+    // disk?". Every failure raised before installRuntimeBinary moves the old binary
+    // aside — a file lock that keeps waitForBinaryUnlocked from returning, but also
+    // an ENOSPC/EACCES on its staging copy, chmod or fsync — leaves the previous
+    // binary byte-intact under the active name and creates no `.bak` at all. Ask
+    // the filesystem, gated on there having been a previous binary in the first
+    // place so a half-installed fresh install is still reported as unrecoverable.
+    const binaryPresent =
+      restored || (hadPreviousBinary && fs.existsSync(activeExecutablePath(home)));
 
     // Never record a version when no binary is on disk to back it.
     patchInstallState(home, {
-      runtimeVersion: restored ? currentVersion : undefined,
+      runtimeVersion: binaryPresent ? currentVersion : undefined,
       lastUpdateCheck: new Date().toISOString(),
     });
 
     if (wasRunning) {
-      if (!restored) {
+      if (!binaryPresent) {
         throw new BinaryUpdateError(
           `${msg}\nBackup missing; previous binary not restored. Run: cpa update`,
           false,
@@ -374,7 +390,7 @@ export async function updateBinary(
   const alreadyLatest = !options?.version && !!currentVersion && currentVersion === version;
 
   if (alreadyLatest && !options?.force) {
-    return { version, changed: false, skipped: true, restarted: false };
+    return { version, skipped: true, restarted: false };
   }
 
   const candidates = listReleaseAssetCandidates(release, process.platform, process.arch);
@@ -413,7 +429,7 @@ export async function updateBinary(
       deps,
       reporter,
     );
-    return { version, changed: true, skipped: false, restarted };
+    return { version, skipped: false, restarted };
   } finally {
     // Never let temp cleanup turn a completed update into a reported failure.
     removeDirBestEffort(staging, (message) => reporter.warn(message));

@@ -9,6 +9,7 @@ import { runClean } from "./clean.js";
 const originalLocalAppData = process.env.LOCALAPPDATA;
 const originalXdgDataHome = process.env.XDG_DATA_HOME;
 const originalHome = process.env.HOME;
+const originalExitCode = process.exitCode;
 const temps: string[] = [];
 
 function setAppDataRoot(base: string): void {
@@ -27,6 +28,7 @@ afterEach(() => {
   else process.env.XDG_DATA_HOME = originalXdgDataHome;
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+  process.exitCode = originalExitCode;
 });
 
 describe("runClean", () => {
@@ -48,6 +50,49 @@ describe("runClean", () => {
 
     assert.equal(fs.existsSync(miniTemp), false);
     assert.equal(fs.readFileSync(sibling, "utf8"), "keep-me");
+  });
+
+  it("reports and fails when an entry cannot be removed", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-clean-base-"));
+    temps.push(base);
+    setAppDataRoot(base);
+
+    const miniTemp = miniCpaTempRoot();
+    const locked = path.join(miniTemp, "downloads");
+    fs.mkdirSync(locked, { recursive: true });
+    fs.writeFileSync(path.join(locked, "x.zip"), "payload");
+
+    const lines: string[] = [];
+    const originalLog = console.log;
+    const originalRmSync = fs.rmSync;
+    console.log = (...args: unknown[]): void => {
+      lines.push(args.map((arg) => String(arg)).join(" "));
+    };
+    fs.rmSync = ((target: fs.PathLike, options?: fs.RmOptions): void => {
+      if (String(target) === locked) {
+        const err: NodeJS.ErrnoException = new Error("EBUSY: resource busy or locked");
+        err.code = "EBUSY";
+        throw err;
+      }
+      originalRmSync(target, options);
+    }) as typeof fs.rmSync;
+    try {
+      await runClean({ minAgeMs: 0 });
+    } finally {
+      fs.rmSync = originalRmSync;
+      console.log = originalLog;
+    }
+
+    assert.ok(
+      lines.some((line) => line.includes("could not remove")),
+      lines.join("\n"),
+    );
+    assert.ok(
+      lines.some((line) => line.includes("1 could not be removed")),
+      lines.join("\n"),
+    );
+    assert.equal(process.exitCode, 1);
+    assert.equal(fs.existsSync(locked), true);
   });
 
   it("keeps recent staging entries by default", async () => {

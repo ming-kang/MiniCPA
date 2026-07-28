@@ -58,11 +58,36 @@ describe("verifyArchiveChecksum", () => {
     );
   });
 
-  it("skips when insecure", () => {
+  it("falls back to the on-disk archive basename when the asset name is absent", () => {
+    const archiveName = "CLIProxyAPI_7.0.0_windows_amd64.zip";
+    const content = "hello-archive";
+    const archivePath = writeTempArchive(content, archiveName);
+    const digest = crypto.createHash("sha256").update(content).digest("hex");
+    const map = new Map([[path.basename(archivePath), digest]]);
+    assert.doesNotThrow(() => verifyArchiveChecksum(map, archivePath, "other-name.zip"));
+  });
+
+  it("verifies unconditionally: there is no in-function bypass", () => {
+    // Regression: verifyArchiveChecksum must expose exactly three parameters so
+    // the only way to skip SHA-256 verification stays the audited `--insecure`
+    // branch in updateBinary (which prints a warning). Any extra options
+    // argument would be a second, silent way to disable integrity checking.
+    assert.equal(verifyArchiveChecksum.length, 3);
+
     const archiveName = "CLIProxyAPI_7.0.0_windows_amd64.zip";
     const archivePath = writeTempArchive("payload", archiveName);
-    assert.doesNotThrow(() =>
-      verifyArchiveChecksum(new Map(), archivePath, archiveName, { insecure: true }),
+    const call = verifyArchiveChecksum as unknown as (
+      checksums: Map<string, string>,
+      archivePath: string,
+      archiveName: string,
+      options?: { insecure?: boolean },
+    ) => void;
+    assert.throws(
+      () =>
+        call(new Map([[archiveName, "a".repeat(64)]]), archivePath, archiveName, {
+          insecure: true,
+        }),
+      /Checksum mismatch/,
     );
   });
 });

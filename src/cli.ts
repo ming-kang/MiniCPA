@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import "./node-version-guard.js";
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +34,10 @@ program
   .description("MiniCPA — manage one CLIProxyAPI instance")
   .version(pkg.version)
   .showHelpAfterError(false)
+  // Without this, the program-level `-V, --version` is also matched AFTER a subcommand
+  // name, so `cpa update --version 7.2.66` printed MiniCPA's version and exited 0
+  // instead of reaching update's own `--version <ver>` pin.
+  .enablePositionalOptions()
   .exitOverride();
 
 program
@@ -224,11 +228,16 @@ try {
   // Commander exitOverride throws on --help / unknown commands / version.
   const e = err as { code?: string; message?: string; exitCode?: number };
   if (e.code === "commander.helpDisplayed" || e.code === "commander.version") {
+    // Explicit `--help` / `--version` always succeed.
     process.exitCode = 0;
   } else if (e.code === "commander.help") {
-    process.exitCode = 0;
+    // Commander reuses this code for both `cpa help <known-cmd>` (exitCode 0) and the
+    // error path help({ error: true }) used for a missing/unknown subcommand (exitCode 1).
+    process.exitCode = typeof e.exitCode === "number" ? e.exitCode : 0;
   } else {
-    if (e.message) console.error(e.message);
+    // Command.error() already wrote the message to stderr before exitOverride threw,
+    // so re-printing a CommanderError would duplicate every usage error.
+    if (!(err instanceof CommanderError) && e.message) console.error(e.message);
     process.exitCode = typeof e.exitCode === "number" ? e.exitCode : 1;
   }
 }

@@ -4,7 +4,8 @@ import path from "node:path";
 
 const PRIVATE_FILE_MODE = 0o600;
 
-function syncDirectory(directory: string): void {
+/** Flush a directory entry so a rename survives a power loss (no-op on win32). */
+export function syncDirectory(directory: string): void {
   if (process.platform === "win32") return;
   try {
     const fd = fs.openSync(directory, "r");
@@ -15,6 +16,42 @@ function syncDirectory(directory: string): void {
     }
   } catch {
     /* best-effort durability only */
+  }
+}
+
+/** Backoff for the Windows replace retry; 5 attempts total. */
+const RENAME_RETRY_DELAYS_MS = [50, 100, 200, 400];
+const RETRYABLE_RENAME_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
+
+/** writeFileAtomic is synchronous by contract, so the backoff must block. */
+function sleepSync(milliseconds: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+/**
+ * Replace `to` with `from`, absorbing the transient Windows sharing violations
+ * (EPERM/EBUSY/EACCES) that antivirus and indexers cause on a just-written file.
+ * Retrying is far cheaper than the rename-aside fallback, which briefly leaves
+ * the target missing. Other platforms rename once and let the caller fall back.
+ *
+ * @internal exported for tests only
+ */
+export function renameWithWindowsRetry(
+  from: string,
+  to: string,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      const delay = RENAME_RETRY_DELAYS_MS[attempt];
+      if (platform !== "win32" || delay === undefined || !code || !RETRYABLE_RENAME_CODES.has(code))
+        throw err;
+      sleepSync(delay);
+    }
   }
 }
 
@@ -80,7 +117,7 @@ export function writeFileAtomic(
   fs.closeSync(fd);
 
   try {
-    fs.renameSync(temporaryPath, filePath);
+    renameWithWindowsRetry(temporaryPath, filePath);
   } catch {
     const backupPath = replaceBackupPath(filePath);
     const hadOriginal = fs.existsSync(filePath);

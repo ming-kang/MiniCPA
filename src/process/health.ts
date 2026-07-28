@@ -1,6 +1,25 @@
+import { Agent, fetch as undiciFetch } from "undici";
 import { getListenAddress, readCpaConfig } from "../config-yaml.js";
 import { cpaLayout } from "../paths.js";
 import { sleep } from "../util.js";
+
+/** Path of the remote-management panel, relative to the CPA HTTP base. */
+const PANEL_PATH = "/management.html";
+
+/** Longest a single probe request may wait, before the caller's deadline clamps it. */
+const PROBE_REQUEST_TIMEOUT_MS = 2000;
+
+/** Pause between probe passes, before the caller's deadline clamps it. */
+const PROBE_PASS_INTERVAL_MS = 300;
+
+/**
+ * Direct dispatcher for loopback readiness probes: a plain undici Agent never
+ * consults HTTP_PROXY/HTTPS_PROXY, unlike global fetch, which Node routes
+ * through the environment proxy (including loopback) under NODE_USE_ENV_PROXY
+ * or --use-env-proxy. Deliberately not httpFetch from ../http.js — that one
+ * applies the proxy agent and retries, which is wrong for a local probe.
+ */
+const loopbackDispatcher = new Agent();
 
 /**
  * Map wildcard listen addresses to a loopback host for local HTTP probes.
@@ -38,19 +57,27 @@ export async function waitForHttpOk(url: string, timeoutMs = 8000): Promise<bool
   return waitForAnyHttpOk([url], timeoutMs);
 }
 
-/** Probe several URLs until one returns a "server up" status (panel may 404). */
+/**
+ * Probe several URLs until one returns a "server up" status (panel may 404).
+ * Never runs past `timeoutMs`: every request timeout and inter-pass sleep is
+ * clamped to the remaining budget, so N URLs cannot multiply the caller's wait.
+ */
 export async function waitForAnyHttpOk(urls: string[], timeoutMs = 8000): Promise<boolean> {
   const unique = [...new Set(urls.filter(Boolean))];
   if (unique.length === 0) return false;
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     for (const url of unique) {
+      const budget = deadline - Date.now();
+      if (budget <= 0) break;
       try {
-        // Local loopback probe — use global fetch so HTTP(S)_PROXY is not applied.
-        const res = await fetch(url, {
+        const res = await undiciFetch(url, {
           method: "GET",
-          signal: AbortSignal.timeout(2000),
+          signal: AbortSignal.timeout(Math.max(1, Math.min(PROBE_REQUEST_TIMEOUT_MS, budget))),
+          dispatcher: loopbackDispatcher,
         });
+        // Release the socket back to the dispatcher; a probe never reads a body.
+        await res.body?.cancel().catch(() => {});
         if (isReadyStatus(res.status)) {
           return true;
         }
@@ -58,28 +85,32 @@ export async function waitForAnyHttpOk(urls: string[], timeoutMs = 8000): Promis
         /* try next URL */
       }
     }
-    await sleep(300);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await sleep(Math.min(PROBE_PASS_INTERVAL_MS, remaining));
   }
   return false;
 }
 
-export function managementUrl(home: string): string {
-  const layout = cpaLayout(home);
-  const cfg = readCpaConfig(layout.configFile);
-  const { host, port } = getListenAddress(cfg);
-  return `${formatHttpBase(host, port)}/management.html`;
-}
-
-export function apiBaseUrl(home: string): string {
+/** Single source of truth for the configured CPA HTTP base (one config read). */
+function resolveBase(home: string): string {
   const layout = cpaLayout(home);
   const cfg = readCpaConfig(layout.configFile);
   const { host, port } = getListenAddress(cfg);
   return formatHttpBase(host, port);
 }
 
+export function managementUrl(home: string): string {
+  return `${resolveBase(home)}${PANEL_PATH}`;
+}
+
+export function apiBaseUrl(home: string): string {
+  return resolveBase(home);
+}
+
 /** Prefer panel URL, then root — works for binary-only installs without management.html. */
 export function readinessUrls(home: string): string[] {
-  const base = apiBaseUrl(home);
+  const base = resolveBase(home);
   // `base` and `${base}/` are the same HTTP request; probe it once.
-  return [`${base}/management.html`, `${base}/`];
+  return [`${base}${PANEL_PATH}`, `${base}/`];
 }

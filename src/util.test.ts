@@ -44,6 +44,32 @@ describe("tailFile", () => {
     fs.writeFileSync(file, Array.from({ length: 100 }, (_, index) => `line-${index}`).join("\n"));
     assert.equal(tailFile(file, 3), "line-97\nline-98\nline-99");
   });
+
+  it("returns the full count for a file without a trailing newline", () => {
+    const dir = tempDir();
+    const file = path.join(dir, "cpa.log");
+    fs.writeFileSync(file, "l1\nl2\nl3");
+    assert.equal(tailFile(file, 1), "l3");
+    assert.equal(tailFile(file, 2), "l2\nl3");
+    assert.equal(tailFile(file, 3), "l1\nl2\nl3");
+  });
+
+  it("does not spend a line slot on the trailing newline", () => {
+    const dir = tempDir();
+    const file = path.join(dir, "cpa.log");
+    fs.writeFileSync(file, "l1\nl2\nl3\n");
+    assert.equal(tailFile(file, 1), "l3");
+    assert.equal(tailFile(file, 2), "l2\nl3");
+    assert.equal(tailFile(file, 3), "l1\nl2\nl3");
+  });
+
+  it("handles CRLF line endings", () => {
+    const dir = tempDir();
+    const file = path.join(dir, "cpa.log");
+    fs.writeFileSync(file, "l1\r\nl2\r\nl3\r\n");
+    assert.equal(tailFile(file, 2), "l2\nl3");
+    assert.equal(tailFile(file, 3), "l1\nl2\nl3");
+  });
 });
 
 describe("rotateFileIfLarge", () => {
@@ -64,5 +90,28 @@ describe("rotateFileIfLarge", () => {
     assert.equal(fs.existsSync(file), false);
     assert.equal(fs.readFileSync(`${file}.1`, "utf8"), "current-payload");
     assert.equal(fs.readFileSync(`${file}.2`, "utf8"), "old-1");
+  });
+
+  it("keeps a rotated sibling that could not be renamed", () => {
+    const dir = tempDir();
+    const file = path.join(dir, "cpa.log");
+    fs.writeFileSync(file, "current-payload");
+    fs.writeFileSync(`${file}.1`, "old-1");
+
+    const realRename = fs.renameSync;
+    try {
+      // Simulate a filesystem that refuses every rename (Windows AV / EPERM):
+      // a failed shift must never delete the log it could not move.
+      fs.renameSync = (): never => {
+        throw new Error("EPERM: operation not permitted, rename");
+      };
+      assert.equal(rotateFileIfLarge(file, { maxBytes: 4, keep: 2 }), false);
+    } finally {
+      fs.renameSync = realRename;
+    }
+
+    assert.equal(fs.existsSync(`${file}.1`), true);
+    assert.equal(fs.readFileSync(`${file}.1`, "utf8"), "old-1");
+    assert.equal(fs.readFileSync(file, "utf8"), "current-payload");
   });
 });

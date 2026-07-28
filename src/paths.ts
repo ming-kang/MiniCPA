@@ -17,7 +17,9 @@ export type CliGlobalConfig = {
  */
 function envPathOr(fallback: string, value: string | undefined): string {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : fallback;
+  // Per the XDG Base Directory spec, a non-absolute value must be ignored: a
+  // cwd-relative root would move the global lock with the working directory.
+  return trimmed && path.isAbsolute(trimmed) ? trimmed : fallback;
 }
 
 export function miniCpaRoot(): string {
@@ -72,11 +74,17 @@ export function cliConfigPath(): string {
 export function readCliGlobalConfig(): CliGlobalConfig {
   const file = cliConfigPath();
   if (!fs.existsSync(file)) return {};
+  let parsed: unknown;
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8")) as CliGlobalConfig;
+    parsed = JSON.parse(fs.readFileSync(file, "utf8"));
   } catch {
     return {};
   }
+  // A structurally corrupt config.json must not crash every command, so keep
+  // only the fields that match the declared shape.
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+  const home = (parsed as Record<string, unknown>).home;
+  return typeof home === "string" ? { home } : {};
 }
 
 export function writeCliGlobalConfig(config: CliGlobalConfig): void {

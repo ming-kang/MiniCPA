@@ -3,6 +3,7 @@
   "compilerOptions": {
     "declaration": false,
     "sourceMap": true,
+    "inlineSources": true,
     "removeComments": true
   },
   "exclude": ["node_modules", "dist", "src/**/*.test.ts", "src/test-fixtures"]

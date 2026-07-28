@@ -200,4 +200,120 @@ describe("installBinaryPhase", () => {
     // C3 regression: state must not claim a version with no binary on disk.
     assert.equal(readInstallState(home).runtimeVersion, undefined);
   });
+
+  it("restarts CPA and keeps the recorded version when the binary never got replaced", async () => {
+    const home = tempHome();
+    // Steady state: an intact binary and NO .bak (cleared after the last update).
+    fs.writeFileSync(activeExecutablePath(home), "old-binary");
+    writeInstallState(home, { runtimeVersion: "7.2.65" });
+    const deps = fakeDeps({
+      async waitForBinaryUnlocked() {
+        throw new Error("CPA binary still locked after 30000ms");
+      },
+    });
+
+    await assert.rejects(
+      () =>
+        installBinaryPhase(
+          home,
+          {
+            version: "7.2.66",
+            extractedExe: stagedExe(home, "new-binary"),
+            wasRunning: true,
+            currentVersion: "7.2.65",
+          },
+          deps,
+          silentUpdateReporter,
+        ),
+      (err: unknown) => {
+        assert.ok(err instanceof BinaryUpdateError);
+        assert.equal(err.previousRestarted, true);
+        // The untouched binary is still on disk, so this is NOT a missing-backup case.
+        assert.doesNotMatch(err.message, /Backup missing/);
+        assert.match(err.message, /still locked/);
+        return true;
+      },
+    );
+
+    // A transient file lock must not leave CPA stopped…
+    assert.ok(deps.calls.includes("start"));
+    // …must not touch the binary…
+    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "old-binary");
+    assert.equal(fs.existsSync(backupExecutablePath(home)), false);
+    // …and must not wipe the version that binary really is.
+    assert.equal(readInstallState(home).runtimeVersion, "7.2.65");
+  });
+
+  it("reports a missing backup when a pre-replace failure finds no binary at all", async () => {
+    const home = tempHome();
+    // No binary on disk and no .bak: nothing to restart, message must say so.
+    writeInstallState(home, { runtimeVersion: "7.2.65" });
+    const deps = fakeDeps({
+      async waitForBinaryUnlocked() {
+        throw new Error("CPA binary still locked after 30000ms");
+      },
+    });
+
+    await assert.rejects(
+      () =>
+        installBinaryPhase(
+          home,
+          {
+            version: "7.2.66",
+            extractedExe: stagedExe(home, "new-binary"),
+            wasRunning: true,
+            currentVersion: "7.2.65",
+          },
+          deps,
+          silentUpdateReporter,
+        ),
+      (err: unknown) => {
+        assert.ok(err instanceof BinaryUpdateError);
+        assert.equal(err.previousRestarted, false);
+        assert.match(err.message, /Backup missing/);
+        return true;
+      },
+    );
+
+    assert.ok(!deps.calls.includes("start"));
+    assert.equal(readInstallState(home).runtimeVersion, undefined);
+  });
+
+  it("restarts CPA when installRuntimeBinary fails before touching the active binary", async () => {
+    const home = tempHome();
+    // Steady state again: an intact binary and NO .bak. This time the file lock
+    // clears and the failure happens INSIDE installRuntimeBinary, while it is
+    // still only staging (ENOSPC/EACCES on the copy, an AV lock on the fsync
+    // open). The active binary is never moved aside, so no .bak is created.
+    fs.writeFileSync(activeExecutablePath(home), "old-binary");
+    writeInstallState(home, { runtimeVersion: "7.2.65" });
+    const deps = fakeDeps();
+
+    await assert.rejects(
+      () =>
+        installBinaryPhase(
+          home,
+          {
+            version: "7.2.66",
+            // Never created: copyFileSync into the staging name throws ENOENT.
+            extractedExe: path.join(home, "extracted-exe-that-does-not-exist"),
+            wasRunning: true,
+            currentVersion: "7.2.65",
+          },
+          deps,
+          silentUpdateReporter,
+        ),
+      (err: unknown) => {
+        assert.ok(err instanceof BinaryUpdateError);
+        assert.equal(err.previousRestarted, true);
+        assert.doesNotMatch(err.message, /Backup missing/);
+        return true;
+      },
+    );
+
+    assert.ok(deps.calls.includes("start"), "CPA must be brought back up");
+    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "old-binary");
+    assert.equal(fs.existsSync(backupExecutablePath(home)), false);
+    assert.equal(readInstallState(home).runtimeVersion, "7.2.65");
+  });
 });

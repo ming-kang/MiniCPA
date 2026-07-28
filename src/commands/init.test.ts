@@ -3,11 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { defaultCpaHome } from "../paths.js";
 import { runInit } from "./init.js";
 
 const originalLocalAppData = process.env.LOCALAPPDATA;
 const originalXdgDataHome = process.env.XDG_DATA_HOME;
 const originalHome = process.env.HOME;
+const originalCpaHome = process.env.CPA_HOME;
 const temps: string[] = [];
 
 afterEach(() => {
@@ -20,6 +22,8 @@ afterEach(() => {
   else process.env.XDG_DATA_HOME = originalXdgDataHome;
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+  if (originalCpaHome === undefined) delete process.env.CPA_HOME;
+  else process.env.CPA_HOME = originalCpaHome;
 });
 
 describe("runInit", () => {
@@ -29,7 +33,11 @@ describe("runInit", () => {
     process.env.LOCALAPPDATA = base;
     process.env.XDG_DATA_HOME = base;
     process.env.HOME = base;
-    const home = path.join(base, "MiniCPA", "instances", "default");
+    // A developer shell export must not decide where runInit writes.
+    delete process.env.CPA_HOME;
+    // Resolve after the env assignments: the darwin branch reads os.homedir(), not
+    // LOCALAPPDATA/XDG_DATA_HOME, so a hardcoded layout only matches win32 and linux.
+    const home = defaultCpaHome();
 
     const output: string[] = [];
     const originalLog = console.log;

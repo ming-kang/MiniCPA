@@ -9,12 +9,16 @@ import { withHttpFixture } from "../test-fixtures/http-server.js";
 // the first httpFetch call so the lazily created proxy agent honors it.
 process.env.NO_PROXY = "127.0.0.1";
 process.env.no_proxy = "127.0.0.1";
+import { NetworkError } from "../http.js";
 import {
   browserReleaseAssetUrl,
+  checkGithubReachability,
   downloadToFile,
   ensureReleaseTag,
   fetchChecksums,
+  fetchLatestReleaseViaApi,
   githubAuthToken,
+  githubHeaders,
   isSafeReleaseTag,
   normalizeTagVersion,
   parseChecksumsText,
@@ -127,9 +131,179 @@ describe("parseChecksumsText / parseGithubDigest", () => {
     assert.equal(map.get("cli-proxy-api"), b);
   });
 
+  it("strips the sha256sum binary-mode marker from the file name", () => {
+    const a = "a".repeat(64);
+    const map = parseChecksumsText(`${a} *CLIProxyAPI_7.2.66_linux_amd64.tar.gz\n`);
+    assert.equal(map.get("CLIProxyAPI_7.2.66_linux_amd64.tar.gz"), a);
+    assert.equal(map.has("*CLIProxyAPI_7.2.66_linux_amd64.tar.gz"), false);
+  });
+
   it("parses asset digest", () => {
     assert.equal(parseGithubDigest(`sha256:${"c".repeat(64)}`), "c".repeat(64));
     assert.equal(parseGithubDigest("md5:abc"), undefined);
+  });
+
+  it("returns undefined for a non-string digest", () => {
+    assert.equal(parseGithubDigest(12_345 as unknown as string), undefined);
+    assert.equal(parseGithubDigest({} as unknown as string), undefined);
+  });
+});
+
+describe("githubHeaders", () => {
+  const tokenKeys = ["GITHUB_TOKEN", "GH_TOKEN"] as const;
+  const savedTokens = new Map<string, string | undefined>();
+
+  function setTokens(values: Partial<Record<(typeof tokenKeys)[number], string>>): void {
+    for (const key of tokenKeys) {
+      if (!savedTokens.has(key)) savedTokens.set(key, process.env[key]);
+      delete process.env[key];
+    }
+    for (const key of tokenKeys) {
+      const value = values[key];
+      if (value !== undefined) process.env[key] = value;
+    }
+  }
+
+  afterEach(() => {
+    for (const key of tokenKeys) delete process.env[key];
+    for (const [key, value] of savedTokens) {
+      if (value !== undefined) process.env[key] = value;
+    }
+    savedTokens.clear();
+  });
+
+  it("attaches Authorization on API paths when a token is set", () => {
+    setTokens({ GITHUB_TOKEN: "ghp_test" });
+    assert.equal(githubHeaders("json").Authorization, "Bearer ghp_test");
+    assert.equal(githubHeaders("download").Authorization, "Bearer ghp_test");
+  });
+
+  it("never attaches Authorization to browser downloads", () => {
+    setTokens({ GITHUB_TOKEN: "ghp_test" });
+    assert.equal(githubHeaders("browser").Authorization, undefined);
+  });
+
+  it("omits Authorization when no token is set", () => {
+    setTokens({});
+    assert.equal(githubHeaders("json").Authorization, undefined);
+    assert.equal(githubHeaders("json").Accept, "application/vnd.github+json");
+  });
+});
+
+describe("fetchLatestReleaseViaApi", () => {
+  it("rejects non-release JSON bodies with an actionable message", async () => {
+    for (const body of ["{}", "[]", "null"]) {
+      await withHttpFixture(
+        {
+          "/repos/owner/repo/releases/latest": (_req, res) => {
+            res.statusCode = 200;
+            res.setHeader("content-type", "application/json");
+            res.end(body);
+          },
+        },
+        async (baseUrl) => {
+          await assert.rejects(
+            () => fetchLatestReleaseViaApi("owner/repo", baseUrl),
+            (err: unknown) => {
+              assert.ok(err instanceof Error);
+              assert.ok(!(err instanceof TypeError), `TypeError leaked for body ${body}`);
+              assert.match(err.message, /invalid release metadata/);
+              return true;
+            },
+          );
+        },
+      );
+    }
+  });
+
+  it("accepts a well-formed release", async () => {
+    await withHttpFixture(
+      {
+        "/repos/owner/repo/releases/latest": (_req, res) => {
+          res.statusCode = 200;
+          res.setHeader("content-type", "application/json");
+          res.end(
+            JSON.stringify({
+              tag_name: "v7.2.92",
+              name: "v7.2.92",
+              published_at: "",
+              assets: [{ name: "a.zip", browser_download_url: "https://example.invalid/a.zip" }],
+            }),
+          );
+        },
+      },
+      async (baseUrl) => {
+        const release = await fetchLatestReleaseViaApi("owner/repo", baseUrl);
+        assert.equal(release.tag_name, "v7.2.92");
+        assert.equal(release.assets[0]?.name, "a.zip");
+      },
+    );
+  });
+});
+
+describe("checkGithubReachability", () => {
+  const tokenKeys = ["GITHUB_TOKEN", "GH_TOKEN"] as const;
+  const savedTokens = new Map<string, string | undefined>();
+
+  afterEach(() => {
+    for (const key of tokenKeys) delete process.env[key];
+    for (const [key, value] of savedTokens) {
+      if (value !== undefined) process.env[key] = value;
+    }
+    savedTokens.clear();
+  });
+
+  function clearTokens(): void {
+    for (const key of tokenKeys) {
+      if (!savedTokens.has(key)) savedTokens.set(key, process.env[key]);
+      delete process.env[key];
+    }
+  }
+
+  it("reports core rate limit and sends the API token", async () => {
+    clearTokens();
+    process.env.GITHUB_TOKEN = "ghp_probe";
+    let seenAuth: string | undefined;
+    await withHttpFixture(
+      {
+        "/rate_limit": (req, res) => {
+          seenAuth = req.headers.authorization;
+          res.statusCode = 200;
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ resources: { core: { remaining: 4_999 } } }));
+        },
+      },
+      async (baseUrl) => {
+        const result = await checkGithubReachability(baseUrl);
+        assert.deepEqual(result, {
+          ok: true,
+          status: 200,
+          remaining: 4_999,
+          authenticated: true,
+        });
+        assert.equal(seenAuth, "Bearer ghp_probe");
+      },
+    );
+  });
+
+  it("reports an unreachable API without a rate limit", async () => {
+    clearTokens();
+    await withHttpFixture(
+      {
+        "/rate_limit": (req, res) => {
+          assert.equal(req.headers.authorization, undefined);
+          res.statusCode = 403;
+          res.end("forbidden");
+        },
+      },
+      async (baseUrl) => {
+        const result = await checkGithubReachability(baseUrl);
+        assert.equal(result.ok, false);
+        assert.equal(result.status, 403);
+        assert.equal(result.remaining, undefined);
+        assert.equal(result.authenticated, false);
+      },
+    );
   });
 });
 
@@ -143,6 +317,69 @@ describe("downloadToFile", () => {
       /exceeds 4 B limit/,
     );
     assert.equal(fs.existsSync(dest), false);
+  });
+
+  it("reports a mid-stream connection failure as an enriched NetworkError", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-download-"));
+    tempDirs.push(dir);
+    const dest = path.join(dir, "payload.bin");
+    await withHttpFixture(
+      {
+        "/truncated.bin": (_req, res) => {
+          res.statusCode = 200;
+          // Promise far more than we send, then drop the socket mid-body.
+          res.setHeader("content-length", "1048576");
+          res.write("partial payload", () => {
+            res.socket?.destroy();
+          });
+        },
+      },
+      async (baseUrl) => {
+        const url = `${baseUrl}/truncated.bin`;
+        const host = new URL(baseUrl).host;
+        await assert.rejects(
+          () => downloadToFile(url, dest, { label: "truncated.bin" }),
+          (err: unknown) => {
+            assert.ok(err instanceof NetworkError, `expected NetworkError, got ${String(err)}`);
+            assert.equal(err.url, url);
+            assert.ok(err.message.includes(host), `message should name the host: ${err.message}`);
+            return true;
+          },
+        );
+        assert.equal(fs.existsSync(dest), false);
+      },
+    );
+  });
+
+  it("aborts a connection that opens and then sends nothing", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-download-"));
+    tempDirs.push(dir);
+    const dest = path.join(dir, "payload.bin");
+    await withHttpFixture(
+      {
+        "/stalled.bin": (_req, res) => {
+          res.statusCode = 200;
+          res.setHeader("content-length", "1048576");
+          res.flushHeaders();
+          // Never write a body: the total timeout would take 5 minutes to notice.
+        },
+      },
+      async (baseUrl) => {
+        await assert.rejects(
+          () =>
+            downloadToFile(`${baseUrl}/stalled.bin`, dest, {
+              label: "stalled.bin",
+              stallTimeoutMs: 200,
+            }),
+          (err: unknown) => {
+            assert.ok(err instanceof NetworkError, `expected NetworkError, got ${String(err)}`);
+            assert.match(err.message, /Download stalled \(no data for 1s\): stalled\.bin/);
+            return true;
+          },
+        );
+        assert.equal(fs.existsSync(dest), false);
+      },
+    );
   });
 });
 

@@ -26,6 +26,21 @@ npm install -g @astralyn/minicpa@latest
 
 `cpa update` updates the managed CPA binary and management panel; it does not update MiniCPA.
 
+## Uninstall
+
+CPA runs detached, so it keeps running after MiniCPA is removed. Stop it **before** uninstalling, and note the data paths while `cpa` is still available:
+
+```bash
+cpa stop
+cpa home   # instance: config.yaml (api key), auths/ (provider OAuth tokens), logs
+cpa root   # MiniCPA app data (contains the instance and temp staging)
+npm uninstall -g @astralyn/minicpa
+```
+
+If you uninstall first, CPA is still listening (`127.0.0.1:8317` by default) and only the OS can stop it — `taskkill /PID <pid> /F` on Windows, `kill <pid>` elsewhere; the PID is in `<cpa home>/state/cpa.pid`.
+
+Uninstalling never deletes CPA data. Delete the `cpa root` directory by hand once CPA is stopped if you want the generated api-key and the `auths/` OAuth tokens gone.
+
 ## Quick start
 
 ```bash
@@ -39,9 +54,9 @@ cpa open
 
 Updates resolve binary releases via `github.com/releases` first. Panel updates fetch GitHub release metadata to require the published SHA-256 asset digest; if the GitHub API is blocked or rate-limited, set `GITHUB_TOKEN` or `GH_TOKEN`. Tokens are stripped from CPA child processes (including version probes).
 
-**Proxy:** MiniCPA honors standard shell proxy env vars for update/network calls: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` (upper or lower case). Set them in PowerShell `$PROFILE`, bashrc, etc. — same as curl/git. `cpa doctor` prints whether a proxy is detected.
+**Proxy:** MiniCPA honors standard shell proxy env vars for update/network calls: `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` (upper or lower case). `ALL_PROXY` is used as a fallback for both HTTP and HTTPS, but only when its scheme is `http://` or `https://`; a `socks5://` `ALL_PROXY` is **not** applied — set `HTTP_PROXY`/`HTTPS_PROXY` instead. Set them in PowerShell `$PROFILE`, bashrc, etc. — same as curl/git. `cpa doctor` prints the detected proxy env and labels an `ALL_PROXY` it cannot use with `(scheme not applied)`.
 
-`cpa init` generates a random `api-keys` entry in `config.yaml` — still change it before public exposure. Staging files are private under MiniCPA app data; do not run `cpa clean` during an active `cpa update`.
+`cpa init` generates a random `api-keys` entry in `config.yaml` — still change it before public exposure. Staging files are private under MiniCPA app data. `cpa clean` and `cpa update` take the same exclusive lock, so `cpa clean` cannot run in the middle of an update — it reports the in-flight command instead.
 
 ## Paths
 
@@ -61,7 +76,7 @@ See [docs/cpa-reference.md](docs/cpa-reference.md) for startup details, single-i
 |---------|--------|
 | `cpa start` | Waits until HTTP is ready (`--no-wait` to skip). Exclusive single-instance lock. Rotates logs ≥ 50 MiB. Warns on invalid `host`/`port` in config.yaml. |
 | `cpa stop` | Stops the process only — it does not wait for the binary file to unlock (update handles that), so Windows stop is fast. |
-| `cpa logs` | stdout + stderr; `--err` for error log only; `-f` follow |
+| `cpa logs` | stdout + stderr; `-n, --lines <n>` last lines per file (default `80`, must be a positive whole number); `--err` for error log only; `-f` follow (ignores `--lines`) |
 | `cpa update` | **Default: binary + panel.** Download/verify first, then stop/replace/restart if needed. Binary checksums and the panel's GitHub SHA-256 asset digest are required unless `--insecure` is used for the binary. |
 | `cpa update --binary` / `--panel` / `--all` | Limit scope (**mutually exclusive**) |
 | `cpa clean` | Wipe MiniCPA temp downloads/extract only (never touches instance home) |

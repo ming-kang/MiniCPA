@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import {
   describeProxyEnv,
   formatNetworkError,
@@ -48,6 +48,114 @@ describe("describeProxyEnv", () => {
     assert.match(text, /\*\*\*/);
     assert.match(text, /NO_PROXY=/);
     assert.equal(describeProxyEnv({}), "none");
+  });
+
+  it("still redacts credentials in an ALL_PROXY value", () => {
+    const text = describeProxyEnv({ ALL_PROXY: "http://user:secret@127.0.0.1:7890" });
+    assert.match(text, /ALL_PROXY=/);
+    assert.match(text, /\*\*\*/);
+    assert.doesNotMatch(text, /user|secret/);
+  });
+
+  it("marks an ALL_PROXY scheme undici cannot dial", () => {
+    assert.match(
+      describeProxyEnv({ ALL_PROXY: "socks5://127.0.0.1:1080" }),
+      /ALL_PROXY=socks5:\/\/127\.0\.0\.1:1080 \(scheme not applied\)/,
+    );
+    assert.match(
+      describeProxyEnv({ all_proxy: "socks5h://127.0.0.1:1080" }),
+      /\(scheme not applied\)/,
+    );
+    assert.doesNotMatch(
+      describeProxyEnv({ ALL_PROXY: "http://127.0.0.1:7890" }),
+      /scheme not applied/,
+    );
+  });
+});
+
+describe("proxy env application", () => {
+  const proxyKeys = [
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+  ] as const;
+  const saved = new Map<string, string | undefined>();
+
+  // process.env keys are case-insensitive on Windows, so every delete must happen
+  // before any assignment or `delete process.env.all_proxy` also drops ALL_PROXY.
+  function setProxyEnv(values: Partial<Record<(typeof proxyKeys)[number], string>>): void {
+    for (const key of proxyKeys) {
+      if (!saved.has(key)) saved.set(key, process.env[key]);
+      delete process.env[key];
+    }
+    for (const key of proxyKeys) {
+      const value = values[key];
+      if (value !== undefined) process.env[key] = value;
+    }
+  }
+
+  afterEach(() => {
+    for (const key of proxyKeys) delete process.env[key];
+    for (const [key, value] of saved) {
+      if (value !== undefined) process.env[key] = value;
+    }
+    saved.clear();
+  });
+
+  /** A port nothing listens on: opened and closed again by the fixture helper. */
+  async function closedPort(): Promise<number> {
+    let port = 0;
+    await withHttpFixture({}, async (baseUrl) => {
+      port = Number(new URL(baseUrl).port);
+    });
+    return port;
+  }
+
+  it("routes through an http ALL_PROXY and goes direct without proxy env", async () => {
+    const deadProxyPort = await closedPort();
+    await withHttpFixture(
+      {
+        "/hello": (_req, res) => {
+          res.statusCode = 200;
+          res.end("direct");
+        },
+      },
+      async (baseUrl) => {
+        setProxyEnv({ ALL_PROXY: `http://127.0.0.1:${deadProxyPort}` });
+        await assert.rejects(
+          () => httpFetch(`${baseUrl}/hello`, undefined, { retries: 0 }),
+          (err: unknown) => err instanceof NetworkError,
+        );
+
+        setProxyEnv({});
+        const res = await httpFetch(`${baseUrl}/hello`, undefined, { retries: 0 });
+        assert.equal(res.status, 200);
+        assert.equal(await res.text(), "direct");
+      },
+    );
+  });
+
+  it("leaves a socks ALL_PROXY unapplied", async () => {
+    await withHttpFixture(
+      {
+        "/hello": (_req, res) => {
+          res.statusCode = 200;
+          res.end("direct");
+        },
+      },
+      async (baseUrl) => {
+        setProxyEnv({ ALL_PROXY: "socks5://127.0.0.1:1080" });
+        const res = await httpFetch(`${baseUrl}/hello`, undefined, { retries: 0 });
+        assert.equal(res.status, 200);
+        assert.equal(await res.text(), "direct");
+        assert.match(describeProxyEnv(), /\(scheme not applied\)/);
+      },
+    );
   });
 });
 

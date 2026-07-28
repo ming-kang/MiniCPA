@@ -1,28 +1,78 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildCpaChildEnv } from "./child-env.js";
+import { STRIPPED_ENV_KEYS, buildCpaChildEnv } from "./child-env.js";
+
+/** `GITHUB_TOKEN` -> `GiThUb_ToKeN`, so a case-folding regression is caught. */
+function mixedCase(key: string): string {
+  return [...key].map((ch, i) => (i % 2 === 0 ? ch.toUpperCase() : ch.toLowerCase())).join("");
+}
+
+/**
+ * Independent anchor: the stripping assertions below are driven from
+ * STRIPPED_ENV_KEYS, so they cannot notice a key being deleted from it. These
+ * are the MiniCPA update credentials that must never reach a CPA child.
+ */
+const REQUIRED_STRIPPED_KEYS = [
+  "GITHUB_TOKEN",
+  "GH_TOKEN",
+  "GH_ENTERPRISE_TOKEN",
+  "GITHUB_PAT",
+  "GITHUB_ACCESS_TOKEN",
+  "GH_PAT",
+  "NPM_TOKEN",
+  "NPM_AUTH_TOKEN",
+  "NODE_AUTH_TOKEN",
+];
+
+describe("STRIPPED_ENV_KEYS", () => {
+  it("still covers every credential key MiniCPA is known to read", () => {
+    for (const key of REQUIRED_STRIPPED_KEYS) {
+      assert.ok(
+        (STRIPPED_ENV_KEYS as readonly string[]).includes(key),
+        `${key} was dropped from STRIPPED_ENV_KEYS`,
+      );
+    }
+  });
+
+  it("is uppercase-normalized so the case-insensitive lookup works", () => {
+    for (const key of STRIPPED_ENV_KEYS) {
+      assert.equal(key, key.toUpperCase());
+    }
+  });
+});
 
 describe("buildCpaChildEnv", () => {
-  it("strips known tokens in every case while keeping unrelated values", () => {
-    const child = buildCpaChildEnv({
+  it("strips every key in STRIPPED_ENV_KEYS in every case while keeping unrelated values", () => {
+    const sourceEnv: NodeJS.ProcessEnv = {
       PATH: "/usr/bin",
       HOME: "/home/user",
-      GITHUB_TOKEN: "secret-gh",
-      github_token: "secret-gh-lower",
-      Gh_ToKeN: "secret-gh-mixed",
-      GH_TOKEN: "secret-gh2",
-      gh_enterprise_token: "secret-ent",
-      GITHUB_PAT: "secret-pat",
-      npm_token: "secret-npm",
-      NPM_AUTH_TOKEN: "secret-npm-auth",
-      node_auth_token: "secret-node",
       CPA_HOME: "/data/cpa",
-    });
+    };
+    for (const key of STRIPPED_ENV_KEYS) {
+      for (const spelling of [key, key.toLowerCase(), mixedCase(key)]) {
+        sourceEnv[spelling] = `secret-${key}`;
+      }
+    }
+
+    const child = buildCpaChildEnv(sourceEnv);
+
+    assert.ok(STRIPPED_ENV_KEYS.length > 0);
+    for (const key of STRIPPED_ENV_KEYS) {
+      for (const spelling of [key, key.toLowerCase(), mixedCase(key)]) {
+        assert.equal(child[spelling], undefined, `${spelling} leaked into the child env`);
+      }
+    }
     assert.equal(child.PATH, "/usr/bin");
     assert.equal(child.HOME, "/home/user");
     assert.equal(child.CPA_HOME, "/data/cpa");
     for (const value of Object.values(child)) {
       assert.doesNotMatch(String(value), /^secret-/);
     }
+  });
+
+  it("does not mutate the source environment", () => {
+    const sourceEnv: NodeJS.ProcessEnv = { GITHUB_TOKEN: "secret-gh", PATH: "/usr/bin" };
+    buildCpaChildEnv(sourceEnv);
+    assert.equal(sourceEnv.GITHUB_TOKEN, "secret-gh");
   });
 });

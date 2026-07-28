@@ -12,8 +12,12 @@ import { rotateFileIfLarge, sleep, tailFile } from "../util.js";
 import { isProcessAlive } from "./alive.js";
 import { buildCpaChildEnv } from "./child-env.js";
 import { readinessUrls, waitForAnyHttpOk } from "./health.js";
-import { classifyProcessIdentity, readProcessStartMarker } from "./pid-identity.js";
-import { recoverUnlockProbeBinary, resolveRunnableExecutable } from "./runtime.js";
+import { classifyProcessIdentity, probePidReuse, readProcessStartMarker } from "./pid-identity.js";
+import {
+  findRunnableExecutable,
+  recoverUnlockProbeBinary,
+  resolveRunnableExecutable,
+} from "./runtime.js";
 
 const DEFAULT_READY_MS = 15_000;
 const STOP_GRACE_MS = 5_000;
@@ -29,40 +33,52 @@ export type RunningInfo = {
   identityUnknown?: boolean;
 };
 
-export function resolveRunning(home: string): RunningInfo | undefined {
+/**
+ * Shared implementation behind resolveRunning and inspectRunning.
+ *
+ * With `repair` the instance home is healed as a side effect (stale pid records
+ * are deleted, a crash-orphaned `.bak`/`.unlock-probe` binary is restored);
+ * without it nothing on disk is touched, so unlocked read-only commands cannot
+ * race a lock-holding `cpa update` over the binary it is replacing.
+ */
+function evaluateRunning(home: string, repair: boolean): RunningInfo | undefined {
   const record = readPidRecord(home);
   if (!record) return undefined;
 
   if (!isProcessAlive(record.pid)) {
-    clearPid(home);
+    if (repair) clearPid(home);
     return undefined;
   }
 
-  const currentStartMarker = readProcessStartMarker(record.pid);
-  if (record.startMarker && currentStartMarker && record.startMarker !== currentStartMarker) {
-    clearPid(home);
+  const { currentMarker, reused } = probePidReuse(record.pid, record.startMarker);
+  if (reused) {
+    if (repair) clearPid(home);
     return undefined;
   }
 
   let exe: string;
-  try {
-    exe = resolveRunnableExecutable(home);
-  } catch {
-    exe = record.exe;
+  if (repair) {
+    try {
+      exe = resolveRunnableExecutable(home);
+    } catch {
+      exe = record.exe;
+    }
+  } else {
+    exe = findRunnableExecutable(home) ?? record.exe;
   }
 
   const identity = classifyProcessIdentity(record.pid, exe || record.exe);
   if (identity === "mismatch") {
-    clearPid(home);
+    if (repair) clearPid(home);
     return undefined;
   }
 
   // A matching spawn-time start marker (boot id + start ticks) is PID-reuse-proof,
   // so it alone verifies ownership when the executable probe is inconclusive.
+  // Reuse was not proven above, so two present markers are a verified match.
   // With both probes inconclusive we stay fail-closed for kill decisions.
-  const markerVerified =
-    !!record.startMarker && !!currentStartMarker && record.startMarker === currentStartMarker;
-  const markerDegraded = !!record.startMarker && !currentStartMarker;
+  const markerVerified = !!record.startMarker && !!currentMarker;
+  const markerDegraded = !!record.startMarker && !currentMarker;
   const identityUnknown = identity === "unknown" ? !markerVerified : markerDegraded;
 
   return {
@@ -71,6 +87,16 @@ export function resolveRunning(home: string): RunningInfo | undefined {
     startedAt: record.startedAt || undefined,
     identityUnknown,
   };
+}
+
+/** Repairing lookup for commands that hold the MiniCPA lock. */
+export function resolveRunning(home: string): RunningInfo | undefined {
+  return evaluateRunning(home, true);
+}
+
+/** Read-only lookup for unlocked commands; never mutates the instance home. */
+export function inspectRunning(home: string): RunningInfo | undefined {
+  return evaluateRunning(home, false);
 }
 
 function openPrivateAppendLog(file: string): number {
@@ -110,6 +136,23 @@ async function runTaskkill(pid: number, force: boolean): Promise<boolean> {
     killer.on("close", (code) => resolve(code === 0));
     killer.on("error", () => resolve(false));
   });
+}
+
+/** Best-effort termination of a child MiniCPA can no longer keep track of. */
+async function killUntrackedChild(pid: number): Promise<void> {
+  if (process.platform === "win32") {
+    try {
+      await runTaskkill(pid, true);
+    } catch {
+      /* the caller is already failing; report the original cause */
+    }
+    return;
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    /* the caller is already failing; report the original cause */
+  }
 }
 
 /** Re-check immediately before a destructive signal to avoid PID-reuse kills. */
@@ -239,7 +282,19 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
 
   const startedAt = new Date().toISOString();
   const startMarker = readProcessStartMarker(child.pid);
-  writePidRecord(home, { pid: child.pid, exe, startedAt, startMarker });
+  try {
+    writePidRecord(home, { pid: child.pid, exe, startedAt, startMarker });
+  } catch (err) {
+    // A live CPA with no PID record is invisible to `cpa status` and `cpa stop`,
+    // and the next `cpa start` would launch a second instance that dies on the
+    // port bind. Take the detached child down before surfacing the failure.
+    await killUntrackedChild(child.pid);
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Started CPA but failed to record its PID; the new process was terminated: ${reason}`,
+      { cause: err },
+    );
+  }
   await sleep(500);
 
   if (spawnError) {
@@ -312,8 +367,9 @@ export async function stopDaemon(home: string): Promise<boolean> {
     );
   }
 
+  // resolveRunning above already verified ownership; re-check only immediately
+  // before each force kill, where PID reuse would actually be destructive.
   if (process.platform === "win32") {
-    assertSafeToStop(home, pid);
     // Graceful taskkill (no /F) cannot signal windowless detached children;
     // when it reports failure, skip the grace wait and force-kill directly.
     const graceful = await runTaskkill(pid, false);
@@ -332,7 +388,6 @@ export async function stopDaemon(home: string): Promise<boolean> {
       }
     }
   } else {
-    assertSafeToStop(home, pid);
     try {
       process.kill(pid, "SIGTERM");
     } catch (err) {

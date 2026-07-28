@@ -20,12 +20,57 @@ export class NetworkError extends Error {
   }
 }
 
+const PROXY_ENV_KEYS = [
+  "HTTP_PROXY",
+  "http_proxy",
+  "HTTPS_PROXY",
+  "https_proxy",
+  "ALL_PROXY",
+  "all_proxy",
+  "NO_PROXY",
+  "no_proxy",
+] as const;
+
 let sharedProxyAgent: EnvHttpProxyAgent | undefined;
+let sharedProxySignature: string | undefined;
+
+function proxyEnvSignature(env: NodeJS.ProcessEnv = process.env): string {
+  return PROXY_ENV_KEYS.map((key) => `${key}=${env[key] ?? ""}`).join("\n");
+}
+
+/**
+ * ALL_PROXY value only when undici can actually use it: its ProxyAgent speaks
+ * HTTP CONNECT, so socks5:// (and anything else) cannot be honored.
+ */
+function applicableAllProxy(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const value = env.ALL_PROXY ?? env.all_proxy;
+  if (!value) return undefined;
+  try {
+    const protocol = new URL(value).protocol;
+    return protocol === "http:" || protocol === "https:" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function createProxyAgent(env: NodeJS.ProcessEnv = process.env): EnvHttpProxyAgent {
+  const allProxy = applicableAllProxy(env);
+  // undici's EnvHttpProxyAgent reads HTTP(S)_PROXY / NO_PROXY (any case) itself but
+  // ignores ALL_PROXY entirely, so fill it in as the fallback for both schemes.
+  if (!allProxy) return new EnvHttpProxyAgent();
+  return new EnvHttpProxyAgent({
+    httpProxy: env.http_proxy ?? env.HTTP_PROXY ?? allProxy,
+    httpsProxy: env.https_proxy ?? env.HTTPS_PROXY ?? allProxy,
+  });
+}
 
 function getProxyAgent(): EnvHttpProxyAgent {
-  if (!sharedProxyAgent) {
-    // Reads HTTP(S)_PROXY / ALL_PROXY / NO_PROXY (any case) from process.env.
-    sharedProxyAgent = new EnvHttpProxyAgent();
+  const signature = proxyEnvSignature();
+  if (!sharedProxyAgent || sharedProxySignature !== signature) {
+    // One agent per distinct proxy environment; the previous one is dropped
+    // rather than destroyed so in-flight requests on it still complete.
+    sharedProxyAgent = createProxyAgent();
+    sharedProxySignature = signature;
   }
   return sharedProxyAgent;
 }
@@ -56,7 +101,13 @@ export function describeProxyEnv(env: NodeJS.ProcessEnv = process.env): string {
   ] as const) {
     const value = env[key];
     if (!value) continue;
-    parts.push(`${key}=${redactProxyUrl(value)}`);
+    // An ALL_PROXY that undici cannot dial (e.g. socks5://) is reported, but
+    // must not read as if it were in effect.
+    const note =
+      (key === "ALL_PROXY" || key === "all_proxy") && !applicableAllProxy(env)
+        ? " (scheme not applied)"
+        : "";
+    parts.push(`${key}=${redactProxyUrl(value)}${note}`);
   }
   const noProxy = env.NO_PROXY || env.no_proxy;
   if (noProxy) {
@@ -181,7 +232,8 @@ export function retryDelayMs(
 
 /**
  * HTTP fetch that honors shell proxy env vars via undici EnvHttpProxyAgent
- * (HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, NO_PROXY — upper or lower case).
+ * (HTTP_PROXY, HTTPS_PROXY, NO_PROXY — upper or lower case, plus ALL_PROXY
+ * when it is an http:/https: URL).
  *
  * Retries transient network failures and 408/425/429/5xx by default.
  * Pass `{ retries: 0 }` to disable.

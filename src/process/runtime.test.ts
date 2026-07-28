@@ -7,6 +7,8 @@ import { activeExecutablePath, backupExecutablePath, unlockProbePath } from "../
 import { readInstallState, writeInstallState } from "../state.js";
 import {
   clearRuntimeBinaryBackup,
+  findRunnableExecutable,
+  inspectRunnableExecutable,
   installRuntimeBinary,
   parseCpaVersionFromHelp,
   readCurrentRuntimeVersion,
@@ -29,6 +31,14 @@ function tempHome(): string {
   return home;
 }
 
+/** `name=content` listing used to prove a read left the home byte-identical. */
+function snapshotHome(home: string): string[] {
+  return fs
+    .readdirSync(home)
+    .sort()
+    .map((name) => `${name}=${fs.readFileSync(path.join(home, name), "utf8")}`);
+}
+
 function writeSourceExe(home: string, content: string): string {
   const source = path.join(home, "staged-source");
   fs.writeFileSync(source, content);
@@ -38,7 +48,7 @@ function writeSourceExe(home: string, content: string): string {
 describe("installRuntimeBinary", () => {
   it("installs a fresh binary and leaves no staging residue", () => {
     const home = tempHome();
-    installRuntimeBinary(home, "1.0.0", writeSourceExe(home, "new-binary"));
+    installRuntimeBinary(home, writeSourceExe(home, "new-binary"));
     const active = activeExecutablePath(home);
     assert.equal(fs.readFileSync(active, "utf8"), "new-binary");
     assert.equal(fs.existsSync(`${active}.new`), false);
@@ -50,9 +60,111 @@ describe("installRuntimeBinary", () => {
   it("keeps the previous binary as .bak when replacing", () => {
     const home = tempHome();
     fs.writeFileSync(activeExecutablePath(home), "old-binary");
-    installRuntimeBinary(home, "2.0.0", writeSourceExe(home, "new-binary"));
+    installRuntimeBinary(home, writeSourceExe(home, "new-binary"));
     assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "new-binary");
     assert.equal(fs.readFileSync(backupExecutablePath(home), "utf8"), "old-binary");
+  });
+
+  it("fsyncs the staged binary before publishing it", () => {
+    const home = tempHome();
+    const original = fs.fsyncSync;
+    const synced: number[] = [];
+    fs.fsyncSync = (fd: number): void => {
+      synced.push(fd);
+      original(fd);
+    };
+    try {
+      installRuntimeBinary(home, writeSourceExe(home, "durable-binary"));
+    } finally {
+      fs.fsyncSync = original;
+    }
+    assert.ok(synced.length >= 1, "expected installRuntimeBinary to fsync the staged binary");
+    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "durable-binary");
+  });
+});
+
+describe("findRunnableExecutable", () => {
+  it("returns the active binary when it exists", () => {
+    const home = tempHome();
+    fs.writeFileSync(activeExecutablePath(home), "active");
+    assert.equal(findRunnableExecutable(home), activeExecutablePath(home));
+  });
+
+  it("returns the backup path without restoring it", () => {
+    const home = tempHome();
+    fs.writeFileSync(backupExecutablePath(home), "rollback-binary");
+    const before = fs.readdirSync(home).sort();
+
+    assert.equal(findRunnableExecutable(home), backupExecutablePath(home));
+
+    assert.deepEqual(fs.readdirSync(home).sort(), before);
+    assert.equal(fs.existsSync(activeExecutablePath(home)), false);
+    assert.equal(fs.readFileSync(backupExecutablePath(home), "utf8"), "rollback-binary");
+  });
+
+  it("returns undefined for an empty home", () => {
+    assert.equal(findRunnableExecutable(tempHome()), undefined);
+  });
+
+  it("reports the unlock-probe residue instead of claiming the binary is missing", () => {
+    const home = tempHome();
+    fs.writeFileSync(unlockProbePath(home), "probe-binary");
+
+    // Undefined here is what made `cpa doctor` tell the user to re-download the
+    // whole binary while reporting the recoverable residue two lines below.
+    assert.equal(findRunnableExecutable(home), unlockProbePath(home));
+  });
+});
+
+describe("inspectRunnableExecutable", () => {
+  it("labels the active binary", () => {
+    const home = tempHome();
+    fs.writeFileSync(activeExecutablePath(home), "active");
+    assert.deepEqual(inspectRunnableExecutable(home), {
+      path: activeExecutablePath(home),
+      kind: "active",
+    });
+  });
+
+  it("reports unlock-probe residue without recovering it", () => {
+    const home = tempHome();
+    fs.writeFileSync(unlockProbePath(home), "probe-binary");
+    const before = snapshotHome(home);
+
+    assert.deepEqual(inspectRunnableExecutable(home), {
+      path: unlockProbePath(home),
+      kind: "unlock-probe",
+    });
+
+    assert.deepEqual(snapshotHome(home), before, "the read must not touch the home");
+    assert.equal(fs.existsSync(activeExecutablePath(home)), false);
+  });
+
+  it("prefers the unlock probe over the older backup", () => {
+    const home = tempHome();
+    fs.writeFileSync(unlockProbePath(home), "current-binary");
+    fs.writeFileSync(backupExecutablePath(home), "previous-binary");
+    const before = snapshotHome(home);
+
+    assert.deepEqual(inspectRunnableExecutable(home), {
+      path: unlockProbePath(home),
+      kind: "unlock-probe",
+    });
+
+    assert.deepEqual(snapshotHome(home), before, "the read must not touch the home");
+  });
+
+  it("labels the backup when only the rollback copy survives", () => {
+    const home = tempHome();
+    fs.writeFileSync(backupExecutablePath(home), "rollback-binary");
+    assert.deepEqual(inspectRunnableExecutable(home), {
+      path: backupExecutablePath(home),
+      kind: "backup",
+    });
+  });
+
+  it("returns undefined only when nothing is on disk", () => {
+    assert.equal(inspectRunnableExecutable(tempHome()), undefined);
   });
 });
 

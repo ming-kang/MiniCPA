@@ -4,10 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import {
+  cliConfigPath,
   cpaLayout,
   defaultCpaHome,
+  ensureDir,
   executableName,
   hardenCpaPermissions,
+  legacyCpaHome,
+  MINICPA_DIR_NAME,
+  miniCpaRoot,
   miniCpaTempDownloadDir,
   miniCpaTempDownloadsDir,
   miniCpaTempRoot,
@@ -42,6 +47,30 @@ afterEach(() => {
   else process.env.HOME = prevUserHome;
 });
 
+/** The homedir-based root MiniCPA must use when the env override is unusable. */
+function homedirDefaultRoot(): string {
+  if (process.platform === "win32") {
+    return path.join(os.homedir(), "AppData", "Local", MINICPA_DIR_NAME);
+  }
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support", MINICPA_DIR_NAME);
+  }
+  return path.join(os.homedir(), ".local", "share", MINICPA_DIR_NAME);
+}
+
+describe("miniCpaRoot", () => {
+  it("ignores a relative LOCALAPPDATA/XDG_DATA_HOME", () => {
+    const relative = path.join(".local", "share");
+    process.env.LOCALAPPDATA = relative;
+    process.env.XDG_DATA_HOME = relative;
+    delete process.env.CPA_HOME;
+
+    const root = miniCpaRoot();
+    assert.equal(path.isAbsolute(root), true);
+    assert.equal(root, homedirDefaultRoot());
+  });
+});
+
 describe("resolveCpaHome", () => {
   it("uses the one persisted home for upgrade compatibility", () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-paths-"));
@@ -65,6 +94,40 @@ describe("resolveCpaHome", () => {
     temps.push(base);
     setAppDataRoot(base);
     assert.equal(resolveCpaHome(), defaultCpaHome());
+  });
+
+  it("falls back to the default home when config.json has a non-string home", () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-paths-"));
+    temps.push(base);
+    setAppDataRoot(base);
+    ensureDir(miniCpaRoot());
+    fs.writeFileSync(cliConfigPath(), `${JSON.stringify({ home: 123 })}\n`);
+    assert.equal(resolveCpaHome(), defaultCpaHome());
+  });
+
+  it("ignores a config.json that is not an object", () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-paths-"));
+    temps.push(base);
+    setAppDataRoot(base);
+    ensureDir(miniCpaRoot());
+    fs.writeFileSync(cliConfigPath(), `${JSON.stringify(["not", "an", "object"])}\n`);
+    assert.equal(resolveCpaHome(), defaultCpaHome());
+  });
+
+  it("migrates from the legacy home only until the default one exists", () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-paths-"));
+    temps.push(base);
+    setAppDataRoot(base);
+
+    const legacy = legacyCpaHome();
+    ensureDir(legacy);
+    fs.writeFileSync(path.join(legacy, "config.yaml"), "port: 8317\n");
+    assert.equal(resolveCpaHome(), legacy);
+
+    const current = defaultCpaHome();
+    ensureDir(current);
+    fs.writeFileSync(path.join(current, "config.yaml"), "port: 8317\n");
+    assert.equal(resolveCpaHome(), current);
   });
 });
 

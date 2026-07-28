@@ -4,7 +4,7 @@ import path from "node:path";
 import { ensureDir, miniCpaRoot } from "../paths.js";
 import { sleep } from "../util.js";
 import { isProcessAlive } from "./alive.js";
-import { readProcessStartMarker } from "./pid-identity.js";
+import { probePidReuse, readProcessStartMarker } from "./pid-identity.js";
 
 export type MiniCpaLockRecord = {
   pid: number;
@@ -64,6 +64,21 @@ function inspectLock(lockPath: string): LockInspection {
     /* deleted while inspecting — treated as stale-unreadable below */
   }
   return { kind: "unreadable", raw, mtimeMs };
+}
+
+/** Milliseconds since an ISO `acquiredAt`, or undefined when it is missing/unparseable. */
+function lockAgeMs(acquiredAt: string | undefined): number | undefined {
+  if (!acquiredAt) return undefined;
+  const parsed = Date.parse(acquiredAt);
+  if (!Number.isFinite(parsed)) return undefined;
+  return Date.now() - parsed;
+}
+
+/** `, 12m ago` — appended to a holder timestamp only when that timestamp parses. */
+function formatLockAgeSuffix(acquiredAt: string | undefined): string {
+  const ageMs = lockAgeMs(acquiredAt);
+  if (ageMs === undefined) return "";
+  return `, ${Math.max(0, Math.round(ageMs / 60_000))}m ago`;
 }
 
 /**
@@ -193,14 +208,19 @@ async function tryAcquireLock(command: string): Promise<void> {
     }
 
     if (isProcessAlive(holder.pid)) {
-      const currentStartMarker = readProcessStartMarker(holder.pid);
-      if (holder.startMarker && currentStartMarker && holder.startMarker !== currentStartMarker) {
+      const { reused } = probePidReuse(holder.pid, holder.startMarker);
+      if (reused) {
         // PID reused by an unrelated process — the recorded holder is gone.
         preemptLock(lockPath, existing);
         continue;
       }
+      // Deliberately fail closed: an unreadable marker on either side cannot
+      // prove reuse, so tell the user exactly which file to remove instead of
+      // guessing that the holder is gone.
       throw new Error(
-        `Another cpa ${holder.command} is running (PID=${holder.pid}). Retry after it finishes.`,
+        `Another cpa ${holder.command} is running (PID=${holder.pid}, held since ` +
+          `${holder.acquiredAt || "unknown"}${formatLockAgeSuffix(holder.acquiredAt)}). ` +
+          `Retry after it finishes.\nIf that process is gone, remove the lock file: ${lockPath}`,
       );
     }
 
@@ -228,6 +248,70 @@ function releaseLock(): void {
     fs.unlinkSync(lockPath);
   } catch {
     /* ignore */
+  }
+}
+
+export type MiniCpaLockStatus = {
+  path: string;
+  state: "absent" | "held" | "unreadable";
+  pid?: number;
+  command?: string;
+  acquiredAt?: string;
+  ageMs?: number;
+  holderAlive?: boolean;
+};
+
+/**
+ * Read-only view of the global lock for diagnostics (`cpa doctor`).
+ *
+ * Never writes, renames or unlinks anything, and never throws: a wedged lock is
+ * exactly the situation where the user needs the report to still come out.
+ */
+export function inspectMiniCpaLock(): MiniCpaLockStatus {
+  let lockPath = "";
+  try {
+    lockPath = resolveLockPath();
+  } catch {
+    return { path: lockPath, state: "unreadable" };
+  }
+  try {
+    const existing = inspectLock(lockPath);
+    if (existing.kind === "absent") return { path: lockPath, state: "absent" };
+    if (existing.kind === "unreadable") return { path: lockPath, state: "unreadable" };
+    const holder = existing.record;
+    const ageMs = lockAgeMs(holder.acquiredAt);
+    return {
+      path: lockPath,
+      state: "held",
+      pid: holder.pid,
+      command: holder.command,
+      ...(holder.acquiredAt ? { acquiredAt: holder.acquiredAt } : {}),
+      ...(ageMs !== undefined ? { ageMs } : {}),
+      holderAlive: isProcessAlive(holder.pid),
+    };
+  } catch {
+    return { path: lockPath, state: "unreadable" };
+  }
+}
+
+/**
+ * Absolute paths of leftover `cpa.lock.preempt.*` files beside the lock.
+ *
+ * preemptLock swallows unlink failures, so a transient Windows EBUSY strands the
+ * aside copy forever. This only reports them: an automatic sweep would race a
+ * concurrent preemptor's in-flight rename/restore.
+ */
+export function listLockPreemptResidue(): string[] {
+  try {
+    const lockPath = resolveLockPath();
+    const stateDir = path.dirname(lockPath);
+    const prefix = `${path.basename(lockPath)}.preempt.`;
+    return fs
+      .readdirSync(stateDir)
+      .filter((entry) => entry.startsWith(prefix))
+      .map((entry) => path.join(stateDir, entry));
+  } catch {
+    return [];
   }
 }
 

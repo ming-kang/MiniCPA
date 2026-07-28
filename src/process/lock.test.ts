@@ -6,7 +6,12 @@ import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { miniCpaRoot } from "../paths.js";
-import { preemptLock, withMiniCpaLock } from "./lock.js";
+import {
+  inspectMiniCpaLock,
+  listLockPreemptResidue,
+  preemptLock,
+  withMiniCpaLock,
+} from "./lock.js";
 import { readProcessStartMarker } from "./pid-identity.js";
 
 const tempDirs: string[] = [];
@@ -98,6 +103,42 @@ describe("withMiniCpaLock", () => {
       () => withMiniCpaLock("update", async () => undefined),
       /Another cpa start is running/,
     );
+    assert.ok(fs.existsSync(lockPath()));
+  });
+
+  it("names the lock file and its age when a live unrelated PID wedges the lock", async () => {
+    configureIsolatedAppRoot();
+    // A crashed run whose PID was reused after a reboot: alive, no start marker
+    // recorded, so reuse can never be proven and the lock stays held forever.
+    const holderPid = spawnLiveHolder();
+    const acquiredAt = new Date(Date.now() - 90 * 60_000).toISOString();
+    fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
+    fs.writeFileSync(
+      lockPath(),
+      `${JSON.stringify({ pid: holderPid, command: "update", acquiredAt })}\n`,
+    );
+
+    await assert.rejects(
+      () => withMiniCpaLock("start", async () => undefined),
+      (err: unknown) => {
+        const message = (err as Error).message;
+        assert.match(message, /Another cpa update is running/);
+        assert.ok(
+          message.includes(lockPath()),
+          `expected the absolute lock path in: ${JSON.stringify(message)}`,
+        );
+        assert.ok(
+          message.includes(acquiredAt),
+          `expected the acquiredAt timestamp in: ${JSON.stringify(message)}`,
+        );
+        assert.ok(
+          message.includes("90m ago"),
+          `expected the holder age in: ${JSON.stringify(message)}`,
+        );
+        return true;
+      },
+    );
+    // Fail-closed stance preserved: the lock is still there.
     assert.ok(fs.existsSync(lockPath()));
   });
 
@@ -219,6 +260,89 @@ describe("withMiniCpaLock", () => {
       ran = true;
     });
     assert.equal(ran, true);
+  });
+});
+
+function snapshotStateDir(): string {
+  const dir = path.dirname(lockPath());
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir).sort();
+  } catch {
+    return "<absent>";
+  }
+  return entries
+    .map((entry) => {
+      const target = path.join(dir, entry);
+      const stat = fs.statSync(target);
+      return `${entry}:${stat.size}:${stat.mtimeMs}:${fs.readFileSync(target, "utf8")}`;
+    })
+    .join("\n");
+}
+
+describe("inspectMiniCpaLock", () => {
+  it("reports an absent lock without creating anything", () => {
+    configureIsolatedAppRoot();
+    const status = inspectMiniCpaLock();
+    assert.equal(status.state, "absent");
+    assert.equal(status.path, lockPath());
+    assert.equal(status.pid, undefined);
+    // A pure read must not materialize the state directory.
+    assert.equal(fs.existsSync(path.dirname(lockPath())), false);
+  });
+
+  it("reports a held lock and leaves the state directory untouched", () => {
+    configureIsolatedAppRoot();
+    const acquiredAt = new Date(Date.now() - 5 * 60_000).toISOString();
+    fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
+    fs.writeFileSync(
+      lockPath(),
+      `${JSON.stringify({ pid: process.pid, command: "update", acquiredAt })}\n`,
+    );
+
+    const before = snapshotStateDir();
+    const status = inspectMiniCpaLock();
+    const after = snapshotStateDir();
+
+    assert.equal(status.state, "held");
+    assert.equal(status.path, lockPath());
+    assert.equal(status.pid, process.pid);
+    assert.equal(status.command, "update");
+    assert.equal(status.acquiredAt, acquiredAt);
+    assert.ok((status.ageMs ?? 0) >= 5 * 60_000);
+    assert.equal(status.holderAlive, true);
+    assert.equal(after, before);
+  });
+
+  it("reports a corrupt lock as unreadable", () => {
+    configureIsolatedAppRoot();
+    fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
+    fs.writeFileSync(lockPath(), "not-json");
+
+    const status = inspectMiniCpaLock();
+    assert.equal(status.state, "unreadable");
+    assert.equal(status.pid, undefined);
+    assert.ok(fs.existsSync(lockPath()));
+  });
+});
+
+describe("listLockPreemptResidue", () => {
+  it("finds orphaned preempt files beside the lock", () => {
+    configureIsolatedAppRoot();
+    const stateDir = path.dirname(lockPath());
+    fs.mkdirSync(stateDir, { recursive: true });
+    const residue = path.join(stateDir, "cpa.lock.preempt.123.abc");
+    fs.writeFileSync(residue, "orphan");
+    fs.writeFileSync(lockPath(), "{}");
+    fs.writeFileSync(path.join(stateDir, "cpa.pid"), "1");
+
+    assert.deepEqual(listLockPreemptResidue(), [residue]);
+  });
+
+  it("returns an empty list when the state directory does not exist", () => {
+    configureIsolatedAppRoot();
+    assert.deepEqual(listLockPreemptResidue(), []);
+    assert.equal(fs.existsSync(path.dirname(lockPath())), false);
   });
 });
 

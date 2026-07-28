@@ -22,6 +22,7 @@ export async function runClean(options?: { minAgeMs?: number }): Promise<void> {
     let removedBytes = 0;
     let removedCount = 0;
     let skippedRecent = 0;
+    let failed = 0;
 
     const entries = fs.readdirSync(temp, { withFileTypes: true });
     if (entries.length === 0) {
@@ -49,6 +50,7 @@ export async function runClean(options?: { minAgeMs?: number }): Promise<void> {
         removedCount += 1;
       } catch (err) {
         console.log(`[warn] could not remove ${full}: ${(err as Error).message}`);
+        failed += 1;
       }
     }
 
@@ -61,7 +63,7 @@ export async function runClean(options?: { minAgeMs?: number }): Promise<void> {
     }
 
     console.log(`Temp      ${temp}`);
-    if (removedCount === 0 && skippedRecent > 0) {
+    if (removedCount === 0 && failed === 0 && skippedRecent > 0) {
       console.log(
         `Nothing old enough to clean (${skippedRecent} recent entr${skippedRecent === 1 ? "y" : "ies"} kept; min age ${Math.round(minAgeMs / 60000)}m)`,
       );
@@ -69,7 +71,12 @@ export async function runClean(options?: { minAgeMs?: number }): Promise<void> {
     }
     console.log(
       `Cleaned   ${removedCount} entr${removedCount === 1 ? "y" : "ies"} (${formatBytes(removedBytes)})` +
-        (skippedRecent > 0 ? `; kept ${skippedRecent} recent` : ""),
+        (skippedRecent > 0 ? `; kept ${skippedRecent} recent` : "") +
+        (failed > 0
+          ? `; ${failed} could not be removed (retry after closing programs / stopping an active update)`
+          : ""),
     );
+    // `cpa clean && echo freed` must not claim success when nothing was freed.
+    if (failed > 0) process.exitCode = 1;
   });
 }

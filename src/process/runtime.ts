@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
+import { syncDirectory } from "../fs-atomic.js";
 import {
   activeExecutablePath,
   backupExecutablePath,
@@ -8,6 +10,7 @@ import {
 } from "../paths.js";
 import { buildCpaChildEnv } from "./child-env.js";
 
+/** MiniCPA tokens are always stripped from the child environment (see AGENTS.md). */
 export async function runCommand(
   command: string,
   args: string[],
@@ -15,13 +18,10 @@ export async function runCommand(
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     timeoutMs?: number;
-    /** When true (default), strip MiniCPA tokens from the child environment. */
-    scrubSecrets?: boolean;
   },
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   const timeoutMs = options?.timeoutMs ?? 30_000;
-  const merged = { ...process.env, ...options?.env };
-  const env = options?.scrubSecrets === false ? merged : buildCpaChildEnv(merged);
+  const env = buildCpaChildEnv({ ...process.env, ...options?.env });
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options?.cwd,
@@ -79,6 +79,11 @@ export async function readInstalledRuntimeVersion(exePath: string): Promise<stri
 /**
  * Probe the installed binary for its version. Install state is only a record,
  * not proof that the binary still exists or is runnable.
+ *
+ * This EXECUTES the managed binary, and a running Windows image holds a section
+ * lock on its own file. Callers that run outside `withMiniCpaLock` (`cpa status`,
+ * `cpa version`, `cpa doctor`) can therefore stall a concurrent `cpa update`
+ * inside `waitForBinaryUnlocked` for the length of this probe.
  */
 export async function readCurrentRuntimeVersion(home: string): Promise<string | undefined> {
   return readInstalledRuntimeVersion(activeExecutablePath(home));
@@ -103,8 +108,14 @@ function moveAsideExisting(target: string, backup: string): void {
   }
 }
 
-/** Replace the active CPA binary in-place, keeping a `.bak` for rollback. */
-export function installRuntimeBinary(home: string, _version: string, sourceExe: string): void {
+/**
+ * Replace the active CPA binary in-place, keeping a `.bak` for rollback.
+ *
+ * Deliberately does NOT record the installed version: install state is written
+ * only after a healthy restart (see installBinaryPhase), so a failed update
+ * never leaves state claiming a version that is not actually running.
+ */
+export function installRuntimeBinary(home: string, sourceExe: string): void {
   ensureDir(home);
   const target = activeExecutablePath(home);
   const backup = backupExecutablePath(home);
@@ -113,6 +124,16 @@ export function installRuntimeBinary(home: string, _version: string, sourceExe: 
   fs.copyFileSync(sourceExe, staging);
   if (process.platform !== "win32") {
     fs.chmodSync(staging, 0o755);
+  }
+  // Flush the staged bytes before publishing them under the runnable name: a
+  // power loss inside the writeback window would otherwise leave a truncated
+  // executable that resolveRunnableExecutable happily hands back, and the `.bak`
+  // that could have rescued it is dropped as soon as the update succeeds.
+  const stagingFd = fs.openSync(staging, "r+");
+  try {
+    fs.fsyncSync(stagingFd);
+  } finally {
+    fs.closeSync(stagingFd);
   }
 
   moveAsideExisting(target, backup);
@@ -132,6 +153,8 @@ export function installRuntimeBinary(home: string, _version: string, sourceExe: 
   if (process.platform !== "win32") {
     fs.chmodSync(target, 0o755);
   }
+
+  syncDirectory(path.dirname(target));
 }
 
 /** Restore `.bak` over the active binary (best-effort). */
@@ -191,6 +214,90 @@ export function recoverUnlockProbeBinary(home: string): boolean {
   }
 }
 
+/** Which name the managed binary was found under, in resolve precedence order. */
+export type RunnableExecutableKind = "active" | "unlock-probe" | "backup";
+
+export type RunnableExecutableLocation = {
+  /** The file that actually exists; only "active" is the canonical name. */
+  path: string;
+  kind: RunnableExecutableKind;
+};
+
+/**
+ * Read-only sibling of resolveRunnableExecutable for unlocked commands.
+ *
+ * Never renames, copies or unlinks anything, so `cpa status`, `cpa doctor` and
+ * `cpa tui` cannot race a lock-holding `cpa update` over the binary it is
+ * replacing.
+ *
+ * It reports every name the binary can legitimately be found under, because
+ * "not under the canonical name" is not the same failure as "not on disk":
+ * `unlock-probe` is the current binary left renamed by a crashed unlock probe
+ * and `backup` is the previous version kept for rollback, and both are
+ * recovered in place by the next `cpa start`. Only `undefined` means the user
+ * has to re-download anything. Callers that display or execute `path` must
+ * therefore handle all three kinds — a `backup` path holds the PREVIOUS
+ * version's bytes.
+ */
+export function inspectRunnableExecutable(home: string): RunnableExecutableLocation | undefined {
+  const active = activeExecutablePath(home);
+  if (fs.existsSync(active)) return { path: active, kind: "active" };
+  // Same precedence as resolveRunnableExecutable, which recovers the unlock
+  // probe before it falls back to the backup.
+  const probe = unlockProbePath(home);
+  if (fs.existsSync(probe)) return { path: probe, kind: "unlock-probe" };
+  const backup = backupExecutablePath(home);
+  if (fs.existsSync(backup)) return { path: backup, kind: "backup" };
+  return undefined;
+}
+
+/**
+ * Path-only view of inspectRunnableExecutable for callers that only need to
+ * know whether a runnable file exists. Prefer inspectRunnableExecutable when
+ * the answer is reported to the user: the returned path may be the `.bak` or
+ * `.unlock-probe` residue rather than the active binary.
+ */
+export function findRunnableExecutable(home: string): string | undefined {
+  return inspectRunnableExecutable(home)?.path;
+}
+
+/**
+ * Run the managed binary attached to the current terminal.
+ *
+ * Takes the executable path from the caller rather than resolving it, so an
+ * unlocked command (`cpa tui`) can pick it with inspectRunnableExecutable and
+ * reach the same child process without repairing the instance home under a
+ * concurrent, lock-holding `cpa update`.
+ */
+export async function runRuntimeAttached(
+  exe: string,
+  args: string[],
+  options: { cwd: string; label: string },
+): Promise<void> {
+  const child = spawn(exe, args, {
+    cwd: options.cwd,
+    stdio: "inherit",
+    env: buildCpaChildEnv(),
+  });
+  await new Promise<void>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          signal
+            ? `${options.label} terminated by ${signal}`
+            : `${options.label} exited with code ${code ?? 1}`,
+        ),
+      );
+    });
+  });
+}
+
+/** Mutating resolver: repairs crash residue, then returns the active binary. */
 export function resolveRunnableExecutable(home: string): string {
   recoverUnlockProbeBinary(home);
   const active = activeExecutablePath(home);

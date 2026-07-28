@@ -126,7 +126,7 @@ export function readCpaConfigWithWarnings(configPath: string): {
   try {
     doc = YAML.parse(text);
   } catch (err) {
-    throw new Error(`Invalid YAML: ${(err as Error).message}`);
+    throw new Error(`Invalid YAML in ${configPath}: ${(err as Error).message}`);
   }
   return normalizeCpaConfigWithWarnings(doc);
 }
