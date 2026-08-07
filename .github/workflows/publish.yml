@@ -27,6 +27,7 @@ jobs:
           test "$RELEASE_TAG" = "$expected"
       - run: npm ci
       - run: npm run audit:prod
+      - run: npm run lint
       - run: npm test
       - run: npm run build
       - run: npm publish --access public --provenance

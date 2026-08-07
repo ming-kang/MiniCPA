@@ -50,7 +50,7 @@ MiniCPA manages one instance. `cpa home` prints its location. `--home` and `CPA_
 - `cpa start` auto-recovers from crash residue: `*.unlock-probe` renames and, when the active binary is missing, the `.bak` rollback copy.
 - Failures while removing temp staging after an update are reported as warnings, never as an update failure; `cpa clean` removes the residue.
 - Outbound GitHub/API calls retry transient errors (429/5xx/timeouts) a few times with backoff.
-- Binary integrity: downloads release `checksums.txt` and verifies the **archive** SHA-256. Panel updates fetch GitHub release metadata and require the published asset SHA-256 digest; a missing digest fails closed.
+- Binary integrity: downloads release `checksums.txt` and verifies the **archive** SHA-256. Panel updates fetch GitHub release metadata and require the published asset SHA-256 digest; a missing digest fails closed. Asset download URLs from the GitHub API must be on GitHub/CDN hosts (`github.com`, `api.github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`); off-platform URLs are rejected.
 - Already-latest versions are **skipped** unless you pass `--force` (or `--version` for a specific binary tag).
 - `cpa update check` exits non-zero if anything is outdated **or** the panel check errors.
 - `--binary`, `--panel`, and `--all` are mutually exclusive.

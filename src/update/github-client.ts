@@ -79,21 +79,69 @@ export function browserReleaseAssetUrl(repo: string, tag: string, assetName: str
   return `https://github.com/${repo}/releases/download/${encodedTag}/${encoded}`;
 }
 
+/** Hosts MiniCPA will fetch release assets / checksums / panels from. */
+const ALLOWED_GITHUB_DOWNLOAD_HOSTS = new Set([
+  "github.com",
+  "www.github.com",
+  "api.github.com",
+  "objects.githubusercontent.com",
+  "release-assets.githubusercontent.com",
+]);
+
+/**
+ * True for HTTPS URLs on GitHub release / API / CDN hosts.
+ * Rejects HTTP and any other host so a compromised or spoofed API payload cannot
+ * redirect downloads off-platform.
+ */
+export function isAllowedGithubDownloadUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:") return false;
+    return ALLOWED_GITHUB_DOWNLOAD_HOSTS.has(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+/** Loopback http(s) URLs used by offline unit-test fixtures only. */
+function isLoopbackDownloadUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    const host = parsed.hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1";
+  } catch {
+    return false;
+  }
+}
+
+function assertUsableDownloadUrl(url: string, label: string): void {
+  if (isAllowedGithubDownloadUrl(url) || isLoopbackDownloadUrl(url)) return;
+  throw new Error(`Refusing download URL with untrusted host for ${label}: ${url}`);
+}
+
 /**
  * Prefer browser release URLs (no REST quota). Fall back to API asset endpoints only when
  * no browser URL is available (e.g. partial API payloads for private assets).
  */
 export function releaseAssetDownloadUrl(repo: string, asset: GhAsset): string {
-  if (asset.browser_download_url && !isApiAssetUrl(asset.browser_download_url)) {
-    return asset.browser_download_url;
+  const browser = asset.browser_download_url?.trim() ?? "";
+  if (browser && !isApiAssetUrl(browser) && isAllowedGithubDownloadUrl(browser)) {
+    return browser;
   }
   if (typeof asset.id === "number" && Number.isFinite(asset.id)) {
     return `https://api.github.com/repos/${repo}/releases/assets/${asset.id}`;
   }
-  if (asset.url?.includes("/releases/assets/")) {
+  if (asset.url?.includes("/releases/assets/") && isAllowedGithubDownloadUrl(asset.url)) {
     return asset.url;
   }
-  return asset.browser_download_url;
+  // Unit-test fixtures inject loopback servers; production paths never reach here
+  // with a non-GitHub host because validateReleaseMetadata rejects them first.
+  if (browser) {
+    assertUsableDownloadUrl(browser, asset.name || "asset");
+    return browser;
+  }
+  throw new Error(`No usable download URL for asset ${asset.name || "(unnamed)"}`);
 }
 
 function isApiAssetUrl(url: string): boolean {
@@ -204,6 +252,17 @@ function validateReleaseMetadata(repo: string, release: unknown): GhRelease {
       typeof asset.browser_download_url !== "string"
     ) {
       throw new Error(`GitHub returned an invalid release asset for ${repo}`);
+    }
+    const browserUrl = asset.browser_download_url.trim();
+    if (browserUrl && !isAllowedGithubDownloadUrl(browserUrl)) {
+      throw new Error(`GitHub returned an untrusted download URL for ${repo} asset ${asset.name}`);
+    }
+    if (
+      typeof asset.url === "string" &&
+      asset.url.trim() &&
+      !isAllowedGithubDownloadUrl(asset.url)
+    ) {
+      throw new Error(`GitHub returned an untrusted asset API URL for ${repo} asset ${asset.name}`);
     }
   }
   return candidate;

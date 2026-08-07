@@ -173,7 +173,8 @@ function fakeDeps(options?: { version?: string; content?: string }): FakePanelDe
         version: options?.version ?? "9.9.9",
         asset: {
           name: "management.html",
-          browser_download_url: "https://example.invalid/management.html",
+          browser_download_url:
+            "https://github.com/router-for-me/CLIProxyAPI/releases/download/v9.9.9/management.html",
           digest: `sha256:${digest}`,
         },
         expectedDigest: digest,

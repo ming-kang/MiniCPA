@@ -19,6 +19,7 @@ import {
   fetchLatestReleaseViaApi,
   githubAuthToken,
   githubHeaders,
+  isAllowedGithubDownloadUrl,
   isSafeReleaseTag,
   normalizeTagVersion,
   parseChecksumsText,
@@ -227,7 +228,13 @@ describe("fetchLatestReleaseViaApi", () => {
               tag_name: "v7.2.92",
               name: "v7.2.92",
               published_at: "",
-              assets: [{ name: "a.zip", browser_download_url: "https://example.invalid/a.zip" }],
+              assets: [
+                {
+                  name: "a.zip",
+                  browser_download_url:
+                    "https://github.com/owner/repo/releases/download/v7.2.92/a.zip",
+                },
+              ],
             }),
           );
         },
@@ -236,6 +243,31 @@ describe("fetchLatestReleaseViaApi", () => {
         const release = await fetchLatestReleaseViaApi("owner/repo", baseUrl);
         assert.equal(release.tag_name, "v7.2.92");
         assert.equal(release.assets[0]?.name, "a.zip");
+      },
+    );
+  });
+
+  it("rejects assets whose download URL is off GitHub", async () => {
+    await withHttpFixture(
+      {
+        "/repos/owner/repo/releases/latest": (_req, res) => {
+          res.statusCode = 200;
+          res.setHeader("content-type", "application/json");
+          res.end(
+            JSON.stringify({
+              tag_name: "v7.2.92",
+              name: "v7.2.92",
+              published_at: "",
+              assets: [{ name: "a.zip", browser_download_url: "https://evil.example/a.zip" }],
+            }),
+          );
+        },
+      },
+      async (baseUrl) => {
+        await assert.rejects(
+          () => fetchLatestReleaseViaApi("owner/repo", baseUrl),
+          /untrusted download URL/,
+        );
       },
     );
   });
@@ -499,6 +531,38 @@ describe("fetchChecksums", () => {
   });
 });
 
+describe("isAllowedGithubDownloadUrl", () => {
+  it("accepts GitHub release, API, and CDN hosts over HTTPS", () => {
+    assert.equal(
+      isAllowedGithubDownloadUrl("https://github.com/o/r/releases/download/v1/a.zip"),
+      true,
+    );
+    assert.equal(
+      isAllowedGithubDownloadUrl("https://api.github.com/repos/o/r/releases/assets/1"),
+      true,
+    );
+    assert.equal(
+      isAllowedGithubDownloadUrl(
+        "https://objects.githubusercontent.com/github-production-release-asset/1",
+      ),
+      true,
+    );
+    assert.equal(
+      isAllowedGithubDownloadUrl("https://release-assets.githubusercontent.com/a.zip"),
+      true,
+    );
+  });
+
+  it("rejects HTTP and non-GitHub hosts", () => {
+    assert.equal(
+      isAllowedGithubDownloadUrl("http://github.com/o/r/releases/download/v1/a.zip"),
+      false,
+    );
+    assert.equal(isAllowedGithubDownloadUrl("https://evil.example/a.zip"), false);
+    assert.equal(isAllowedGithubDownloadUrl("not-a-url"), false);
+  });
+});
+
 describe("releaseAssetDownloadUrl", () => {
   it("prefers browser URL over API asset id", () => {
     assert.equal(
@@ -519,6 +583,28 @@ describe("releaseAssetDownloadUrl", () => {
         browser_download_url: "",
       }),
       "https://api.github.com/repos/owner/repo/releases/assets/42",
+    );
+  });
+
+  it("ignores an off-platform browser URL when an API asset id is available", () => {
+    assert.equal(
+      releaseAssetDownloadUrl("owner/repo", {
+        id: 99,
+        name: "a.zip",
+        browser_download_url: "https://evil.example/a.zip",
+      }),
+      "https://api.github.com/repos/owner/repo/releases/assets/99",
+    );
+  });
+
+  it("rejects an off-platform browser URL with no API fallback", () => {
+    assert.throws(
+      () =>
+        releaseAssetDownloadUrl("owner/repo", {
+          name: "a.zip",
+          browser_download_url: "https://evil.example/a.zip",
+        }),
+      /untrusted host/,
     );
   });
 });
