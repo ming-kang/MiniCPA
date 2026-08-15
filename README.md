@@ -76,9 +76,12 @@ See [docs/cpa-reference.md](docs/cpa-reference.md) for startup details, single-i
 |---------|--------|
 | `cpa start` | Waits until HTTP is ready (`--no-wait` to skip). Exclusive single-instance lock. Rotates logs ≥ 50 MiB. Warns on invalid `host`/`port` in config.yaml. |
 | `cpa stop` | Stops the process only — it does not wait for the binary file to unlock (update handles that), so Windows stop is fast. |
+| `cpa status` | Read-only summary (no lock). Exit 1 when not running or HTTP not reachable. |
 | `cpa logs` | stdout + stderr; `-n, --lines <n>` last lines per file (default `80`, must be a positive whole number); `--err` for error log only; `-f` follow (ignores `--lines`) |
-| `cpa update` | **Default: binary + panel.** Download/verify first, then stop/replace/restart if needed. Binary checksums and the panel's GitHub SHA-256 asset digest are required unless `--insecure` is used for the binary. |
+| `cpa update` | **Default: binary + panel.** Download/verify first, then stop/replace/restart if needed. Binary checksums and the panel's GitHub SHA-256 asset digest are required unless `--insecure` is used for the binary. A panel failure after a successful binary update is reported as a warning — retry with `cpa update --panel`. |
 | `cpa update --binary` / `--panel` / `--all` | Limit scope (**mutually exclusive**) |
+| `cpa update check` | Report current vs latest. Exit 1 when anything is outdated **or** a check (binary / panel) errors. |
+| `cpa doctor` | Read-only diagnostics. Exit 1 when any check fails. |
 | `cpa clean` | Wipe MiniCPA temp downloads/extract only (never touches instance home) |
 | `cpa tui` | Official CPA terminal UI (must already be running) |
 

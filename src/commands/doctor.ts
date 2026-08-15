@@ -139,7 +139,7 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
   } else if (state.runtimeVersion && version && state.runtimeVersion !== version) {
     console.log("[warn] runtime version differs from install state — run: cpa update --force");
   }
-  console.log(`[info] panel ${state.panelVersion ?? "-"}`);
+  console.log(`[info] panel ${state.panelVersion ?? "(not installed)"}`);
 
   if (fs.existsSync(ctx.layout.managementHtml)) {
     console.log(`[ ok ] management.html`);
