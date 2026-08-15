@@ -214,9 +214,8 @@ export async function updatePanel(
     isPanelAutoUpdateDisabled(readCpaConfig(layout.configFile)) &&
     !options?.force
   ) {
-    reporter.warn(
-      "Panel update skipped: remote-management.disable-auto-update-panel is true in config.yaml (use --force to override).",
-    );
+    // No warning here: the command layer renders the returned reason, and both
+    // would print for the same skip.
     return {
       version: readInstallState(home).panelVersion ?? "",
       skipped: true,

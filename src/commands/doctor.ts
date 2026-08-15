@@ -320,7 +320,13 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
         );
       }
     } else {
-      console.log(`[warn] GitHub API HTTP ${reach.status}`);
+      const rateLimited = reach.status === 403 || reach.status === 429;
+      console.log(
+        `[warn] GitHub API HTTP ${reach.status}` +
+          (rateLimited
+            ? " (rate limited — set GITHUB_TOKEN/GH_TOKEN; panel updates always need the API)"
+            : ""),
+      );
     }
   } catch (err) {
     console.log(`[warn] GitHub unreachable: ${formatCliError(err)}`);

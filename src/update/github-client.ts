@@ -165,10 +165,7 @@ export function parseReleaseTagFromLocation(location: string): string | undefine
 function formatGitHubApiError(status: number, repo: string, context: string): string {
   const base = `GitHub API ${status} for ${repo} (${context})`;
   if (status === 403 || status === 429) {
-    return (
-      `${base}. REST rate limit may be exhausted; updates normally use github.com/releases ` +
-      `(no token). If browser GitHub is blocked, set GITHUB_TOKEN or GH_TOKEN and retry.`
-    );
+    return `${base}. REST rate limit may be exhausted — set GITHUB_TOKEN or GH_TOKEN and retry.`;
   }
   return base;
 }

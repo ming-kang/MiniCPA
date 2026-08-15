@@ -29,6 +29,9 @@ export function consoleUpdateReporter(): UpdateReporter {
       console.error(message);
     },
     progress({ label, receivedBytes, totalBytes, done }) {
+      // \r rewriting only makes sense on a terminal; piped/redirected stderr
+      // (CI logs, files) would otherwise accumulate one growing line per chunk.
+      if (!process.stderr.isTTY) return;
       if (done) {
         if (wroteProgress) process.stderr.write("\n");
         lastPct = -1;

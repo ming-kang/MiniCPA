@@ -128,7 +128,7 @@ const updateCmd = program
 
 updateCmd
   .command("check")
-  .description("Check for updates (exit 1 if any outdated)")
+  .description("Check for updates (exit 1 if any outdated or check failed)")
   .action(
     withCliErrors(async () => {
       await runUpdateCheck();

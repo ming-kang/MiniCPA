@@ -231,7 +231,9 @@ describe("updatePanel with disable-auto-update-panel", () => {
     assert.equal(result.version, "1.2.3");
     assert.deepEqual(deps.calls, []);
     assert.equal(fs.readFileSync(layout.managementHtml, "utf8"), PINNED_PANEL_HTML);
-    assert.ok(reporter.warnings.some((m) => /disable-auto-update-panel/.test(m)));
+    // The skip reason is returned for the command layer to render (it used to be
+    // warned here as well, printing the same fact twice in `cpa update`).
+    assert.deepEqual(reporter.warnings, []);
   });
 
   it("still updates on an explicit `cpa update --panel` request", async () => {
