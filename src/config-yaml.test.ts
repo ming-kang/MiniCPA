@@ -5,9 +5,11 @@ import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import {
   LEGACY_DEFAULT_API_KEY,
+  defaultConfigYaml,
+  getListenAddress,
+  isTlsEnabled,
   normalizeCpaConfig,
   normalizeCpaConfigWithWarnings,
-  getListenAddress,
   readCpaConfigWithWarnings,
 } from "./config-yaml.js";
 
@@ -42,6 +44,19 @@ describe("normalizeCpaConfigWithWarnings", () => {
     const { config, warnings } = normalizeCpaConfigWithWarnings({ port: 0 });
     assert.equal(config.port, 8317);
     assert.equal(warnings.length, 1);
+  });
+
+  it("warns when TLS fields have unsafe shapes", () => {
+    const sectionWarning = normalizeCpaConfigWithWarnings({ tls: true }).warnings;
+    assert.equal(sectionWarning.length, 1);
+    assert.match(sectionWarning[0] ?? "", /invalid tls true.*expected an object/);
+
+    const fieldWarnings = normalizeCpaConfigWithWarnings({
+      tls: { enable: "true", cert: 123, key: null },
+    }).warnings;
+    assert.equal(fieldWarnings.length, 2);
+    assert.match(fieldWarnings.join("\n"), /invalid tls\.enable "true".*true or false/);
+    assert.match(fieldWarnings.join("\n"), /invalid tls\.cert 123.*expected a string/);
   });
 });
 
@@ -79,9 +94,79 @@ describe("normalizeCpaConfig", () => {
     assert.equal(normalizeCpaConfig({ port: 0 }).port, 8317);
     assert.equal(normalizeCpaConfig({ port: 99999 }).port, 8317);
   });
+
+  it("parses tls configuration and handles non-object tls safely", () => {
+    const enabledCfg = normalizeCpaConfig({
+      tls: {
+        enable: true,
+        cert: "certs/server.crt",
+        key: "certs/server.key",
+      },
+    });
+    assert.deepEqual(enabledCfg.tls, {
+      enable: true,
+      cert: "certs/server.crt",
+      key: "certs/server.key",
+    });
+    assert.equal(isTlsEnabled(enabledCfg), true);
+
+    const disabledCfg = normalizeCpaConfig({
+      tls: {
+        enable: false,
+      },
+    });
+    assert.equal(disabledCfg.tls?.enable, false);
+    assert.equal(isTlsEnabled(disabledCfg), false);
+
+    const nonObjectCfg = normalizeCpaConfig({ tls: "invalid" });
+    assert.equal(nonObjectCfg.tls, undefined);
+    assert.equal(isTlsEnabled(nonObjectCfg), false);
+
+    const invalidFieldCfg = normalizeCpaConfig({
+      tls: {
+        enable: "true",
+        cert: 123,
+        key: null,
+      },
+    });
+    assert.deepEqual(invalidFieldCfg.tls, {});
+    assert.equal(isTlsEnabled(invalidFieldCfg), false);
+  });
 });
 
 describe("readCpaConfigWithWarnings", () => {
+  it("generates an explicit TLS-disabled starter config", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-config-yaml-"));
+    temps.push(dir);
+    const configPath = path.join(dir, "config.yaml");
+    const generated = defaultConfigYaml("sk-test");
+    assert.match(generated, /tls:\n {2}enable: false\n {2}cert: ""\n {2}key: ""/);
+    fs.writeFileSync(configPath, generated);
+
+    const { config, warnings } = readCpaConfigWithWarnings(configPath);
+    assert.deepEqual(warnings, []);
+    assert.equal(isTlsEnabled(config), false);
+    assert.equal(config.tls?.cert, "");
+    assert.equal(config.tls?.key, "");
+  });
+
+  it("reads and parses tls config from config.yaml", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-config-yaml-"));
+    temps.push(dir);
+    const configPath = path.join(dir, "config.yaml");
+    fs.writeFileSync(
+      configPath,
+      "host: '127.0.0.1'\nport: 8317\ntls:\n  enable: true\n  cert: 'c.pem'\n  key: 'k.pem'\n",
+    );
+
+    const { config, warnings } = readCpaConfigWithWarnings(configPath);
+    assert.deepEqual(warnings, []);
+    assert.equal(config.tls?.enable, true);
+    assert.equal(config.tls?.cert, "c.pem");
+    assert.equal(config.tls?.key, "k.pem");
+    assert.equal(isTlsEnabled(config), true);
+  });
+
   it("names the offending file when the YAML cannot be parsed", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-config-yaml-"));
     temps.push(dir);

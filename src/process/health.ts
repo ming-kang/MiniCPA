@@ -1,5 +1,5 @@
 import { Agent, fetch as undiciFetch } from "undici";
-import { getListenAddress, readCpaConfig } from "../config-yaml.js";
+import { getListenAddress, isTlsEnabled, readCpaConfig } from "../config-yaml.js";
 import { cpaLayout } from "../paths.js";
 import { sleep } from "../util.js";
 
@@ -18,8 +18,15 @@ const PROBE_PASS_INTERVAL_MS = 300;
  * through the environment proxy (including loopback) under NODE_USE_ENV_PROXY
  * or --use-env-proxy. Deliberately not httpFetch from ../http.js — that one
  * applies the proxy agent and retries, which is wrong for a local probe.
+ *
+ * Disables certificate verification strictly for local readiness probes so
+ * self-signed certificates on loopback CPA HTTPS endpoints are accepted.
  */
-const loopbackDispatcher = new Agent();
+const loopbackDispatcher = new Agent({
+  connect: {
+    rejectUnauthorized: false,
+  },
+});
 
 export function isWildcardListenHost(host: string): boolean {
   const lower = host.trim().toLowerCase();
@@ -48,9 +55,10 @@ export function normalizeListenHost(host: string): string {
   return trimmed;
 }
 
-function formatHttpBase(host: string, port: number): string {
+function formatHttpBase(host: string, port: number, tls = false): string {
+  const scheme = tls ? "https" : "http";
   const normalizedHost = normalizeListenHost(host);
-  return `http://${normalizedHost}:${port}`;
+  return `${scheme}://${normalizedHost}:${port}`;
 }
 
 function isReadyStatus(status: number): boolean {
@@ -96,12 +104,12 @@ export async function waitForAnyHttpOk(urls: string[], timeoutMs = 8000): Promis
   return false;
 }
 
-/** Single source of truth for the configured CPA HTTP base (one config read). */
+/** Single source of truth for the configured CPA HTTP/HTTPS base (one config read). */
 function resolveBase(home: string): string {
   const layout = cpaLayout(home);
   const cfg = readCpaConfig(layout.configFile);
   const { host, port } = getListenAddress(cfg);
-  return formatHttpBase(host, port);
+  return formatHttpBase(host, port, isTlsEnabled(cfg));
 }
 
 export function managementUrl(home: string): string {
@@ -117,11 +125,13 @@ export function readinessUrls(home: string): string[] {
   const layout = cpaLayout(home);
   const cfg = readCpaConfig(layout.configFile);
   const { host, port } = getListenAddress(cfg);
-  const primaryBase = formatHttpBase(host, port);
+  const tls = isTlsEnabled(cfg);
+  const primaryBase = formatHttpBase(host, port, tls);
   const urls = [`${primaryBase}${PANEL_PATH}`, `${primaryBase}/`];
 
   if (isWildcardListenHost(host)) {
-    const ipv6Base = `http://[::1]:${port}`;
+    const scheme = tls ? "https" : "http";
+    const ipv6Base = `${scheme}://[::1]:${port}`;
     urls.push(`${ipv6Base}${PANEL_PATH}`, `${ipv6Base}/`);
   }
 

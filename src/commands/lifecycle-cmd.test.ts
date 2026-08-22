@@ -13,7 +13,7 @@ import {
 } from "../paths.js";
 import type { RunningInfo } from "../process/lifecycle.js";
 import { writePidRecord } from "../state.js";
-import { withHttpFixture } from "../test-fixtures/http-server.js";
+import { withHttpFixture, withHttpsFixture } from "../test-fixtures/http-server.js";
 import {
   parseLogLineCount,
   readLogChunk,
@@ -42,11 +42,12 @@ function useTempRoot(): string {
 }
 
 /** Create the instance home with a config.yaml pointing at `baseUrl`'s port. */
-function writeHomeForBase(baseUrl: string): string {
+function writeHomeForBase(baseUrl: string, tls = false): string {
   const home = resolveCpaHome();
   ensureDir(home);
   const port = new URL(baseUrl).port;
-  fs.writeFileSync(cpaLayout(home).configFile, `host: "127.0.0.1"\nport: ${port}\n`);
+  const tlsYaml = tls ? "\ntls:\n  enable: true\n" : "";
+  fs.writeFileSync(cpaLayout(home).configFile, `host: "127.0.0.1"\nport: ${port}${tlsYaml}\n`);
   return home;
 }
 
@@ -180,6 +181,29 @@ describe("runOpen", () => {
       },
     );
   });
+
+  it("opens HTTPS panel URL when tls is enabled", async () => {
+    useTempRoot();
+    await withHttpsFixture(
+      {
+        "/management.html": (_req, res) => {
+          res.statusCode = 200;
+          res.end("panel");
+        },
+      },
+      async (baseUrl) => {
+        writeHomeForBase(baseUrl, true);
+        const launched: string[] = [];
+        await runOpen({
+          openInBrowser: async (url) => {
+            launched.push(url);
+          },
+        });
+        assert.deepEqual(launched, [`${baseUrl}/management.html`]);
+        assert.ok(launched[0]?.startsWith("https://"));
+      },
+    );
+  });
 });
 
 describe("runStatus", () => {
@@ -212,6 +236,51 @@ describe("runStatus", () => {
 
     assert.deepEqual(snapshotHome(home), before, "cpa status must not mutate the instance home");
     assert.equal(fs.existsSync(activeExecutablePath(home)), false);
+  });
+
+  it("reports HTTPS URLs and HTTP ok when running with TLS enabled", async () => {
+    useTempRoot();
+    await withHttpsFixture(
+      {
+        "/management.html": (_req, res) => {
+          res.statusCode = 200;
+          res.end("ok");
+        },
+      },
+      async (baseUrl) => {
+        const home = writeHomeForBase(baseUrl, true);
+        writePidRecord(home, {
+          pid: process.pid,
+          exe: process.execPath,
+          startedAt: new Date().toISOString(),
+        });
+
+        const lines: string[] = [];
+        const originalLog = console.log;
+        console.log = (...args: unknown[]): void => {
+          lines.push(args.map((arg) => String(arg)).join(" "));
+        };
+        try {
+          await runStatus();
+        } finally {
+          console.log = originalLog;
+        }
+
+        assert.ok(
+          lines.some((l) => l.includes(`API       ${baseUrl}`)),
+          lines.join("\n"),
+        );
+        assert.ok(
+          lines.some((l) => l.includes(`Manage    ${baseUrl}/management.html`)),
+          lines.join("\n"),
+        );
+        assert.ok(
+          lines.some((l) => l.includes("HTTP      ok")),
+          lines.join("\n"),
+        );
+        assert.equal(process.exitCode, 0);
+      },
+    );
   });
 });
 

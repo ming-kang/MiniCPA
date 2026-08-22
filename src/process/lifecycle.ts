@@ -50,7 +50,11 @@ function evaluateRunning(home: string, repair: boolean): RunningInfo | undefined
     return undefined;
   }
 
-  const { currentMarker, reused } = probePidReuse(record.pid, record.startMarker);
+  const {
+    currentMarker,
+    reused,
+    matched: markerVerified,
+  } = probePidReuse(record.pid, record.startMarker);
   if (reused) {
     if (repair) clearPid(home);
     return undefined;
@@ -73,11 +77,12 @@ function evaluateRunning(home: string, repair: boolean): RunningInfo | undefined
     return undefined;
   }
 
-  // A matching spawn-time start marker (boot id + start ticks) is PID-reuse-proof,
-  // so it alone verifies ownership when the executable probe is inconclusive.
-  // Reuse was not proven above, so two present markers are a verified match.
-  // With both probes inconclusive we stay fail-closed for kill decisions.
-  const markerVerified = !!record.startMarker && !!currentMarker;
+  // A matching spawn-time start marker (boot id + start ticks, or matching tagged
+  // Darwin instant) is PID-reuse-proof, so it alone verifies ownership when the
+  // executable probe is inconclusive.
+  // Incomparable markers (such as a legacy untagged Darwin marker vs. a tagged UTC
+  // instant) cannot prove identity, so when the executable probe is unknown we fail
+  // closed to prevent terminating an unverified PID.
   const markerDegraded = !!record.startMarker && !currentMarker;
   const identityUnknown = identity === "unknown" ? !markerVerified : markerDegraded;
 

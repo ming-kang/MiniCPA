@@ -5,6 +5,11 @@ import YAML from "yaml";
 export type CpaConfig = {
   host?: string;
   port?: number;
+  tls?: {
+    enable?: boolean;
+    cert?: string;
+    key?: string;
+  };
   "auth-dir"?: string;
   "api-keys"?: string[];
   "remote-management"?: {
@@ -66,6 +71,22 @@ export function normalizeCpaConfigWithWarnings(doc: unknown): {
   const remote = isPlainObject(doc["remote-management"])
     ? (doc["remote-management"] as Record<string, unknown>)
     : undefined;
+  const tls = isPlainObject(doc.tls) ? (doc.tls as Record<string, unknown>) : undefined;
+  if (doc.tls !== undefined && doc.tls !== null && !tls) {
+    warnings.push(`invalid tls ${JSON.stringify(doc.tls)} in config.yaml — expected an object`);
+  }
+  if (tls?.enable !== undefined && typeof tls.enable !== "boolean") {
+    warnings.push(
+      `invalid tls.enable ${JSON.stringify(tls.enable)} in config.yaml — expected true or false`,
+    );
+  }
+  for (const field of ["cert", "key"] as const) {
+    if (tls?.[field] !== undefined && tls[field] !== null && typeof tls[field] !== "string") {
+      warnings.push(
+        `invalid tls.${field} ${JSON.stringify(tls[field])} in config.yaml — expected a string`,
+      );
+    }
+  }
 
   const port = parsePort(doc.port);
   if (port === undefined && doc.port !== undefined && doc.port !== null) {
@@ -91,6 +112,19 @@ export function normalizeCpaConfigWithWarnings(doc: unknown): {
 
   const keys = coerceApiKeys(doc["api-keys"]);
   if (keys !== undefined) config["api-keys"] = keys;
+
+  if (tls) {
+    config.tls = {};
+    if (typeof tls.enable === "boolean") {
+      config.tls.enable = tls.enable;
+    }
+    if (typeof tls.cert === "string") {
+      config.tls.cert = tls.cert;
+    }
+    if (typeof tls.key === "string") {
+      config.tls.key = tls.key;
+    }
+  }
 
   if (remote) {
     config["remote-management"] = {};
@@ -140,6 +174,10 @@ export function getListenAddress(config: CpaConfig): { host: string; port: numbe
     host: config.host ?? DEFAULT_HOST,
     port: config.port ?? DEFAULT_PORT,
   };
+}
+
+export function isTlsEnabled(config: CpaConfig): boolean {
+  return config.tls?.enable === true;
 }
 
 export function getPanelRepository(config: CpaConfig): string {

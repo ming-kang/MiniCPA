@@ -22,6 +22,9 @@ const REQUIRED_STRIPPED_KEYS = [
   "NPM_TOKEN",
   "NPM_AUTH_TOKEN",
   "NODE_AUTH_TOKEN",
+  "NPM_ID_TOKEN",
+  "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+  "ACTIONS_ID_TOKEN_REQUEST_URL",
 ];
 
 describe("STRIPPED_ENV_KEYS", () => {
@@ -47,6 +50,8 @@ describe("buildCpaChildEnv", () => {
       PATH: "/usr/bin",
       HOME: "/home/user",
       CPA_HOME: "/data/cpa",
+      "npm_config_//registry.npmjs.org/:_authToken": "secret-dynamic-token",
+      npm_config_custom_auth: "secret-dynamic-auth",
     };
     for (const key of STRIPPED_ENV_KEYS) {
       for (const spelling of [key, key.toLowerCase(), mixedCase(key)]) {
@@ -65,6 +70,8 @@ describe("buildCpaChildEnv", () => {
     assert.equal(child.PATH, "/usr/bin");
     assert.equal(child.HOME, "/home/user");
     assert.equal(child.CPA_HOME, "/data/cpa");
+    assert.equal(child["npm_config_//registry.npmjs.org/:_authToken"], undefined);
+    assert.equal(child.npm_config_custom_auth, undefined);
     for (const value of Object.values(child)) {
       assert.doesNotMatch(String(value), /^secret-/);
     }

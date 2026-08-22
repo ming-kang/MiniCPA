@@ -19,12 +19,14 @@ import {
   parseLogLineCount,
 } from "./commands/lifecycle-cmd.js";
 import { assertUpdateScopeFlags, runUpdate, runUpdateCheck } from "./commands/update-cmd.js";
+import { runUpgrade, runUpgradeCheck } from "./commands/upgrade-cmd.js";
 import { runVersion } from "./commands/version-cmd.js";
 import { createContext } from "./context.js";
 import { miniCpaRoot, miniCpaTempRoot } from "./paths.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const pkg = JSON.parse(readFileSync(path.join(__dirname, "..", "package.json"), "utf8")) as {
+const packageRoot = path.join(__dirname, "..");
+const pkg = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf8")) as {
   version: string;
 };
 
@@ -124,7 +126,7 @@ program
 
 const updateCmd = program
   .command("update")
-  .description("Replace CPA binary and management panel (default: both)");
+  .description("Update managed CLIProxyAPI binary/panel, not MiniCPA (default: both)");
 
 updateCmd
   .command("check")
@@ -166,6 +168,29 @@ updateCmd
       },
     ),
   );
+
+const upgradeCmd = program
+  .command("upgrade")
+  .description("Upgrade MiniCPA itself from npm, not the managed CLIProxyAPI");
+
+upgradeCmd
+  .command("check")
+  .description("Check for a MiniCPA update (exit 1 if outdated or check failed)")
+  .action(
+    withCliErrors(async () => {
+      await runUpgradeCheck(pkg.version);
+    }),
+  );
+
+upgradeCmd.option("--force", "Reinstall npm latest when already current (never downgrade)").action(
+  withCliErrors(async (opts: { force?: boolean }) => {
+    await runUpgrade({
+      currentVersion: pkg.version,
+      packageRoot,
+      force: opts.force,
+    });
+  }),
+);
 
 program
   .command("doctor")

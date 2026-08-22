@@ -9,7 +9,7 @@ import { writePidRecord } from "../state.js";
 import { sleep } from "../util.js";
 import { isProcessAlive } from "./alive.js";
 import { inspectRunning, resolveRunning, startDaemon, stopDaemon } from "./lifecycle.js";
-import { readProcessStartMarker } from "./pid-identity.js";
+import { isTaggedStartMarker, readProcessStartMarker } from "./pid-identity.js";
 
 const tempHomes: string[] = [];
 const childPids: number[] = [];
@@ -91,6 +91,82 @@ describe("process identity safety", () => {
 
     await assert.rejects(() => stopDaemon(home), /cannot verify process ownership/);
     assert.equal(isProcessAlive(pid), true);
+  });
+
+  it("refuses to stop an alive PID when executable probe is inconclusive and start marker is legacy/incomparable", async () => {
+    const home = tempHome();
+    const pid = spawnLiveChild();
+    const currentMarker = readProcessStartMarker(pid);
+    if (!currentMarker) return;
+
+    // Cross-generation marker: untagged legacy Darwin marker against tagged Darwin probe,
+    // or tagged marker against untagged Windows/Linux probe.
+    const incomparableMarker = isTaggedStartMarker(currentMarker)
+      ? "Mon Jul  6 05:01:00 2026"
+      : "lstart-utc:1783306860";
+
+    writePidRecord(home, {
+      pid,
+      exe: "",
+      startedAt: new Date().toISOString(),
+      startMarker: incomparableMarker,
+    });
+
+    const running = resolveRunning(home);
+    assert.equal(running?.pid, pid);
+    assert.equal(running?.identityUnknown, true);
+
+    await assert.rejects(() => stopDaemon(home), /cannot verify process ownership/);
+    assert.equal(isProcessAlive(pid), true);
+    assert.equal(fs.existsSync(cpaLayout(home).pidFile), true);
+  });
+
+  it("allows stopping an alive PID with a legacy start marker when executable identity matches", async () => {
+    const home = tempHome();
+    const pid = spawnLiveChild();
+    const currentMarker = readProcessStartMarker(pid);
+    if (!currentMarker) return;
+
+    const incomparableMarker = isTaggedStartMarker(currentMarker)
+      ? "Mon Jul  6 05:01:00 2026"
+      : "lstart-utc:1783306860";
+
+    writePidRecord(home, {
+      pid,
+      exe: process.execPath,
+      startedAt: new Date().toISOString(),
+      startMarker: incomparableMarker,
+    });
+
+    const running = resolveRunning(home);
+    assert.equal(running?.pid, pid);
+    assert.equal(running?.identityUnknown, false);
+
+    const stopped = await stopDaemon(home);
+    assert.equal(stopped, true);
+    assert.equal(isProcessAlive(pid), false);
+  });
+
+  it("verifies ownership by start marker alone when executable identity is inconclusive but marker matches", async () => {
+    const home = tempHome();
+    const pid = spawnLiveChild();
+    const startMarker = readProcessStartMarker(pid);
+    if (!startMarker) return;
+
+    writePidRecord(home, {
+      pid,
+      exe: "",
+      startedAt: new Date().toISOString(),
+      startMarker,
+    });
+
+    const running = resolveRunning(home);
+    assert.equal(running?.pid, pid);
+    assert.equal(running?.identityUnknown, false);
+
+    const stopped = await stopDaemon(home);
+    assert.equal(stopped, true);
+    assert.equal(isProcessAlive(pid), false);
   });
 });
 

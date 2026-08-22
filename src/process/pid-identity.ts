@@ -262,6 +262,24 @@ export function canonicalizeStartMarker(rawMarker: string): string {
 }
 
 /**
+ * Decide whether two start markers are in a mutually comparable format.
+ *
+ * Missing or empty markers on either side are never comparable. A tagged
+ * UTC instant (`lstart-utc:<epoch seconds>`) cannot be compared against a
+ * legacy untagged Darwin wall-clock marker because the legacy marker's timezone
+ * and locale are unknown.
+ */
+export function areStartMarkersComparable(
+  recordedMarker?: string,
+  currentMarker?: string,
+): boolean {
+  const recorded = collapseWhitespace(recordedMarker ?? "");
+  const current = collapseWhitespace(currentMarker ?? "");
+  if (!recorded || !current) return false;
+  return isTaggedStartMarker(recorded) === isTaggedStartMarker(current);
+}
+
+/**
  * Decide whether two start markers PROVE the PID was reused.
  *
  * Deliberately fail-open, in three steps that all resolve to "cannot prove":
@@ -278,13 +296,35 @@ export function canonicalizeStartMarker(rawMarker: string): string {
 export function startMarkersProveReuse(recordedMarker?: string, currentMarker?: string): boolean {
   const recorded = collapseWhitespace(recordedMarker ?? "");
   const current = collapseWhitespace(currentMarker ?? "");
-  if (!recorded || !current) return false;
-  if (isTaggedStartMarker(recorded) !== isTaggedStartMarker(current)) return false;
+  if (!areStartMarkersComparable(recorded, current)) return false;
   return recorded !== current;
 }
 
 /**
- * Shared PID-reuse predicate for lifecycle and lock recovery.
+ * Decide whether two start markers PROVE identity (that the PID is the same process).
+ *
+ * Only two comparable markers with identical values prove ownership. Incomparable
+ * markers (such as a legacy untagged Darwin marker vs. a tagged UTC instant)
+ * cannot prove identity. Missing markers on either side also cannot prove identity.
+ */
+export function startMarkersProveIdentity(
+  recordedMarker?: string,
+  currentMarker?: string,
+): boolean {
+  const recorded = collapseWhitespace(recordedMarker ?? "");
+  const current = collapseWhitespace(currentMarker ?? "");
+  if (!areStartMarkersComparable(recorded, current)) return false;
+  return recorded === current;
+}
+
+export type PidMarkerProbeResult = {
+  currentMarker?: string;
+  reused: boolean;
+  matched: boolean;
+};
+
+/**
+ * Shared PID-reuse and identity predicate for lifecycle and lock recovery.
  *
  * `readMarker` exists so tests can supply a marker shape from another platform;
  * production callers use the default probe.
@@ -293,10 +333,16 @@ export function probePidReuse(
   pid: number,
   recordedMarker?: string,
   readMarker: (pid: number) => string | undefined = readProcessStartMarker,
-): { currentMarker?: string; reused: boolean } {
+): PidMarkerProbeResult {
   const currentMarker = readMarker(pid);
-  return { currentMarker, reused: startMarkersProveReuse(recordedMarker, currentMarker) };
+  return {
+    currentMarker,
+    reused: startMarkersProveReuse(recordedMarker, currentMarker),
+    matched: startMarkersProveIdentity(recordedMarker, currentMarker),
+  };
 }
+
+export const probePidIdentity = probePidReuse;
 
 /** True only when full paths resolve to the same executable. */
 export function exePathsMatch(observedPath: string, expectedPath: string): boolean {

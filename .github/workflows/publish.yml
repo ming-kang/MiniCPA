@@ -1,35 +1,418 @@
-name: Publish
+name: Publish npm
 
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable version to publish (for example, 0.1.3)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-npm
+  cancel-in-progress: false
 
 jobs:
   publish:
+    name: Verify and publish @astralyn/minicpa
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      id-token: write
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: "24"
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
           cache: npm
-          registry-url: "https://registry.npmjs.org"
-      - name: Verify release tag matches package version
-        shell: bash
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+
+      - name: Install OIDC-capable npm
         run: |
-          expected="v$(node -p "require('./package.json').version")"
-          test "$RELEASE_TAG" = "$expected"
-      - run: npm ci
-      - run: npm run audit:prod
-      - run: npm run lint
-      - run: npm test
-      - run: npm run build
-      - run: npm publish --access public --provenance
+          npm install --global npm@11.15.0
+          test "$(npm --version)" = "11.15.0"
+
+      - name: Verify release request
+        id: release
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Release workflow must run from main (got $GITHUB_REF)." >&2
+            exit 1
+          fi
+
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from "node:fs";
+
+          const packageName = "@astralyn/minicpa";
+          const expectedFiles = ["dist", "docs", "CHANGELOG.md"];
+          const version = process.env.RELEASE_VERSION;
+          if (!version || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
+            throw new Error(`Expected a stable numeric version such as 0.1.3, got ${version ?? "nothing"}.`);
+          }
+
+          const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
+          const packageLock = JSON.parse(readFileSync("package-lock.json", "utf8"));
+          const changelog = readFileSync("CHANGELOG.md", "utf8");
+
+          if (packageJson.name !== packageName) {
+            throw new Error(`Expected the root package to be ${packageName}, got ${packageJson.name}.`);
+          }
+          if (packageJson.version !== version) {
+            throw new Error(`Release input ${version} must match package.json (${packageJson.version}).`);
+          }
+          if (packageLock.name !== packageName || packageLock.version !== version) {
+            throw new Error(
+              `package-lock.json must identify ${packageName}@${version}, got ${packageLock.name}@${packageLock.version}.`,
+            );
+          }
+          const lockRoot = packageLock.packages?.[""];
+          if (lockRoot?.name !== packageName || lockRoot?.version !== version) {
+            throw new Error(
+              `package-lock.json packages[""] must identify ${packageName}@${version}, got ${lockRoot?.name}@${lockRoot?.version}.`,
+            );
+          }
+          if (JSON.stringify(packageJson.files) !== JSON.stringify(expectedFiles)) {
+            throw new Error(
+              `package.json files must be exactly ${JSON.stringify(expectedFiles)}, got ${JSON.stringify(packageJson.files)}.`,
+            );
+          }
+          if (packageJson.publishConfig?.access !== "public") {
+            throw new Error("package.json publishConfig.access must be public.");
+          }
+          if (packageJson.repository?.url !== "git+https://github.com/ming-kang/MiniCPA.git") {
+            throw new Error(`Unexpected package repository ${packageJson.repository?.url}.`);
+          }
+
+          const unreleasedHeadings = changelog
+            .split(/\r?\n/)
+            .filter((line) => line === "## [Unreleased]");
+          if (unreleasedHeadings.length !== 1) {
+            throw new Error(
+              `Expected exactly one release anchor "## [Unreleased]", found ${unreleasedHeadings.length}.`,
+            );
+          }
+          const unreleased = /(?:^|\n)## \[Unreleased\]\r?\n([\s\S]*?)(?=\r?\n## \[)/.exec(
+            changelog,
+          );
+          if (!unreleased || unreleased[1].trim() !== "") {
+            throw new Error("CHANGELOG.md [Unreleased] must exist and be empty for publication.");
+          }
+          const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const exactHeading = new RegExp(`^## \\[${escapedVersion}\\] - \\d{4}-\\d{2}-\\d{2}$`);
+          const versionHeadings = changelog
+            .split(/\r?\n/)
+            .filter((line) => line.startsWith(`## [${version}]`));
+          if (versionHeadings.length !== 1 || !exactHeading.test(versionHeadings[0])) {
+            throw new Error(
+              `Expected exactly one CHANGELOG.md heading of the form "## [${version}] - YYYY-MM-DD", found ${JSON.stringify(versionHeadings)}.`,
+            );
+          }
+
+          const registryUrl = new URL(
+            `${encodeURIComponent(packageName)}/${encodeURIComponent(version)}`,
+            "https://registry.npmjs.org/",
+          );
+          const response = await fetch(registryUrl, {
+            headers: { accept: "application/json" },
+            signal: AbortSignal.timeout(15_000),
+          });
+          let alreadyPublished;
+          if (response.status === 404) {
+            alreadyPublished = false;
+            console.log(`${packageName}@${version} is not yet published.`);
+          } else if (!response.ok) {
+            throw new Error(
+              `Could not safely determine whether ${packageName}@${version} exists: registry returned ${response.status} ${response.statusText}.`,
+            );
+          } else {
+            const metadata = await response.json();
+            if (metadata.name !== packageName || metadata.version !== version) {
+              throw new Error(
+                `Registry returned unexpected metadata ${metadata.name}@${metadata.version} for ${packageName}@${version}.`,
+              );
+            }
+            alreadyPublished = true;
+            console.log(`${packageName}@${version} is already published; provenance must identify this commit.`);
+          }
+
+          const githubOutput = process.env.GITHUB_OUTPUT;
+          if (!githubOutput) {
+            throw new Error("GITHUB_OUTPUT is unavailable.");
+          }
+          appendFileSync(githubOutput, `already_published=${alreadyPublished}\n`, "utf8");
+          NODE
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Audit production dependencies
+        run: npm run audit:prod
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify generated files
+        run: git diff --exit-code
+
+      - name: Pack npm artifact
+        id: pack
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          package_dir="$RUNNER_TEMP/minicpa-package-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if [ -e "$package_dir" ]; then
+            echo "Refusing to reuse package directory $package_dir." >&2
+            exit 1
+          fi
+          mkdir -p "$package_dir"
+          npm pack --ignore-scripts --silent --pack-destination "$package_dir" >/dev/null
+
+          shopt -s nullglob
+          tarballs=("$package_dir"/*.tgz)
+          expected_tarball="$package_dir/astralyn-minicpa-$RELEASE_VERSION.tgz"
+          if [ "${#tarballs[@]}" -ne 1 ] || [ "${tarballs[0]:-}" != "$expected_tarball" ] || [ ! -f "$expected_tarball" ]; then
+            printf 'Expected only %s, found:' "$expected_tarball" >&2
+            printf ' %s' "${tarballs[@]:-none}" >&2
+            printf '\n' >&2
+            exit 1
+          fi
+          echo "tarball=$expected_tarball" >> "$GITHUB_OUTPUT"
+
+      - name: Verify existing registry artifact matches this pack
+        if: steps.release.outputs.already_published == 'true'
+        env:
+          PACKED_TARBALL: ${{ steps.pack.outputs.tarball }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync } from "node:fs";
+
+          const packageName = "@astralyn/minicpa";
+          const version = process.env.RELEASE_VERSION;
+          const tarball = process.env.PACKED_TARBALL;
+          if (!tarball) {
+            throw new Error("PACKED_TARBALL is unavailable.");
+          }
+          const localIntegrity = `sha512-${createHash("sha512")
+            .update(readFileSync(tarball))
+            .digest("base64")}`;
+          const endpoint = new URL(
+            `${encodeURIComponent(packageName)}/${encodeURIComponent(version)}`,
+            "https://registry.npmjs.org/",
+          );
+          const response = await fetch(endpoint, {
+            headers: { accept: "application/json" },
+            signal: AbortSignal.timeout(15_000),
+          });
+          if (!response.ok) {
+            throw new Error(
+              `Failed to load existing registry artifact metadata: ${response.status} ${response.statusText}.`,
+            );
+          }
+          const metadata = await response.json();
+          if (metadata.dist?.integrity !== localIntegrity) {
+            throw new Error(
+              `Existing ${packageName}@${version} integrity does not match the artifact packed from this commit.`,
+            );
+          }
+          console.log(`Existing ${packageName}@${version} matches the locally packed artifact.`);
+          NODE
+
+      - name: Verify packed package installation
+        env:
+          PACKED_TARBALL: ${{ steps.pack.outputs.tarball }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: npm run verify:package-install -- "$PACKED_TARBALL" "$RELEASE_VERSION"
+
+      - name: Publish verified artifact
+        if: steps.release.outputs.already_published != 'true'
+        env:
+          PACKED_TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: npm publish "$PACKED_TARBALL" --access public --provenance --registry=https://registry.npmjs.org
+
+      - name: Wait for registry metadata
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          node --input-type=module <<'NODE'
+          const packageName = "@astralyn/minicpa";
+          const version = process.env.RELEASE_VERSION;
+          const registryUrl = new URL(
+            `${encodeURIComponent(packageName)}/${encodeURIComponent(version)}`,
+            "https://registry.npmjs.org/",
+          );
+          const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+          for (let attempt = 1; attempt <= 12; attempt += 1) {
+            const response = await fetch(registryUrl, {
+              headers: { accept: "application/json" },
+              signal: AbortSignal.timeout(15_000),
+            });
+            if (response.ok) {
+              const metadata = await response.json();
+              if (metadata.name !== packageName || metadata.version !== version) {
+                throw new Error(
+                  `Registry returned unexpected metadata ${metadata.name}@${metadata.version} for ${packageName}@${version}.`,
+                );
+              }
+              console.log(`Verified ${packageName}@${version} metadata on npm.`);
+              process.exit(0);
+            }
+            console.error(
+              `Metadata attempt ${attempt} returned ${response.status} ${response.statusText}; retrying.`,
+            );
+            if (attempt < 12) {
+              await delay(10_000);
+            }
+          }
+          throw new Error(`${packageName}@${version} metadata was not visible on npm after two minutes.`);
+          NODE
+
+      - name: Wait for and verify SLSA provenance
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          node --input-type=module <<'NODE'
+          const packageName = "@astralyn/minicpa";
+          const version = process.env.RELEASE_VERSION;
+          const expectedRepository = "https://github.com/ming-kang/MiniCPA";
+          const expectedWorkflow = ".github/workflows/publish.yml";
+          const expectedRef = "refs/heads/main";
+          const expectedSource = `git+${expectedRepository}@${expectedRef}`;
+          const expectedCommit = process.env.GITHUB_SHA;
+          const expectedBuilder = "https://github.com/actions/runner/github-hosted";
+          const expectedSubject = `pkg:npm/%40astralyn/minicpa@${version}`;
+          const metadataEndpoint = new URL(
+            `${encodeURIComponent(packageName)}/${encodeURIComponent(version)}`,
+            "https://registry.npmjs.org/",
+          );
+          const endpoint = new URL(
+            `-/npm/v1/attestations/${encodeURIComponent(packageName)}@${encodeURIComponent(version)}`,
+            "https://registry.npmjs.org/",
+          );
+          const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+          const metadataResponse = await fetch(metadataEndpoint, {
+            headers: { accept: "application/json" },
+            signal: AbortSignal.timeout(15_000),
+          });
+          if (!metadataResponse.ok) {
+            throw new Error(
+              `Failed to load published metadata for provenance verification: ${metadataResponse.status} ${metadataResponse.statusText}.`,
+            );
+          }
+          const metadata = await metadataResponse.json();
+          const integrityMatch = /^sha512-(.+)$/.exec(metadata.dist?.integrity ?? "");
+          if (!integrityMatch) {
+            throw new Error("Published package metadata has no SHA-512 integrity value.");
+          }
+          const expectedSubjectDigest = Buffer.from(integrityMatch[1], "base64").toString("hex");
+
+          for (let attempt = 1; attempt <= 18; attempt += 1) {
+            const response = await fetch(endpoint, {
+              headers: { accept: "application/json" },
+              signal: AbortSignal.timeout(15_000),
+            });
+            const retryableStatus =
+              response.status === 404 ||
+              response.status === 408 ||
+              response.status === 425 ||
+              response.status === 429 ||
+              response.status >= 500;
+            if (!response.ok && !retryableStatus) {
+              throw new Error(
+                `Failed to load npm attestations: ${response.status} ${response.statusText}.`,
+              );
+            }
+
+            if (response.ok) {
+              const body = await response.json();
+              const provenance = body.attestations?.find(
+                (attestation) => attestation.predicateType === "https://slsa.dev/provenance/v1",
+              );
+              if (provenance) {
+                const payload = provenance.bundle?.dsseEnvelope?.payload;
+                if (typeof payload !== "string") {
+                  throw new Error("SLSA provenance attestation has no DSSE payload.");
+                }
+                const statement = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+                if (statement.predicateType !== "https://slsa.dev/provenance/v1") {
+                  throw new Error(`Unexpected attestation statement type ${statement.predicateType}.`);
+                }
+                const buildDefinition = statement.predicate?.buildDefinition;
+                const workflow = buildDefinition?.externalParameters?.workflow;
+                const source = buildDefinition?.resolvedDependencies?.find(
+                  (dependency) => dependency.uri === expectedSource,
+                );
+                const subject = statement.subject?.find(
+                  (candidate) => candidate.name === expectedSubject,
+                );
+                const publishedCommit = source?.digest?.gitCommit;
+                if (
+                  workflow?.repository !== expectedRepository ||
+                  workflow?.path !== expectedWorkflow ||
+                  workflow?.ref !== expectedRef
+                ) {
+                  throw new Error(
+                    `Published provenance identifies unexpected workflow ${JSON.stringify(workflow)}.`,
+                  );
+                }
+                if (statement.predicate?.runDetails?.builder?.id !== expectedBuilder) {
+                  throw new Error("Published provenance was not built by a GitHub-hosted runner.");
+                }
+                if (publishedCommit !== expectedCommit) {
+                  throw new Error(
+                    `Published provenance identifies commit ${publishedCommit ?? "unknown"}, not ${expectedCommit}.`,
+                  );
+                }
+                if (subject?.digest?.sha512 !== expectedSubjectDigest) {
+                  throw new Error(
+                    `Published provenance subject does not match the npm package integrity for ${expectedSubject}.`,
+                  );
+                }
+                console.log(
+                  `Verified ${packageName}@${version} provenance from ${expectedWorkflow} at ${publishedCommit}.`,
+                );
+                process.exit(0);
+              }
+            }
+
+            console.error(`SLSA provenance attempt ${attempt} was not ready; retrying.`);
+            if (attempt < 18) {
+              await delay(10_000);
+            }
+          }
+          throw new Error(`${packageName}@${version} SLSA provenance was not visible after three minutes.`);
+          NODE
+
+      - name: Verify exact registry installation
+        env:
+          MINICPA_PACKAGE_ALLOW_FRESH: "1"
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          for attempt in $(seq 1 6); do
+            if npm run verify:package-install -- "@astralyn/minicpa@$RELEASE_VERSION" "$RELEASE_VERSION"; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 6 ]; then
+              echo "Registry installation attempt $attempt failed; retrying in 10 seconds."
+              sleep 10
+            fi
+          done
+          echo "The exact published package could not be installed and smoke-tested from npm." >&2
+          exit 1

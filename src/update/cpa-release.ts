@@ -22,6 +22,7 @@ export function cpaReleaseAssetNames(version: string): string[] {
     `CLIProxyAPI_${v}_windows_arm64.zip`,
     `CLIProxyAPI_${v}_darwin_amd64.tar.gz`,
     `CLIProxyAPI_${v}_darwin_aarch64.tar.gz`,
+    `CLIProxyAPI_${v}_darwin_arm64.tar.gz`,
     `CLIProxyAPI_${v}_linux_amd64.tar.gz`,
     `CLIProxyAPI_${v}_linux_aarch64.tar.gz`,
     `CLIProxyAPI_${v}_linux_arm64.tar.gz`,
@@ -75,19 +76,25 @@ export function cpaAssetNameCandidates(
     if (arch === "arm64") {
       candidates.push(`CLIProxyAPI_${v}_windows_aarch64.zip`);
       candidates.push(`CLIProxyAPI_${v}_windows_arm64.zip`);
+    } else {
+      candidates.push(`CLIProxyAPI_${v}_windows_amd64.zip`);
     }
-    candidates.push(`CLIProxyAPI_${v}_windows_amd64.zip`);
   } else if (platform === "darwin") {
-    if (arch === "arm64") candidates.push(`CLIProxyAPI_${v}_darwin_aarch64.tar.gz`);
-    candidates.push(`CLIProxyAPI_${v}_darwin_amd64.tar.gz`);
+    if (arch === "arm64") {
+      candidates.push(`CLIProxyAPI_${v}_darwin_aarch64.tar.gz`);
+      candidates.push(`CLIProxyAPI_${v}_darwin_arm64.tar.gz`);
+    } else {
+      candidates.push(`CLIProxyAPI_${v}_darwin_amd64.tar.gz`);
+    }
   } else {
     if (arch === "arm64") {
       candidates.push(`CLIProxyAPI_${v}_linux_aarch64.tar.gz`);
       candidates.push(`CLIProxyAPI_${v}_linux_arm64.tar.gz`);
+    } else {
+      candidates.push(`CLIProxyAPI_${v}_linux_amd64.tar.gz`);
+      candidates.push(`CLIProxyAPI_${v}_linux_amd64_no-plugin.tar.gz`);
+      candidates.push(`CLIProxyAPI_${v}_linux_amd64_portable.tar.gz`);
     }
-    candidates.push(`CLIProxyAPI_${v}_linux_amd64.tar.gz`);
-    candidates.push(`CLIProxyAPI_${v}_linux_amd64_no-plugin.tar.gz`);
-    candidates.push(`CLIProxyAPI_${v}_linux_amd64_portable.tar.gz`);
   }
   return candidates;
 }

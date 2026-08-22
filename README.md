@@ -1,8 +1,8 @@
 # MiniCPA
 
-Thin cross-platform **`cpa`** command: layout, start/stop, open management UI, update CPA binary and `management.html`. Everything else stays in [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI).
+Thin cross-platform **`cpa`** command: layout, start/stop, open the management UI, update CPA, and upgrade MiniCPA itself. Everything else stays in [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI).
 
-MiniCPA manages **one CPA instance**. `cpa update` replaces that instance's binary and panel in place. Download and checksum happen first; a running CPA is only stopped for the brief replace window, then restarted. Already-latest installs are skipped unless you pass `--force`. Binary updates verify GitHub `checksums.txt` by default (`--insecure` skips this).
+MiniCPA manages **one CPA instance**. `cpa update` replaces that instance's CLIProxyAPI binary and panel in place. Download and checksum happen first; a running CPA is only stopped for the brief replace window, then restarted. Already-latest installs are skipped unless you pass `--force`. Binary updates verify GitHub `checksums.txt` by default (`--insecure` skips this). `cpa upgrade` is separate and updates the globally installed `@astralyn/minicpa` npm package without touching the running CPA instance.
 
 ## Install
 
@@ -18,13 +18,20 @@ Or without a global install:
 npx @astralyn/minicpa --help
 ```
 
-To update MiniCPA itself:
+For a direct npm global installation, update MiniCPA itself with:
+
+```bash
+cpa upgrade check
+cpa upgrade
+```
+
+`cpa upgrade` only modifies an installation that MiniCPA can prove is a writable, direct npm global package. It refuses to rewrite npx caches, `npm link`, source checkouts, project dependencies, or pnpm/yarn/bun installations. In those cases—or if the automatic upgrade fails—run:
 
 ```bash
 npm install -g @astralyn/minicpa@latest
 ```
 
-`cpa update` updates the managed CPA binary and management panel; it does not update MiniCPA.
+`cpa update` updates the managed CPA binary and management panel; it never updates MiniCPA.
 
 ## Uninstall
 
@@ -54,9 +61,9 @@ cpa open
 
 Updates resolve binary releases via `github.com/releases` first. Panel updates fetch GitHub release metadata to require the published SHA-256 asset digest; if the GitHub API is blocked or rate-limited, set `GITHUB_TOKEN` or `GH_TOKEN`. Tokens are stripped from CPA child processes (including version probes).
 
-**Proxy:** MiniCPA honors standard shell proxy env vars for update/network calls: `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` (upper or lower case). `ALL_PROXY` is used as a fallback for both HTTP and HTTPS, but only when its scheme is `http://` or `https://`; a `socks5://` `ALL_PROXY` is **not** applied — set `HTTP_PROXY`/`HTTPS_PROXY` instead. Set them in PowerShell `$PROFILE`, bashrc, etc. — same as curl/git. `cpa doctor` prints the detected proxy env and labels an `ALL_PROXY` it cannot use with `(scheme not applied)`.
+**Proxy:** MiniCPA honors standard shell proxy env vars for GitHub and npm update checks: `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` (upper or lower case). `ALL_PROXY` is used as a fallback for both HTTP and HTTPS, but only when its scheme is `http://` or `https://`; a `socks5://` `ALL_PROXY` is **not** applied — set `HTTP_PROXY`/`HTTPS_PROXY` instead. Set them in PowerShell `$PROFILE`, bashrc, etc. — same as curl/git. `cpa doctor` prints the detected proxy env and labels an `ALL_PROXY` it cannot use with `(scheme not applied)`. Local CPA readiness probes bypass proxy settings; when `tls.enable: true`, they use HTTPS and accept a self-signed certificate only in that isolated local probe.
 
-`cpa init` generates a random `api-keys` entry in `config.yaml` — still change it before public exposure. Staging files are private under MiniCPA app data. `cpa clean` and `cpa update` take the same exclusive lock, so `cpa clean` cannot run in the middle of an update — it reports the in-flight command instead.
+`cpa init` generates a random `api-keys` entry in `config.yaml` — still change it before public exposure. Staging files are private under MiniCPA app data. `cpa clean`, CPA-mutating lifecycle commands, `cpa update`, and an installing `cpa upgrade` share the same exclusive lock, so package and instance changes cannot overlap — the blocked command reports the in-flight command instead.
 
 ## Paths
 
@@ -66,21 +73,23 @@ Updates resolve binary releases via `github.com/releases` first. Panel updates f
 | `cpa home` | `…\MiniCPA\instances\default` | same under root | same under root |
 | `cpa temp` | `<cpa root>\temp` | `<cpa root>/temp` | `<cpa root>/temp` |
 
-See [docs/cpa-reference.md](docs/cpa-reference.md) for startup details, single-instance migration, default config notes, and troubleshooting.
+See [docs/cpa-reference.md](docs/cpa-reference.md) for startup details, single-instance migration, default config notes, and troubleshooting. Release notes are in [CHANGELOG.md](CHANGELOG.md).
 
 ## Commands
 
-`init` · `start` · `stop` · `restart` · `status` · `open` · `logs` · `update` / `update check` · `doctor` · `clean` · `version` · `root` · `home` · `temp`
+`init` · `start` · `stop` · `restart` · `status` · `open` · `logs` · `update` / `update check` · `upgrade` / `upgrade check` · `doctor` · `clean` · `version` · `root` · `home` · `temp`
 
 | Command | Notes |
 |---------|--------|
-| `cpa start` | Waits until HTTP is ready (`--no-wait` to skip). Exclusive single-instance lock. Rotates logs ≥ 50 MiB. Warns on invalid `host`/`port` in config.yaml. |
+| `cpa start` | Waits until HTTP/HTTPS is ready (`--no-wait` to skip). Exclusive single-instance lock. Rotates logs ≥ 50 MiB. Warns on invalid `host`/`port`/`tls` values in config.yaml. |
 | `cpa stop` | Stops the process only — it does not wait for the binary file to unlock (update handles that), so Windows stop is fast. |
-| `cpa status` | Read-only summary (no lock). Exit 1 when not running or HTTP not reachable. |
+| `cpa status` | Read-only summary (no lock). Exit 1 when not running or the configured HTTP/HTTPS endpoint is not reachable. |
 | `cpa logs` | stdout + stderr; `-n, --lines <n>` last lines per file (default `80`, must be a positive whole number); `--err` for error log only; `-f` follow (ignores `--lines`) |
 | `cpa update` | **Default: binary + panel.** Download/verify first, then stop/replace/restart if needed. Binary checksums and the panel's GitHub SHA-256 asset digest are required unless `--insecure` is used for the binary. A panel failure after a successful binary update is reported as a warning — retry with `cpa update --panel`. |
 | `cpa update --binary` / `--panel` / `--all` | Limit scope (**mutually exclusive**) |
-| `cpa update check` | Report current vs latest. Exit 1 when anything is outdated **or** a check (binary / panel) errors. |
+| `cpa update check` | Report CLIProxyAPI binary/panel current vs latest. Exit 1 when anything is outdated **or** a check errors. |
+| `cpa upgrade` | Update MiniCPA from npm when running from a proven direct global npm install. `--force` reinstalls the current latest version but never downgrades a locally newer version. Does not stop or restart CPA. |
+| `cpa upgrade check` | Report MiniCPA current vs npm latest without modifying the installation. Exit 1 when outdated or the registry check fails. |
 | `cpa doctor` | Read-only diagnostics. Exit 1 when any check fails. |
 | `cpa clean` | Wipe MiniCPA temp downloads/extract only (never touches instance home) |
 | `cpa tui` | Official CPA terminal UI (must already be running) |

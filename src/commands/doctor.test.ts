@@ -12,6 +12,7 @@ import {
   resolveCpaHome,
 } from "../paths.js";
 import { writeInstallState, writePidRecord } from "../state.js";
+import { withHttpsFixture } from "../test-fixtures/http-server.js";
 import type { GithubReachability } from "../update/github-client.js";
 import { DEFAULT_LOG_ROTATE_BYTES } from "../util.js";
 import { runDoctor } from "./doctor.js";
@@ -281,5 +282,38 @@ describe("runDoctor", () => {
       lines.join("\n"),
     );
     assert.equal(hasLine(lines, "anonymous"), false);
+  });
+
+  it("probes and reports HTTPS readiness when CPA is running with TLS enabled", async () => {
+    useTempRoot();
+    const home = resolveCpaHome();
+    ensureDir(home);
+    await withHttpsFixture(
+      {
+        "/management.html": (_req, res) => {
+          res.statusCode = 200;
+          res.end("ok");
+        },
+      },
+      async (baseUrl) => {
+        const port = new URL(baseUrl).port;
+        fs.writeFileSync(
+          cpaLayout(home).configFile,
+          `host: "127.0.0.1"\nport: ${port}\ntls:\n  enable: true\n`,
+        );
+        writePidRecord(home, {
+          pid: process.pid,
+          exe: process.execPath,
+          startedAt: new Date().toISOString(),
+        });
+
+        const lines = await runDoctorCapturing();
+
+        assert.ok(
+          hasLine(lines, `[ ok ] HTTP https://127.0.0.1:${port}/management.html`),
+          lines.join("\n"),
+        );
+      },
+    );
   });
 });

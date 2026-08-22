@@ -52,7 +52,22 @@ describe("cli smoke", () => {
     const { status, stdout } = runCli(["--help"]);
     assert.equal(status, 0);
     assert.match(stdout, /Usage: cpa/);
-    assert.match(stdout, /update/);
+    assert.match(
+      stdout,
+      /update \[options\]\s+Update managed CLIProxyAPI binary\/panel, not MiniCPA/,
+    );
+    assert.match(
+      stdout,
+      /upgrade \[options\]\s+Upgrade MiniCPA itself from npm, not the managed\s+CLIProxyAPI/,
+    );
+  });
+
+  it("prints upgrade help without contacting npm", () => {
+    const { status, stdout, stderr } = runCli(["upgrade", "--help"]);
+    assert.equal(status, 0);
+    assert.match(stdout, /Usage: cpa upgrade/);
+    assert.match(stdout, /--force/);
+    assert.equal(stderr, "");
   });
 
   it("fails with exit 1 for an unknown command", () => {

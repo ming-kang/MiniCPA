@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  areStartMarkersComparable,
   canonicalizeStartMarker,
   classifyDarwinComm,
   classifyProcessIdentity,
@@ -8,8 +9,10 @@ import {
   imageMatchesExpectedExe,
   isTaggedStartMarker,
   parseTasklistImageName,
+  probePidIdentity,
   probePidReuse,
   readProcessStartMarker,
+  startMarkersProveIdentity,
   startMarkersProveReuse,
 } from "./pid-identity.js";
 
@@ -187,6 +190,7 @@ describe("probePidReuse", () => {
     const recorded = readProcessStartMarker(process.pid);
     const probe = probePidReuse(process.pid, recorded);
     assert.equal(probe.reused, false);
+    assert.equal(probe.matched, true);
     assert.equal(probe.currentMarker, recorded);
   });
 
@@ -197,17 +201,22 @@ describe("probePidReuse", () => {
     // tagged, untagged stays untagged) while changing the value it encodes.
     const probe = probePidReuse(process.pid, `${recorded}0`);
     assert.equal(probe.reused, true);
+    assert.equal(probe.matched, false);
   });
 
   it("cannot prove reuse without a recorded marker", () => {
-    assert.equal(probePidReuse(process.pid, undefined).reused, false);
+    const probe = probePidReuse(process.pid, undefined);
+    assert.equal(probe.reused, false);
+    assert.equal(probe.matched, false);
     assert.equal(probePidReuse(process.pid, "").reused, false);
+    assert.equal(probePidReuse(process.pid, "").matched, false);
   });
 
   it("cannot prove reuse for a pid with no readable marker", () => {
     const probe = probePidReuse(-1, "boot-id:12345");
     assert.equal(probe.currentMarker, undefined);
     assert.equal(probe.reused, false);
+    assert.equal(probe.matched, false);
   });
 
   it("cannot prove reuse from a legacy local-time marker for the same live pid", () => {
@@ -218,6 +227,7 @@ describe("probePidReuse", () => {
     const probe = probePidReuse(process.pid, legacyLocalMarker, () => taggedCurrent);
     assert.equal(probe.currentMarker, taggedCurrent);
     assert.equal(probe.reused, false);
+    assert.equal(probe.matched, false);
   });
 
   it("cannot prove reuse from a non-C-locale legacy marker", () => {
@@ -225,22 +235,34 @@ describe("probePidReuse", () => {
     // it would pass through raw and mismatch a tagged marker outright.
     const probe = probePidReuse(process.pid, "Mo 6 Jul 03:01:00 2026", () => taggedCurrent);
     assert.equal(probe.reused, false);
+    assert.equal(probe.matched, false);
   });
 
   it("cannot prove reuse when only the recorded marker is tagged", () => {
     // The downgrade direction of the same mismatch.
     const probe = probePidReuse(process.pid, taggedCurrent, () => legacyLocalMarker);
     assert.equal(probe.reused, false);
+    assert.equal(probe.matched, false);
   });
 
   it("still reports reuse between two different tagged markers", () => {
     const other = canonicalizeStartMarker("Mon Jul  6 03:01:01 2026");
     assert.notEqual(other, taggedCurrent);
-    assert.equal(probePidReuse(process.pid, other, () => taggedCurrent).reused, true);
+    const probe = probePidReuse(process.pid, other, () => taggedCurrent);
+    assert.equal(probe.reused, true);
+    assert.equal(probe.matched, false);
   });
 
   it("does not report reuse between identical tagged markers", () => {
-    assert.equal(probePidReuse(process.pid, taggedCurrent, () => taggedCurrent).reused, false);
+    const probe = probePidReuse(process.pid, taggedCurrent, () => taggedCurrent);
+    assert.equal(probe.reused, false);
+    assert.equal(probe.matched, true);
+  });
+
+  it("provides probePidIdentity as an alias for probePidReuse", () => {
+    const probe = probePidIdentity(process.pid, taggedCurrent, () => taggedCurrent);
+    assert.equal(probe.reused, false);
+    assert.equal(probe.matched, true);
   });
 });
 
@@ -283,6 +305,97 @@ describe("startMarkersProveReuse", () => {
       assert.equal(startMarkersProveReuse(untagged, tagged), false);
       assert.equal(startMarkersProveReuse(tagged, untagged), false);
     }
+  });
+});
+
+describe("areStartMarkersComparable", () => {
+  it("treats markers of the same shape as comparable", () => {
+    assert.equal(areStartMarkersComparable("boot-id:12345", "boot-id:12346"), true);
+    assert.equal(areStartMarkersComparable("638000000000000", "638000000000001"), true);
+    assert.equal(areStartMarkersComparable("lstart-utc:100", "lstart-utc:200"), true);
+    assert.equal(
+      areStartMarkersComparable("Mon Jul  6 03:01:00 2026", "Mon Jul  6 05:01:00 2026"),
+      true,
+    );
+  });
+
+  it("ignores whitespace when determining comparability", () => {
+    assert.equal(areStartMarkersComparable("  lstart-utc:100 \n", "lstart-utc:200"), true);
+    assert.equal(areStartMarkersComparable("boot:1", " boot:2 "), true);
+  });
+
+  it("refuses to compare a tagged Darwin marker with untagged shapes", () => {
+    const tagged = "lstart-utc:1783306860";
+    for (const untagged of [
+      "Mon Jul  6 05:01:00 2026",
+      "Mo 6 Jul 03:01:00 2026",
+      "boot-id:12345",
+      "638000000000000",
+    ]) {
+      assert.equal(areStartMarkersComparable(untagged, tagged), false);
+      assert.equal(areStartMarkersComparable(tagged, untagged), false);
+    }
+  });
+
+  it("returns false for missing, empty, or whitespace-only markers", () => {
+    assert.equal(areStartMarkersComparable(undefined, "lstart-utc:100"), false);
+    assert.equal(areStartMarkersComparable("lstart-utc:100", undefined), false);
+    assert.equal(areStartMarkersComparable("", "lstart-utc:100"), false);
+    assert.equal(areStartMarkersComparable("lstart-utc:100", "   "), false);
+    assert.equal(areStartMarkersComparable(undefined, undefined), false);
+  });
+});
+
+describe("startMarkersProveIdentity", () => {
+  it("proves identity only when comparable markers have identical values", () => {
+    assert.equal(startMarkersProveIdentity("boot-id:12345", "boot-id:12345"), true);
+    assert.equal(startMarkersProveIdentity("638000000000000", "638000000000000"), true);
+    assert.equal(startMarkersProveIdentity("lstart-utc:1783306860", "lstart-utc:1783306860"), true);
+    assert.equal(
+      startMarkersProveIdentity("Mon Jul  6 03:01:00 2026", "Mon Jul  6 03:01:00 2026"),
+      true,
+    );
+  });
+
+  it("ignores incidental whitespace during comparison", () => {
+    assert.equal(
+      startMarkersProveIdentity(" lstart-utc:1783306860 \n", "lstart-utc:1783306860"),
+      true,
+    );
+    assert.equal(
+      startMarkersProveIdentity("Mon Jul  6 03:01:00 2026", " Mon Jul 6 03:01:00 2026 "),
+      true,
+    );
+  });
+
+  it("rejects different values in the same shape", () => {
+    assert.equal(startMarkersProveIdentity("boot-id:12345", "boot-id:12346"), false);
+    assert.equal(startMarkersProveIdentity("638000000000000", "638000000000001"), false);
+    assert.equal(
+      startMarkersProveIdentity("lstart-utc:1783306860", "lstart-utc:1783306861"),
+      false,
+    );
+  });
+
+  it("rejects incomparable shapes (legacy untagged vs tagged)", () => {
+    const tagged = "lstart-utc:1783306860";
+    for (const legacy of [
+      "Mon Jul  6 05:01:00 2026",
+      "Mo 6 Jul 03:01:00 2026",
+      "boot-id:12345",
+      "638000000000000",
+    ]) {
+      assert.equal(startMarkersProveIdentity(legacy, tagged), false);
+      assert.equal(startMarkersProveIdentity(tagged, legacy), false);
+    }
+  });
+
+  it("cannot prove identity from missing or empty markers", () => {
+    assert.equal(startMarkersProveIdentity(undefined, "lstart-utc:100"), false);
+    assert.equal(startMarkersProveIdentity("lstart-utc:100", undefined), false);
+    assert.equal(startMarkersProveIdentity("", "lstart-utc:100"), false);
+    assert.equal(startMarkersProveIdentity("lstart-utc:100", "   "), false);
+    assert.equal(startMarkersProveIdentity(undefined, undefined), false);
   });
 });
 

@@ -4,7 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { withHttpFixture } from "../test-fixtures/http-server.js";
+import { httpFetch } from "../http.js";
+import { withHttpFixture, withHttpsFixture } from "../test-fixtures/http-server.js";
 import {
   apiBaseUrl,
   managementUrl,
@@ -163,6 +164,81 @@ describe("waitForAnyHttpOk", () => {
       },
     );
   });
+
+  it("probes an HTTPS server with self-signed certificate successfully", async () => {
+    await withHttpsFixture(
+      {
+        "/ok": (_req, res) => {
+          res.statusCode = 200;
+          res.end("https up");
+        },
+      },
+      async (baseUrl) => {
+        assert.equal(await waitForAnyHttpOk([`${baseUrl}/ok`], 3_000), true);
+      },
+    );
+  });
+
+  it("treats 401 on HTTPS as server-up", async () => {
+    await withHttpsFixture(
+      {
+        "/auth": (_req, res) => {
+          res.statusCode = 401;
+          res.end();
+        },
+      },
+      async (baseUrl) => {
+        assert.equal(await waitForAnyHttpOk([`${baseUrl}/auth`], 3_000), true);
+      },
+    );
+  });
+
+  it("rejects 5xx-only HTTPS endpoints within the timeout", async () => {
+    await withHttpsFixture(
+      {
+        "/broken": (_req, res) => {
+          res.statusCode = 500;
+          res.end();
+        },
+      },
+      async (baseUrl) => {
+        assert.equal(await waitForAnyHttpOk([`${baseUrl}/broken`], 800), false);
+      },
+    );
+  });
+
+  it("strictly scopes self-signed bypass to readiness: httpFetch still rejects self-signed certs", async () => {
+    await withHttpsFixture(
+      {
+        "/ok": (_req, res) => {
+          res.statusCode = 200;
+          res.end("ok");
+        },
+      },
+      async (baseUrl) => {
+        // waitForAnyHttpOk succeeds on loopback with self-signed cert
+        assert.equal(await waitForAnyHttpOk([`${baseUrl}/ok`], 3_000), true);
+
+        // General httpFetch (used by update/GitHub clients) must fail on self-signed cert
+        await assert.rejects(() => httpFetch(`${baseUrl}/ok`, undefined, { retries: 0 }));
+      },
+    );
+  });
+
+  it("reaches an HTTPS server with self-signed certificate in a child process", async () => {
+    await withHttpsFixture(
+      {
+        "/": (_req, res) => {
+          res.statusCode = 200;
+          res.end("https up");
+        },
+      },
+      async (baseUrl) => {
+        const result = await probeInChildProcess(`${baseUrl}/`, {});
+        assert.equal(result, "READY");
+      },
+    );
+  });
 });
 
 describe("readinessUrls", () => {
@@ -200,6 +276,66 @@ describe("readinessUrls", () => {
     assert.deepEqual(readinessUrls(home), [
       "http://[::1]:9124/management.html",
       "http://[::1]:9124/",
+    ]);
+  });
+
+  it("uses https:// when tls.enable is true with IPv4 wildcard", () => {
+    const home = makeHome('host: "0.0.0.0"\nport: 9123\ntls:\n  enable: true\n');
+    const urls = readinessUrls(home);
+    assert.equal(urls.length, 4);
+    assert.equal(managementUrl(home), "https://127.0.0.1:9123/management.html");
+    assert.equal(apiBaseUrl(home), "https://127.0.0.1:9123");
+    assert.equal(urls[0], "https://127.0.0.1:9123/management.html");
+    assert.equal(urls[1], "https://127.0.0.1:9123/");
+    assert.equal(urls[2], "https://[::1]:9123/management.html");
+    assert.equal(urls[3], "https://[::1]:9123/");
+  });
+
+  it("uses https:// when tls.enable is true with IPv6 wildcard :: and [::]", () => {
+    const homeColons = makeHome('host: "::"\nport: 9123\ntls:\n  enable: true\n');
+    assert.deepEqual(readinessUrls(homeColons), [
+      "https://127.0.0.1:9123/management.html",
+      "https://127.0.0.1:9123/",
+      "https://[::1]:9123/management.html",
+      "https://[::1]:9123/",
+    ]);
+
+    const homeBracketed = makeHome('host: "[::]"\nport: 9123\ntls:\n  enable: true\n');
+    assert.deepEqual(readinessUrls(homeBracketed), [
+      "https://127.0.0.1:9123/management.html",
+      "https://127.0.0.1:9123/",
+      "https://[::1]:9123/management.html",
+      "https://[::1]:9123/",
+    ]);
+  });
+
+  it("uses https:// and brackets concrete IPv6 addresses when tls.enable is true", () => {
+    const home = makeHome('host: "::1"\nport: 9124\ntls:\n  enable: true\n');
+    assert.equal(apiBaseUrl(home), "https://[::1]:9124");
+    assert.equal(managementUrl(home), "https://[::1]:9124/management.html");
+    assert.deepEqual(readinessUrls(home), [
+      "https://[::1]:9124/management.html",
+      "https://[::1]:9124/",
+    ]);
+  });
+
+  it("uses https:// with concrete IPv4 addresses when tls.enable is true", () => {
+    const home = makeHome('host: "192.168.1.50"\nport: 9125\ntls:\n  enable: true\n');
+    assert.equal(apiBaseUrl(home), "https://192.168.1.50:9125");
+    assert.equal(managementUrl(home), "https://192.168.1.50:9125/management.html");
+    assert.deepEqual(readinessUrls(home), [
+      "https://192.168.1.50:9125/management.html",
+      "https://192.168.1.50:9125/",
+    ]);
+  });
+
+  it("uses http:// when tls.enable is explicitly false", () => {
+    const home = makeHome('host: "127.0.0.1"\nport: 9123\ntls:\n  enable: false\n');
+    assert.equal(apiBaseUrl(home), "http://127.0.0.1:9123");
+    assert.equal(managementUrl(home), "http://127.0.0.1:9123/management.html");
+    assert.deepEqual(readinessUrls(home), [
+      "http://127.0.0.1:9123/management.html",
+      "http://127.0.0.1:9123/",
     ]);
   });
 });
