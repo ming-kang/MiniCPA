@@ -43,6 +43,13 @@ function spawnLiveChild(): number {
   return child.pid;
 }
 
+function differentComparableStartMarker(marker: string): string {
+  const numericSuffix = /^(.*?)(-?\d+)$/.exec(marker);
+  return numericSuffix
+    ? `${numericSuffix[1]}${BigInt(numericSuffix[2] ?? "0") + 1n}`
+    : `${marker}:different`;
+}
+
 /** A PID that certainly belongs to no live process (ours, already reaped). */
 async function spawnExitedPid(): Promise<number> {
   const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore", windowsHide: true });
@@ -276,7 +283,12 @@ describe("resolveRunning", () => {
     // A start marker recorded for a different process proves PID reuse. Platforms
     // without a readable marker cannot prove it, so there is nothing to assert.
     if (startMarker) {
-      writePidRecord(home, { pid, exe: process.execPath, startedAt, startMarker: "bogus:1" });
+      writePidRecord(home, {
+        pid,
+        exe: process.execPath,
+        startedAt,
+        startMarker: differentComparableStartMarker(startMarker),
+      });
       assert.equal(resolveRunning(home), undefined);
       assert.equal(fs.existsSync(cpaLayout(home).pidFile), false);
     }

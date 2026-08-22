@@ -61,6 +61,13 @@ function spawnLiveHolder(): number {
   return child.pid;
 }
 
+function differentComparableStartMarker(marker: string): string {
+  const numericSuffix = /^(.*?)(-?\d+)$/.exec(marker);
+  return numericSuffix
+    ? `${numericSuffix[1]}${BigInt(numericSuffix[2] ?? "0") + 1n}`
+    : `${marker}:different`;
+}
+
 describe("withMiniCpaLock", () => {
   it("uses one global lock and releases it", async () => {
     configureIsolatedAppRoot();
@@ -224,7 +231,7 @@ describe("withMiniCpaLock", () => {
         pid: holderPid,
         command: "start",
         acquiredAt: new Date().toISOString(),
-        startMarker: "bogus-boot:1",
+        startMarker: differentComparableStartMarker(currentMarker),
       })}\n`,
     );
 

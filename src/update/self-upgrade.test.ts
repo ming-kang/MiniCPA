@@ -141,7 +141,7 @@ describe("classifyNpmGlobalRoot", () => {
 });
 
 describe("detectNpmGlobalInstall", () => {
-  it("proves a direct POSIX global install with a custom prefix", async () => {
+  it("proves a direct POSIX global install when only an ancestor path canonicalizes", async () => {
     const prefix = "/opt/MiniCPA Custom";
     const globalRoot = `${prefix}/lib/node_modules`;
     const packageRoot = `${globalRoot}/@astralyn/minicpa`;
@@ -158,8 +158,13 @@ describe("detectNpmGlobalInstall", () => {
           assert.equal(filePath, `${packageRoot}/package.json`);
           return JSON.stringify({ name: "@astralyn/minicpa" });
         },
-        realpath: async (filePath) =>
-          filePath === `${prefix}/bin/cpa` ? `${packageRoot}/dist/cli.js` : filePath,
+        realpath: async (filePath) => {
+          if (filePath === `${prefix}/bin/cpa`) return `${packageRoot}/dist/cli.js`;
+          // macOS `/var` -> `/private/var` and Windows 8.3 paths can canonicalize
+          // ancestors without the package entry itself being a link/junction.
+          if (filePath === packageRoot) return `/canonical${packageRoot}`;
+          return filePath;
+        },
         lstat: async (filePath) => {
           if (filePath === packageRoot || filePath === `${prefix}/bin/cpa`) {
             return {

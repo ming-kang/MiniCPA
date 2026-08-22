@@ -21,4 +21,5 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 ### Fixed
 
 - Fixed legacy and tagged macOS process start markers being treated as an identity match when their formats could not be compared safely.
+- Fixed npm-global detection falsely rejecting normal macOS `/var` aliases and Windows short-path ancestors as linked installs.
 - Fixed `start`, `status`, `open`, and update restart health checks when `tls.enable` is set in `config.yaml`.

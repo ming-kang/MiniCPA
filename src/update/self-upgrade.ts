@@ -415,12 +415,9 @@ export async function detectNpmGlobalInstall(
         "npm link, symlink, and junction installations are unsupported.",
       );
     }
-    const realPackageRoot = await fileSystem.realpath(expectedPackageRoot);
-    if (
-      comparablePath(realPackageRoot, platform) !== comparablePath(expectedPackageRoot, platform)
-    ) {
-      return unsupported("linked", "The global package path resolves through a link or junction.");
-    }
+    // lstat above rejects a link/junction at the package entry itself. Do not compare
+    // this path with realpath: otherwise normal ancestor aliases are misclassified as
+    // npm link installs (`/var` -> `/private/var` on macOS, or Windows 8.3 names).
     if (
       !(await globalBinTargetsPackage(layout.prefix, expectedPackageRoot, platform, fileSystem))
     ) {
