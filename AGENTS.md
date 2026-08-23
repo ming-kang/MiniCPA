@@ -12,7 +12,7 @@ MiniCPA is a strict TypeScript ESM CLI for managing CLIProxyAPI instances. The e
 - `npm test` type-checks, then runs all `node:test` suites through `tsx`.
 - `npm run build` emits the publishable CLI into `dist/`.
 - `npm link` makes the local build available as the `cpa` command for manual smoke testing.
-- `npm publish --dry-run --access public --provenance` validates the exact npm release flow without publishing.
+- `npm pack --dry-run` previews the package contents after a build.
 
 ## Coding Style & Naming Conventions
 
@@ -25,6 +25,10 @@ Use the built-in `node:test` API with `node:assert/strict`. Name tests after the
 ## Commit & Pull Request Guidelines
 
 Follow the concise imperative style already used in history: `release: stabilize 0.0.5`, `docs: add MIT license`, or `Harden lifecycle checks`. Keep one concern per commit. Pull requests should state the behavior change, list commands run (usually `npm test` and `npm run build`), and call out any changes to update safety, configuration, or CLI output. Include CLI output only when it helps reviewers verify a user-visible change.
+
+## Release Safety
+
+Publish stable npm versions only through `.github/workflows/publish.yml` using npm Trusted Publishing (OIDC). Follow `RELEASING.md`; never add an npm publishing token or publish/create release tags without explicit maintainer approval.
 
 ## Security & Configuration
 
