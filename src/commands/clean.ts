@@ -4,8 +4,8 @@ import { miniCpaTempRoot } from "../paths.js";
 import { withMiniCpaLock } from "../process/lock.js";
 import { directorySizeBytes, formatBytes } from "../util.js";
 
-/** Only remove staging entries older than this. */
-export const CLEAN_MIN_AGE_MS = 60 * 60 * 1000;
+/** Only remove staging entries older than this (60m). */
+const CLEAN_MIN_AGE_MS = 60 * 60 * 1000;
 
 /** Remove only old private staging entries while holding the global MiniCPA lock. */
 export async function runClean(options?: { minAgeMs?: number }): Promise<void> {
@@ -24,15 +24,15 @@ export async function runClean(options?: { minAgeMs?: number }): Promise<void> {
     let skippedRecent = 0;
     let failed = 0;
 
-    const entries = fs.readdirSync(temp, { withFileTypes: true });
+    const entries = fs.readdirSync(temp);
     if (entries.length === 0) {
       console.log(`Temp      ${temp}`);
       console.log("Nothing to clean");
       return;
     }
 
-    for (const entry of entries) {
-      const full = path.join(temp, entry.name);
+    for (const name of entries) {
+      const full = path.join(temp, name);
       let mtimeMs = 0;
       try {
         mtimeMs = fs.lstatSync(full).mtimeMs;

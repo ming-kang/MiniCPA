@@ -252,11 +252,6 @@ async function downloadFirstAvailableAsset(
       if (!/Download failed 404/i.test(lastError.message)) {
         throw lastError;
       }
-      try {
-        fs.unlinkSync(archivePath);
-      } catch {
-        /* ignore */
-      }
     }
   }
   throw lastError ?? new Error("All release asset candidates failed to download");
@@ -270,7 +265,7 @@ export type BinaryUpdateDeps = {
   waitForBinaryUnlocked(home: string): Promise<void>;
 };
 
-export const defaultBinaryUpdateDeps: BinaryUpdateDeps = {
+const defaultBinaryUpdateDeps: BinaryUpdateDeps = {
   stopDaemon,
   startDaemon,
   resolveRunning,

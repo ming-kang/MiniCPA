@@ -93,7 +93,7 @@ describe("cli smoke", () => {
     ]) {
       assert.match(stdout, new RegExp(`^  ${command}(?: \\[options\\])?\\s{2,}`, "m"));
     }
-    for (const hidden of ["open", "clean", "root", "temp", "self-update"]) {
+    for (const hidden of ["open", "clean", "root", "temp"]) {
       assert.doesNotMatch(stdout, new RegExp(`^  ${hidden}(?: \\[options\\])?\\s{2,}`, "m"));
     }
     assert.match(
@@ -151,13 +151,7 @@ describe("cli smoke", () => {
     assert.match(stderr, /option '--all' cannot be used with option '--panel'/);
   });
 
-  it("fails with exit 1 for an unknown command", () => {
-    const { status, stderr } = runCli(["definitely-not-a-command"]);
-    assert.equal(status, 1);
-    assert.match(stderr, /unknown command/i);
-  });
-
-  it("reports an unknown command exactly once", () => {
+  it("reports an unknown command exactly once with exit 1", () => {
     // Commander's Command.error() already writes to stderr before exitOverride throws,
     // so the top-level catch must not print the same message a second time.
     const { status, stderr } = runCli(["definitely-not-a-command"]);

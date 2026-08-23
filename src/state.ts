@@ -73,7 +73,7 @@ export function patchInstallState(
     merged[key] = patch[key];
   }
   writeInstallState(home, merged);
-  return { ...merged, cpaHome: home };
+  return merged;
 }
 
 export function readPidRecord(home: string): PidRecord | undefined {

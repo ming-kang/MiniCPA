@@ -10,7 +10,7 @@ import {
 import { clearPid, readPidRecord, writePidRecord } from "../state.js";
 import { rotateFileIfLarge, sleep, tailFile } from "../util.js";
 import { isProcessAlive } from "./alive.js";
-import { buildCpaChildEnv } from "./child-env.js";
+import { buildCredentialSafeChildEnv } from "./child-env.js";
 import { readinessUrls, waitForAnyHttpOk } from "./health.js";
 import { classifyProcessIdentity, probePidReuse, readProcessStartMarker } from "./pid-identity.js";
 import {
@@ -71,7 +71,7 @@ function evaluateRunning(home: string, repair: boolean): RunningInfo | undefined
     exe = findRunnableExecutable(home) ?? record.exe;
   }
 
-  const identity = classifyProcessIdentity(record.pid, exe || record.exe);
+  const identity = classifyProcessIdentity(record.pid, exe);
   if (identity === "mismatch") {
     if (repair) clearPid(home);
     return undefined;
@@ -88,7 +88,7 @@ function evaluateRunning(home: string, repair: boolean): RunningInfo | undefined
 
   return {
     pid: record.pid,
-    exe: exe || record.exe,
+    exe,
     startedAt: record.startedAt || undefined,
     identityUnknown,
   };
@@ -266,7 +266,7 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
     detached: true,
     stdio: ["ignore", out, err],
     windowsHide: true,
-    env: buildCpaChildEnv(),
+    env: buildCredentialSafeChildEnv(),
   });
   let spawnError: Error | undefined;
   child.once("error", (err) => {
@@ -332,33 +332,6 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
   }
 
   return { pid: child.pid, exe, startedAt };
-}
-
-/** Run the official CPA terminal UI attached to the current terminal. */
-export async function runCpaTuiProcess(home: string): Promise<void> {
-  const layout = cpaLayout(home);
-  const exe = resolveRunnableExecutable(home);
-  const child = spawn(exe, ["-config", layout.configFile, "-tui"], {
-    cwd: home,
-    stdio: "inherit",
-    env: buildCpaChildEnv(),
-  });
-  await new Promise<void>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code, signal) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(
-        new Error(
-          signal
-            ? `CLIProxyAPI TUI terminated by ${signal}`
-            : `CLIProxyAPI TUI exited with code ${code ?? 1}`,
-        ),
-      );
-    });
-  });
 }
 
 export async function stopDaemon(home: string): Promise<boolean> {

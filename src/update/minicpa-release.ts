@@ -1,5 +1,6 @@
 import { compare, valid } from "semver";
 import { httpFetch } from "../http.js";
+import { isExactSemver } from "../util.js";
 
 export const MINICPA_PACKAGE_NAME = "@astralyn/minicpa";
 export const NPM_REGISTRY_BASE_URL = "https://registry.npmjs.org";
@@ -7,8 +8,6 @@ export const NPM_REGISTRY_BASE_URL = "https://registry.npmjs.org";
 const NPM_METADATA_MAX_BYTES = 64 * 1024;
 const NPM_REGISTRY_TIMEOUT_MS = 15_000;
 const NPM_REGISTRY_RETRIES = 2;
-const EXACT_SEMVER =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 export type MinicpaVersionStatus = "current" | "outdated" | "ahead";
 
@@ -68,7 +67,7 @@ function assertExactSemver(version: unknown, source: "current" | "latest"): stri
       `${source === "latest" ? "npm registry metadata is missing a string version" : "Current MiniCPA version is missing"}. Expected an exact semver such as 1.2.3.`,
     );
   }
-  if (!EXACT_SEMVER.test(version) || valid(version) === null) {
+  if (!isExactSemver(version) || valid(version) === null) {
     throw new Error(
       `Invalid ${source} MiniCPA version "${version}". Expected a canonical exact semver such as 1.2.3 or 1.2.3-beta.1.`,
     );

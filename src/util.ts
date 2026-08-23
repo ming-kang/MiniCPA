@@ -43,6 +43,14 @@ export const DEFAULT_LOG_ROTATE_BYTES = 50 * 1024 * 1024;
 /** Keep this many rotated siblings (file.1 .. file.N). */
 export const DEFAULT_LOG_ROTATE_KEEP = 2;
 
+/** Matches exact semver versions (major.minor.patch[-prerelease][+build]) without ranges or prefixes. */
+const EXACT_SEMVER_REGEX =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
+export function isExactSemver(version: string): boolean {
+  return EXACT_SEMVER_REGEX.test(version);
+}
+
 /**
  * If `file` is at least maxBytes, rotate to file.1 .. file.keep (drop oldest).
  * Returns true when a rotation happened.

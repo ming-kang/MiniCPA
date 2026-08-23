@@ -1,5 +1,4 @@
 import {
-  browserReleaseAssetUrl,
   ensureReleaseTag,
   fetchReleaseByTagViaApi,
   githubAuthToken,
@@ -117,17 +116,6 @@ export function listReleaseAssetCandidates(
         url: releaseAssetDownloadUrl(repo, asset),
         asset,
       });
-    }
-  }
-
-  if (picked.length === 0 && release.assets.length === 0) {
-    // Fully synthetic release: construct browser URLs for every candidate.
-    for (const name of candidates) {
-      const asset: GhAsset = {
-        name,
-        browser_download_url: browserReleaseAssetUrl(repo, release.tag_name, name),
-      };
-      picked.push({ assetName: name, url: asset.browser_download_url, asset });
     }
   }
 

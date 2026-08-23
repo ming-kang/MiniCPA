@@ -9,7 +9,6 @@ import {
   imageMatchesExpectedExe,
   isTaggedStartMarker,
   parseTasklistImageName,
-  probePidIdentity,
   probePidReuse,
   readProcessStartMarker,
   startMarkersProveIdentity,
@@ -65,7 +64,7 @@ describe("classifyDarwinComm", () => {
   const expected =
     "/Users/asterin-with-a-long-home-directory/Library/Application Support/MiniCPA/instance/cli-proxy-api";
 
-  it("uses a path longer than the 79-column ps fallback width", () => {
+  it("uses a fixture path that deliberately exceeds the 79-column ps pipe width", () => {
     assert.ok(expected.length > 79);
   });
 
@@ -256,12 +255,6 @@ describe("probePidReuse", () => {
 
   it("does not report reuse between identical tagged markers", () => {
     const probe = probePidReuse(process.pid, taggedCurrent, () => taggedCurrent);
-    assert.equal(probe.reused, false);
-    assert.equal(probe.matched, true);
-  });
-
-  it("provides probePidIdentity as an alias for probePidReuse", () => {
-    const probe = probePidIdentity(process.pid, taggedCurrent, () => taggedCurrent);
     assert.equal(probe.reused, false);
     assert.equal(probe.matched, true);
   });

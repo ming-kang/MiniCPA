@@ -94,16 +94,13 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
       }
       console.log(`[info] listen ${host}:${port}`);
       const apiKeys = cfg["api-keys"] ?? [];
-      if (apiKeys.includes(LEGACY_DEFAULT_API_KEY)) {
+      const hasLegacyApiKey = apiKeys.includes(LEGACY_DEFAULT_API_KEY);
+      if (hasLegacyApiKey) {
         console.log(
           `[warn] default api-key ${LEGACY_DEFAULT_API_KEY} still in config — change before exposing the API`,
         );
       }
-      if (
-        host !== "127.0.0.1" &&
-        host !== "localhost" &&
-        apiKeys.includes(LEGACY_DEFAULT_API_KEY)
-      ) {
+      if (host !== "127.0.0.1" && host !== "localhost" && hasLegacyApiKey) {
         console.log("[warn] non-loopback host with legacy default api-key is unsafe");
       }
     } catch (err) {
@@ -139,7 +136,7 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
   }
   if (state.runtimeVersion && !version) {
     console.log("[warn] install state has runtimeVersion but binary is missing/unprobeable");
-  } else if (state.runtimeVersion && version && state.runtimeVersion !== version) {
+  } else if (state.runtimeVersion && state.runtimeVersion !== version) {
     console.log("[warn] runtime version differs from install state — run: cpa update --force");
   }
   console.log(`[info] Web panel ${state.panelVersion ?? "(not installed)"}`);
@@ -298,8 +295,7 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
 
   // Optional: GitHub reachability (non-fatal). Uses the update client's headers,
   // so a configured GITHUB_TOKEN/GH_TOKEN reports the quota MiniCPA really gets.
-  const probeGithub =
-    deps?.checkGithubReachability ?? ((): Promise<GithubReachability> => checkGithubReachability());
+  const probeGithub = deps?.checkGithubReachability ?? checkGithubReachability;
   try {
     const reach = await probeGithub();
     if (reach.ok) {

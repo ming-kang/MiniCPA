@@ -186,7 +186,7 @@ export async function resolveLatestReleaseTag(
     signal: AbortSignal.timeout(API_TIMEOUT_MS),
   });
 
-  const location = res.headers.get("location") || res.headers.get("Location");
+  const location = res.headers.get("location");
   if (location) {
     const tag = parseReleaseTagFromLocation(location);
     if (tag) {

@@ -154,14 +154,11 @@ export async function runLogs(opts: {
   const n = opts.lines ?? 80;
 
   if (opts.follow) {
-    const files = opts.errOnly
-      ? [errFile]
-      : [outFile, errFile].filter((f) => fs.existsSync(f) || f === outFile);
-    const existing = files.filter((f) => fs.existsSync(f));
-    if (existing.length === 0) {
+    const files = (opts.errOnly ? [errFile] : [outFile, errFile]).filter((f) => fs.existsSync(f));
+    if (files.length === 0) {
       throw new Error(`No log files yet under ${ctx.layout.logsDir}`);
     }
-    await tailFollowMany(existing);
+    await tailFollowMany(files);
     return;
   }
 

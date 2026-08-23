@@ -342,8 +342,6 @@ export function probePidReuse(
   };
 }
 
-export const probePidIdentity = probePidReuse;
-
 /** True only when full paths resolve to the same executable. */
 export function exePathsMatch(observedPath: string, expectedPath: string): boolean {
   try {

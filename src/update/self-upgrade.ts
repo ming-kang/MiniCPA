@@ -6,10 +6,8 @@ import type { Readable } from "node:stream";
 import spawn from "cross-spawn";
 import { valid } from "semver";
 import { buildCredentialSafeChildEnv } from "../process/child-env.js";
+import { isExactSemver } from "../util.js";
 import { MINICPA_PACKAGE_NAME, NPM_REGISTRY_BASE_URL } from "./minicpa-release.js";
-
-const EXACT_SEMVER =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 export type SupportedNpmGlobalInstall = {
   supported: true;
@@ -482,7 +480,7 @@ export async function detectNpmGlobalInstall(
 }
 
 function assertCanonicalExactVersion(version: string): void {
-  if (!EXACT_SEMVER.test(version) || valid(version) === null) {
+  if (!isExactSemver(version) || valid(version) === null) {
     throw new Error(
       `Refusing non-canonical MiniCPA version "${version}". Expected an exact version such as 1.2.3.`,
     );
@@ -491,15 +489,14 @@ function assertCanonicalExactVersion(version: string): void {
 
 type UpgradeOperation = "install" | "update";
 
-function manualRetryCommand(
-  detection: SupportedNpmGlobalInstall,
+function buildNpmUpgradeArgs(
+  prefix: string,
   operation: UpgradeOperation,
   version: string,
-): string {
+): string[] {
   return [
-    detection.npmCommand,
     "--prefix",
-    JSON.stringify(detection.prefix),
+    prefix,
     operation,
     "--global",
     "--ignore-scripts",
@@ -507,7 +504,16 @@ function manualRetryCommand(
     "--no-fund",
     `--registry=${NPM_REGISTRY_BASE_URL}`,
     operation === "install" ? `${MINICPA_PACKAGE_NAME}@${version}` : MINICPA_PACKAGE_NAME,
-  ].join(" ");
+  ];
+}
+
+function manualRetryCommand(
+  detection: SupportedNpmGlobalInstall,
+  operation: UpgradeOperation,
+  version: string,
+): string {
+  const args = buildNpmUpgradeArgs(JSON.stringify(detection.prefix), operation, version);
+  return [detection.npmCommand, ...args].join(" ");
 }
 
 function upgradeFailure(
@@ -529,17 +535,7 @@ function npmArguments(
   operation: UpgradeOperation,
   version: string,
 ): string[] {
-  return [
-    "--prefix",
-    detection.prefix,
-    operation,
-    "--global",
-    "--ignore-scripts",
-    "--no-audit",
-    "--no-fund",
-    `--registry=${NPM_REGISTRY_BASE_URL}`,
-    operation === "install" ? `${MINICPA_PACKAGE_NAME}@${version}` : MINICPA_PACKAGE_NAME,
-  ];
+  return buildNpmUpgradeArgs(detection.prefix, operation, version);
 }
 
 async function runNpmUpgrade(

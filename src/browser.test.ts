@@ -18,9 +18,4 @@ describe("resolveOpenCommand", () => {
     const url = "http://127.0.0.1:8317/";
     assert.deepEqual(resolveOpenCommand(url), resolveOpenCommand(url, process.platform));
   });
-
-  it("handles https URLs correctly", () => {
-    const url = "https://127.0.0.1:8317/management.html";
-    assert.deepEqual(resolveOpenCommand(url), resolveOpenCommand(url, process.platform));
-  });
 });

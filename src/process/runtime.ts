@@ -8,7 +8,7 @@ import {
   ensureDir,
   unlockProbePath,
 } from "../paths.js";
-import { buildCpaChildEnv } from "./child-env.js";
+import { buildCredentialSafeChildEnv } from "./child-env.js";
 
 /** MiniCPA tokens are always stripped from the child environment (see AGENTS.md). */
 export async function runCommand(
@@ -21,7 +21,7 @@ export async function runCommand(
   },
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   const timeoutMs = options?.timeoutMs ?? 30_000;
-  const env = buildCpaChildEnv({ ...process.env, ...options?.env });
+  const env = buildCredentialSafeChildEnv({ ...process.env, ...options?.env });
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options?.cwd,
@@ -277,7 +277,7 @@ export async function runRuntimeAttached(
   const child = spawn(exe, args, {
     cwd: options.cwd,
     stdio: "inherit",
-    env: buildCpaChildEnv(),
+    env: buildCredentialSafeChildEnv(),
   });
   await new Promise<void>((resolve, reject) => {
     child.once("error", reject);

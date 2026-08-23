@@ -35,8 +35,3 @@ export function buildCredentialSafeChildEnv(
   }
   return childEnv;
 }
-
-/** Environment for cli-proxy-api / tui / version-probe children. */
-export function buildCpaChildEnv(sourceEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return buildCredentialSafeChildEnv(sourceEnv);
-}

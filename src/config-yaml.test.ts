@@ -6,9 +6,7 @@ import { afterEach, describe, it } from "node:test";
 import {
   LEGACY_DEFAULT_API_KEY,
   defaultConfigYaml,
-  getListenAddress,
   isTlsEnabled,
-  normalizeCpaConfig,
   normalizeCpaConfigWithWarnings,
   readCpaConfigWithWarnings,
 } from "./config-yaml.js";
@@ -34,16 +32,45 @@ describe("normalizeCpaConfigWithWarnings", () => {
     assert.match(warnings.join("\n"), /invalid host 42/);
   });
 
-  it("does not warn for valid or absent values", () => {
+  it("does not warn for valid or absent values and applies defaults for non-objects", () => {
     assert.deepEqual(normalizeCpaConfigWithWarnings({ port: 9000 }).warnings, []);
     assert.deepEqual(normalizeCpaConfigWithWarnings({}).warnings, []);
-    assert.deepEqual(normalizeCpaConfigWithWarnings(null).warnings, []);
+
+    const nullResult = normalizeCpaConfigWithWarnings(null);
+    assert.equal(nullResult.config.host, "127.0.0.1");
+    assert.equal(nullResult.config.port, 8317);
+    assert.deepEqual(nullResult.warnings, []);
+
+    const nonObjectResult = normalizeCpaConfigWithWarnings("nope");
+    assert.equal(nonObjectResult.config.host, "127.0.0.1");
+    assert.equal(nonObjectResult.config.port, 8317);
+    assert.deepEqual(nonObjectResult.warnings, []);
   });
 
   it("warns on out-of-range ports", () => {
     const { config, warnings } = normalizeCpaConfigWithWarnings({ port: 0 });
     assert.equal(config.port, 8317);
     assert.equal(warnings.length, 1);
+
+    const highPort = normalizeCpaConfigWithWarnings({ port: 99999 });
+    assert.equal(highPort.config.port, 8317);
+    assert.equal(highPort.warnings.length, 1);
+  });
+
+  it("coerces and sanitizes host, port, api-keys", () => {
+    const { config } = normalizeCpaConfigWithWarnings({
+      host: " 0.0.0.0 ",
+      port: "9000",
+      "api-keys": [LEGACY_DEFAULT_API_KEY, 123, null, "ok"],
+    });
+    assert.equal(config.host, "0.0.0.0");
+    assert.equal(config.port, 9000);
+    assert.deepEqual(config["api-keys"], [LEGACY_DEFAULT_API_KEY, "ok"]);
+
+    const singleKeyResult = normalizeCpaConfigWithWarnings({
+      "api-keys": "single-secret-key",
+    });
+    assert.deepEqual(singleKeyResult.config["api-keys"], ["single-secret-key"]);
   });
 
   it("warns when TLS fields have unsafe shapes", () => {
@@ -51,84 +78,12 @@ describe("normalizeCpaConfigWithWarnings", () => {
     assert.equal(sectionWarning.length, 1);
     assert.match(sectionWarning[0] ?? "", /invalid tls true.*expected an object/);
 
-    const fieldWarnings = normalizeCpaConfigWithWarnings({
+    const { config: invalidFieldCfg, warnings: fieldWarnings } = normalizeCpaConfigWithWarnings({
       tls: { enable: "true", cert: 123, key: null },
-    }).warnings;
+    });
     assert.equal(fieldWarnings.length, 2);
     assert.match(fieldWarnings.join("\n"), /invalid tls\.enable "true".*true or false/);
     assert.match(fieldWarnings.join("\n"), /invalid tls\.cert 123.*expected a string/);
-  });
-});
-
-describe("normalizeCpaConfig", () => {
-  it("applies defaults for empty/invalid docs", () => {
-    assert.deepEqual(getListenAddress(normalizeCpaConfig(null)), {
-      host: "127.0.0.1",
-      port: 8317,
-    });
-    assert.deepEqual(getListenAddress(normalizeCpaConfig("nope")), {
-      host: "127.0.0.1",
-      port: 8317,
-    });
-  });
-
-  it("coerces host/port/api-keys", () => {
-    const cfg = normalizeCpaConfig({
-      host: " 0.0.0.0 ",
-      port: "9000",
-      "api-keys": "single-key",
-    });
-    assert.equal(cfg.host, "0.0.0.0");
-    assert.equal(cfg.port, 9000);
-    assert.deepEqual(cfg["api-keys"], ["single-key"]);
-  });
-
-  it("drops non-string api-keys entries", () => {
-    const cfg = normalizeCpaConfig({
-      "api-keys": [LEGACY_DEFAULT_API_KEY, 123, null, "ok"],
-    });
-    assert.deepEqual(cfg["api-keys"], [LEGACY_DEFAULT_API_KEY, "ok"]);
-  });
-
-  it("rejects out-of-range ports", () => {
-    assert.equal(normalizeCpaConfig({ port: 0 }).port, 8317);
-    assert.equal(normalizeCpaConfig({ port: 99999 }).port, 8317);
-  });
-
-  it("parses tls configuration and handles non-object tls safely", () => {
-    const enabledCfg = normalizeCpaConfig({
-      tls: {
-        enable: true,
-        cert: "certs/server.crt",
-        key: "certs/server.key",
-      },
-    });
-    assert.deepEqual(enabledCfg.tls, {
-      enable: true,
-      cert: "certs/server.crt",
-      key: "certs/server.key",
-    });
-    assert.equal(isTlsEnabled(enabledCfg), true);
-
-    const disabledCfg = normalizeCpaConfig({
-      tls: {
-        enable: false,
-      },
-    });
-    assert.equal(disabledCfg.tls?.enable, false);
-    assert.equal(isTlsEnabled(disabledCfg), false);
-
-    const nonObjectCfg = normalizeCpaConfig({ tls: "invalid" });
-    assert.equal(nonObjectCfg.tls, undefined);
-    assert.equal(isTlsEnabled(nonObjectCfg), false);
-
-    const invalidFieldCfg = normalizeCpaConfig({
-      tls: {
-        enable: "true",
-        cert: 123,
-        key: null,
-      },
-    });
     assert.deepEqual(invalidFieldCfg.tls, {});
     assert.equal(isTlsEnabled(invalidFieldCfg), false);
   });

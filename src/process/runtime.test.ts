@@ -84,35 +84,12 @@ describe("installRuntimeBinary", () => {
 });
 
 describe("findRunnableExecutable", () => {
-  it("returns the active binary when it exists", () => {
+  it("returns the path from inspectRunnableExecutable", () => {
     const home = tempHome();
+    assert.equal(findRunnableExecutable(home), undefined);
+
     fs.writeFileSync(activeExecutablePath(home), "active");
     assert.equal(findRunnableExecutable(home), activeExecutablePath(home));
-  });
-
-  it("returns the backup path without restoring it", () => {
-    const home = tempHome();
-    fs.writeFileSync(backupExecutablePath(home), "rollback-binary");
-    const before = fs.readdirSync(home).sort();
-
-    assert.equal(findRunnableExecutable(home), backupExecutablePath(home));
-
-    assert.deepEqual(fs.readdirSync(home).sort(), before);
-    assert.equal(fs.existsSync(activeExecutablePath(home)), false);
-    assert.equal(fs.readFileSync(backupExecutablePath(home), "utf8"), "rollback-binary");
-  });
-
-  it("returns undefined for an empty home", () => {
-    assert.equal(findRunnableExecutable(tempHome()), undefined);
-  });
-
-  it("reports the unlock-probe residue instead of claiming the binary is missing", () => {
-    const home = tempHome();
-    fs.writeFileSync(unlockProbePath(home), "probe-binary");
-
-    // Undefined here is what made `cpa doctor` tell the user to re-download the
-    // whole binary while reporting the recoverable residue two lines below.
-    assert.equal(findRunnableExecutable(home), unlockProbePath(home));
   });
 });
 

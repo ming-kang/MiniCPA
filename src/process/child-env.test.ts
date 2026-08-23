@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { STRIPPED_ENV_KEYS, buildCpaChildEnv } from "./child-env.js";
+import { STRIPPED_ENV_KEYS, buildCredentialSafeChildEnv } from "./child-env.js";
 
 /** `GITHUB_TOKEN` -> `GiThUb_ToKeN`, so a case-folding regression is caught. */
 function mixedCase(key: string): string {
@@ -44,7 +44,7 @@ describe("STRIPPED_ENV_KEYS", () => {
   });
 });
 
-describe("buildCpaChildEnv", () => {
+describe("buildCredentialSafeChildEnv", () => {
   it("strips every key in STRIPPED_ENV_KEYS in every case while keeping unrelated values", () => {
     const sourceEnv: NodeJS.ProcessEnv = {
       PATH: "/usr/bin",
@@ -59,7 +59,7 @@ describe("buildCpaChildEnv", () => {
       }
     }
 
-    const child = buildCpaChildEnv(sourceEnv);
+    const child = buildCredentialSafeChildEnv(sourceEnv);
 
     assert.ok(STRIPPED_ENV_KEYS.length > 0);
     for (const key of STRIPPED_ENV_KEYS) {
@@ -79,7 +79,7 @@ describe("buildCpaChildEnv", () => {
 
   it("does not mutate the source environment", () => {
     const sourceEnv: NodeJS.ProcessEnv = { GITHUB_TOKEN: "secret-gh", PATH: "/usr/bin" };
-    buildCpaChildEnv(sourceEnv);
+    buildCredentialSafeChildEnv(sourceEnv);
     assert.equal(sourceEnv.GITHUB_TOKEN, "secret-gh");
   });
 });

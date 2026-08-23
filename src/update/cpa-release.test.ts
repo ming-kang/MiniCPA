@@ -52,9 +52,6 @@ describe("cpaReleaseAssetNames / candidates", () => {
       "CLIProxyAPI_7.0.0_windows_aarch64.zip",
       "CLIProxyAPI_7.0.0_windows_arm64.zip",
     ]);
-    for (const name of c) {
-      assert.doesNotMatch(name, /amd64|x86_64|x64/i);
-    }
   });
 
   it("orders arm darwin candidates aarch64 first without cross-architecture names", () => {
@@ -63,9 +60,6 @@ describe("cpaReleaseAssetNames / candidates", () => {
       "CLIProxyAPI_7.0.0_darwin_aarch64.tar.gz",
       "CLIProxyAPI_7.0.0_darwin_arm64.tar.gz",
     ]);
-    for (const name of c) {
-      assert.doesNotMatch(name, /amd64|x86_64|x64/i);
-    }
   });
 
   it("orders arm linux candidates aarch64 first without cross-architecture names", () => {
@@ -74,23 +68,14 @@ describe("cpaReleaseAssetNames / candidates", () => {
       "CLIProxyAPI_7.0.0_linux_aarch64.tar.gz",
       "CLIProxyAPI_7.0.0_linux_arm64.tar.gz",
     ]);
-    for (const name of c) {
-      assert.doesNotMatch(name, /amd64|x86_64|x64/i);
-    }
   });
 
   it("returns expected x64 candidates without arm names", () => {
     const winX64 = cpaAssetNameCandidates("7.0.0", "win32", "x64");
     assert.deepEqual(winX64, ["CLIProxyAPI_7.0.0_windows_amd64.zip"]);
-    for (const name of winX64) {
-      assert.doesNotMatch(name, /arm64|aarch64/i);
-    }
 
     const darwinX64 = cpaAssetNameCandidates("7.0.0", "darwin", "x64");
     assert.deepEqual(darwinX64, ["CLIProxyAPI_7.0.0_darwin_amd64.tar.gz"]);
-    for (const name of darwinX64) {
-      assert.doesNotMatch(name, /arm64|aarch64/i);
-    }
 
     const linuxX64 = cpaAssetNameCandidates("7.0.0", "linux", "x64");
     assert.deepEqual(linuxX64, [
@@ -98,9 +83,6 @@ describe("cpaReleaseAssetNames / candidates", () => {
       "CLIProxyAPI_7.0.0_linux_amd64_no-plugin.tar.gz",
       "CLIProxyAPI_7.0.0_linux_amd64_portable.tar.gz",
     ]);
-    for (const name of linuxX64) {
-      assert.doesNotMatch(name, /arm64|aarch64/i);
-    }
   });
 });
 
@@ -220,27 +202,21 @@ describe("listReleaseAssetCandidates", () => {
     );
 
     const winArm = listReleaseAssetCandidates(synthetic, "win32", "arm64");
-    assert.equal(winArm.length, 2);
-    assert.equal(winArm[0]!.assetName, "CLIProxyAPI_7.0.0_windows_aarch64.zip");
-    assert.equal(winArm[1]!.assetName, "CLIProxyAPI_7.0.0_windows_arm64.zip");
-    for (const item of winArm) {
-      assert.doesNotMatch(item.assetName, /amd64|x86_64|x64/i);
-    }
+    assert.deepEqual(
+      winArm.map((a) => a.assetName),
+      ["CLIProxyAPI_7.0.0_windows_aarch64.zip", "CLIProxyAPI_7.0.0_windows_arm64.zip"],
+    );
 
     const darwinArm = listReleaseAssetCandidates(synthetic, "darwin", "arm64");
-    assert.equal(darwinArm.length, 2);
-    assert.equal(darwinArm[0]!.assetName, "CLIProxyAPI_7.0.0_darwin_aarch64.tar.gz");
-    assert.equal(darwinArm[1]!.assetName, "CLIProxyAPI_7.0.0_darwin_arm64.tar.gz");
-    for (const item of darwinArm) {
-      assert.doesNotMatch(item.assetName, /amd64|x86_64|x64/i);
-    }
+    assert.deepEqual(
+      darwinArm.map((a) => a.assetName),
+      ["CLIProxyAPI_7.0.0_darwin_aarch64.tar.gz", "CLIProxyAPI_7.0.0_darwin_arm64.tar.gz"],
+    );
 
     const linuxArm = listReleaseAssetCandidates(synthetic, "linux", "arm64");
-    assert.equal(linuxArm.length, 2);
-    assert.equal(linuxArm[0]!.assetName, "CLIProxyAPI_7.0.0_linux_aarch64.tar.gz");
-    assert.equal(linuxArm[1]!.assetName, "CLIProxyAPI_7.0.0_linux_arm64.tar.gz");
-    for (const item of linuxArm) {
-      assert.doesNotMatch(item.assetName, /amd64|x86_64|x64/i);
-    }
+    assert.deepEqual(
+      linuxArm.map((a) => a.assetName),
+      ["CLIProxyAPI_7.0.0_linux_aarch64.tar.gz", "CLIProxyAPI_7.0.0_linux_arm64.tar.gz"],
+    );
   });
 });

@@ -143,11 +143,6 @@ export function normalizeCpaConfigWithWarnings(doc: unknown): {
   return { config, warnings };
 }
 
-/** Normalize without warnings (callers that cannot surface them). */
-export function normalizeCpaConfig(doc: unknown): CpaConfig {
-  return normalizeCpaConfigWithWarnings(doc).config;
-}
-
 export function readCpaConfigWithWarnings(configPath: string): {
   config: CpaConfig;
   warnings: string[];

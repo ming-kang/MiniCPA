@@ -15,13 +15,11 @@ export type UpgradeCheckDeps = {
   compareMinicpaVersions: typeof compareMinicpaVersions;
 };
 
-type UpgradeLock = <T>(command: string, fn: () => Promise<T>) => Promise<T>;
-
 export type UpgradeDeps = UpgradeCheckDeps & {
   detectNpmGlobalInstall: typeof detectNpmGlobalInstall;
   installMinicpaVersion: typeof installMinicpaVersion;
   updateMinicpaVersion: typeof updateMinicpaVersion;
-  withMiniCpaLock: UpgradeLock;
+  withMiniCpaLock: typeof withMiniCpaLock;
 };
 
 const realUpgradeCheckDeps: UpgradeCheckDeps = {

@@ -14,9 +14,11 @@ import {
 import type { RunningInfo } from "../process/lifecycle.js";
 import { writePidRecord } from "../state.js";
 import { withHttpFixture, withHttpsFixture } from "../test-fixtures/http-server.js";
+import { captureConsole } from "../test-fixtures/test-env.js";
 import {
   parseLogLineCount,
   readLogChunk,
+  runLogs,
   runOpen,
   runStatus,
   runTui,
@@ -446,5 +448,33 @@ describe("tailFollowMany", () => {
 
     assert.equal(process.exitCode, 130);
     assert.equal(process.listenerCount("SIGINT"), listenersBefore);
+  });
+});
+
+describe("runLogs", () => {
+  it("throws when no log files exist", async () => {
+    useTempRoot();
+    await assert.rejects(() => runLogs({}), /No log files yet/);
+    await assert.rejects(() => runLogs({ errOnly: true }), /Log not found/);
+    await assert.rejects(() => runLogs({ follow: true }), /No log files yet/);
+  });
+
+  it("prints log tails when files exist", async () => {
+    useTempRoot();
+    const home = resolveCpaHome();
+    const layout = cpaLayout(home);
+    ensureDir(layout.logsDir);
+    fs.writeFileSync(layout.logFile, "line 1\nline 2\nline 3\n");
+    fs.writeFileSync(layout.errLogFile, "err 1\n");
+
+    const { stdout: stdoutAll } = await captureConsole(() => runLogs({ lines: 2 }));
+    assert.ok(stdoutAll.some((l) => l.includes("===") && l.includes("cpa.log")));
+    assert.ok(stdoutAll.some((l) => l.includes("line 2")));
+    assert.ok(stdoutAll.some((l) => l.includes("===") && l.includes("cpa.err.log")));
+    assert.ok(stdoutAll.some((l) => l.includes("err 1")));
+
+    const { stdout: stdoutErr } = await captureConsole(() => runLogs({ errOnly: true, lines: 1 }));
+    assert.equal(stdoutErr.length, 1);
+    assert.equal(stdoutErr[0], "err 1");
   });
 });

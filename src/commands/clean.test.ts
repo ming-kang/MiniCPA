@@ -105,7 +105,7 @@ describe("runClean", () => {
     const fresh = path.join(miniTemp, "downloads", "fresh.zip");
     fs.writeFileSync(fresh, "payload");
 
-    await runClean({ minAgeMs: 60 * 60 * 1000 });
+    await runClean();
 
     assert.equal(fs.existsSync(fresh), true);
   });
