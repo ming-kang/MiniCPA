@@ -4,6 +4,18 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-23
+
+### Changed
+
+- **Breaking:** The one managed home is now always `<cpa root>/instance`; the redundant `instances/default` hierarchy and persisted home selection have been removed.
+- `cpa init` now creates the configuration and data directories, then installs the latest integrity-checked CLIProxyAPI binary and Web panel. A successful first-time setup no longer needs an immediate `cpa update`.
+- `cpa init --force` remains scoped to backing up and replacing `config.yaml`; component reinstallation remains under `cpa update --force`.
+
+### Removed
+
+- Removed automatic discovery and migration of prior instance homes. Version 0.2.0 neither reads nor deletes `instances/default` or the obsolete `config.json` home pointer. Stop a process managed by an older MiniCPA before upgrading.
+
 ## [0.1.4] - 2026-08-23
 
 ### Added

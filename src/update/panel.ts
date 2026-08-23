@@ -41,8 +41,8 @@ export type PanelUpdateResult = {
 
 /**
  * How the panel update was requested. `"auto"` is the implicit panel leg of a
- * plain `cpa update`; `"explicit"` is a user-typed `cpa update --panel`. The
- * `disable-auto-update-panel` opt-out only vetoes the `"auto"` leg.
+ * plain `cpa update`; `"explicit"` is an install requested by `cpa init` or
+ * `cpa update --panel`. The opt-out only vetoes the `"auto"` leg.
  */
 export type PanelUpdateTrigger = "auto" | "explicit";
 
@@ -197,8 +197,8 @@ export async function checkPanelUpdate(
  * Replace management.html. Skips when already latest unless force.
  *
  * The `disable-auto-update-panel` opt-out only vetoes the implicit (`"auto"`)
- * leg of a plain `cpa update`: a user-typed `cpa update --panel` (`"explicit"`)
- * is a direct request and still runs, as does any `--force` run. The opt-out
+ * leg of a plain `cpa update`: `cpa init` and `cpa update --panel` (`"explicit"`)
+ * are direct requests and still run, as does any `--force` run. The opt-out
  * skip happens before any network call.
  */
 export async function updatePanel(

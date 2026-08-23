@@ -3,9 +3,10 @@ import { defaultConfigYaml, generateApiKey } from "../config-yaml.js";
 import { createContext } from "../context.js";
 import { writeFileAtomic } from "../fs-atomic.js";
 import { withMiniCpaLock } from "../process/lock.js";
-import { ensureDir, hardenCpaPermissions, miniCpaRoot, writeCliGlobalConfig } from "../paths.js";
+import { ensureDir, hardenCpaPermissions, miniCpaRoot } from "../paths.js";
+import { performUpdate, type UpdateDeps } from "./update-cmd.js";
 
-export async function runInit(opts: { force?: boolean }): Promise<void> {
+export async function runInit(opts: { force?: boolean }, updateDeps?: UpdateDeps): Promise<void> {
   const ctx = createContext();
   const { layout, home } = ctx;
 
@@ -39,13 +40,23 @@ export async function runInit(opts: { force?: boolean }): Promise<void> {
       );
     }
 
-    // Preserve future keys in global config by merging.
-    writeCliGlobalConfig({ home });
     hardenCpaPermissions(home);
     console.log(`MiniCPA root  ${miniCpaRoot()}`);
     console.log(`Home          ${home}`);
+    console.log("Components    Ensuring latest CLIProxyAPI and Web panel");
+
+    const updateResult = await performUpdate(
+      home,
+      { panelTrigger: "explicit" },
+      updateDeps,
+    ).finally(() => {
+      // Also tighten files written by the install path, including partial installs.
+      hardenCpaPermissions(home);
+    });
+
+    if (updateResult.partialFailure) return;
+
     console.log("Next:");
-    console.log("  cpa update");
     console.log("  cpa start");
     console.log("  cpa web");
   });

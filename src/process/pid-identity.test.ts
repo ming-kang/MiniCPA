@@ -59,10 +59,11 @@ describe("exePathsMatch", () => {
 });
 
 describe("classifyDarwinComm", () => {
-  // The default macOS install path; BSD ps truncates its last column to the
-  // terminal width, and falls back to 79 columns when stdout is a pipe.
+  // A canonical macOS install path with a deliberately long home directory;
+  // BSD ps truncates its last column to the terminal width, and falls back to
+  // 79 columns when stdout is a pipe.
   const expected =
-    "/Users/asterin/Library/Application Support/MiniCPA/instances/default/cli-proxy-api";
+    "/Users/asterin-with-a-long-home-directory/Library/Application Support/MiniCPA/instance/cli-proxy-api";
 
   it("uses a path longer than the 79-column ps fallback width", () => {
     assert.ok(expected.length > 79);

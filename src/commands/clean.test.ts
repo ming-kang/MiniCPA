@@ -43,7 +43,7 @@ describe("runClean", () => {
     const old = new Date(Date.now() - 1_000);
     fs.utimesSync(path.join(miniTemp, "downloads"), old, old);
 
-    const sibling = path.join(base, "instances-default-config.yaml");
+    const sibling = path.join(base, "instance-config.yaml");
     fs.writeFileSync(sibling, "keep-me");
 
     await runClean({ minAgeMs: 0 });

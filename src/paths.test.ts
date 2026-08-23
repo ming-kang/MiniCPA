@@ -4,20 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import {
-  cliConfigPath,
+  cpaHome,
   cpaLayout,
-  defaultCpaHome,
   ensureDir,
   executableName,
   hardenCpaPermissions,
-  legacyCpaHome,
   MINICPA_DIR_NAME,
   miniCpaRoot,
   miniCpaTempDownloadDir,
   miniCpaTempDownloadsDir,
   miniCpaTempRoot,
   resolveCpaHome,
-  writeCliGlobalConfig,
 } from "./paths.js";
 
 const prevCpaHome = process.env.CPA_HOME;
@@ -72,62 +69,43 @@ describe("miniCpaRoot", () => {
 });
 
 describe("resolveCpaHome", () => {
-  it("uses the one persisted home for upgrade compatibility", () => {
-    const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-paths-"));
-    temps.push(base);
-    setAppDataRoot(base);
-    const selected = path.join(base, "existing-cpa");
-    writeCliGlobalConfig({ home: selected });
-    assert.equal(resolveCpaHome(), path.resolve(selected));
-  });
-
   it("rejects CPA_HOME switching", () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-paths-"));
     temps.push(base);
     setAppDataRoot(base);
     process.env.CPA_HOME = path.join(base, "another-instance");
-    assert.throws(() => resolveCpaHome(), /one instance only/);
+    assert.throws(() => resolveCpaHome(), /one canonical instance only/);
   });
 
-  it("falls back to the canonical single home", () => {
+  it("uses the canonical single home", () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-paths-"));
     temps.push(base);
     setAppDataRoot(base);
-    assert.equal(resolveCpaHome(), defaultCpaHome());
+    assert.equal(resolveCpaHome(), cpaHome());
   });
 
-  it("falls back to the default home when config.json has a non-string home", () => {
-    const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-paths-"));
-    temps.push(base);
-    setAppDataRoot(base);
-    ensureDir(miniCpaRoot());
-    fs.writeFileSync(cliConfigPath(), `${JSON.stringify({ home: 123 })}\n`);
-    assert.equal(resolveCpaHome(), defaultCpaHome());
-  });
-
-  it("ignores a config.json that is not an object", () => {
+  it("ignores an obsolete persisted home pointer", () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-paths-"));
     temps.push(base);
     setAppDataRoot(base);
     ensureDir(miniCpaRoot());
-    fs.writeFileSync(cliConfigPath(), `${JSON.stringify(["not", "an", "object"])}\n`);
-    assert.equal(resolveCpaHome(), defaultCpaHome());
+    fs.writeFileSync(
+      path.join(miniCpaRoot(), "config.json"),
+      `${JSON.stringify({ home: path.join(base, "existing-cpa") })}\n`,
+    );
+    assert.equal(resolveCpaHome(), cpaHome());
   });
 
-  it("migrates from the legacy home only until the default one exists", () => {
+  it("does not discover or migrate the removed instances/default layout", () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-paths-"));
     temps.push(base);
     setAppDataRoot(base);
+    const removedHome = path.join(miniCpaRoot(), "instances", "default");
+    ensureDir(removedHome);
+    fs.writeFileSync(path.join(removedHome, "config.yaml"), "port: 8317\n");
 
-    const legacy = legacyCpaHome();
-    ensureDir(legacy);
-    fs.writeFileSync(path.join(legacy, "config.yaml"), "port: 8317\n");
-    assert.equal(resolveCpaHome(), legacy);
-
-    const current = defaultCpaHome();
-    ensureDir(current);
-    fs.writeFileSync(path.join(current, "config.yaml"), "port: 8317\n");
-    assert.equal(resolveCpaHome(), current);
+    assert.equal(resolveCpaHome(), cpaHome());
+    assert.notEqual(resolveCpaHome(), removedHome);
   });
 });
 
@@ -150,12 +128,12 @@ describe("executableName", () => {
   });
 });
 
-describe("defaultCpaHome", () => {
+describe("cpaHome", () => {
   it("is the canonical MiniCPA home", () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-paths-"));
     temps.push(base);
     setAppDataRoot(base);
-    assert.ok(defaultCpaHome().endsWith(path.join("instances", "default")));
+    assert.equal(cpaHome(), path.join(miniCpaRoot(), "instance"));
   });
 });
 

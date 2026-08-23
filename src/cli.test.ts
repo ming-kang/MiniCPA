@@ -64,10 +64,8 @@ describe("cli smoke", () => {
       noArgs.stdout,
       /MiniCPA — manage, run, and update one local CLIProxyAPI instance\./,
     );
-    assert.match(
-      noArgs.stdout,
-      /Quick start:[\s\S]*cpa init[\s\S]*cpa update[\s\S]*cpa start[\s\S]*cpa web/,
-    );
+    assert.match(noArgs.stdout, /Quick start:[\s\S]*cpa init[\s\S]*cpa start[\s\S]*cpa web/);
+    assert.doesNotMatch(noArgs.stdout, /Quick start:[\s\S]*cpa update/);
     assert.match(noArgs.stdout, /-v, -V, --version\s+Show the MiniCPA version/);
   });
 
@@ -100,7 +98,7 @@ describe("cli smoke", () => {
     }
     assert.match(
       stdout,
-      /^ {2}init \[options\]\s+Set up the CLIProxyAPI configuration and data directories$/m,
+      /^ {2}init \[options\]\s+Initialize configuration and install the latest components$/m,
     );
     assert.match(stdout, /^ {2}web\s+Open the web management panel$/m);
     assert.match(stdout, /^ {2}tui\s+Open the CLIProxyAPI terminal UI$/m);
@@ -221,7 +219,7 @@ describe("cli smoke", () => {
     const { status, stdout, root } = runCli(["home"]);
     assert.equal(status, 0);
     assert.ok(stdout.trim().startsWith(root), `${stdout.trim()} should live under ${root}`);
-    assert.match(stdout.trim(), /instances[\\/]default$/);
+    assert.match(stdout.trim(), /[\\/]instance$/);
   });
 
   it("prints the MiniCPA root for `root`", () => {

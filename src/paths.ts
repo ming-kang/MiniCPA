@@ -1,18 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { writeFileAtomic } from "./fs-atomic.js";
 
 /** Single branded namespace — avoids generic "CPA" colliding with other installs. */
 export const MINICPA_DIR_NAME = "MiniCPA";
 
-export type CliGlobalConfig = {
-  /** Legacy pointer to the one managed instance home (read for migration only). */
-  home?: string;
-};
-
 /**
- * MiniCPA application root (CLI config, default instance).
+ * MiniCPA application root (single instance, lock, and staging files).
  * Windows: %LOCALAPPDATA%\MiniCPA
  */
 function envPathOr(fallback: string, value: string | undefined): string {
@@ -34,13 +28,8 @@ export function miniCpaRoot(): string {
   return path.join(xdgData, MINICPA_DIR_NAME);
 }
 
-/** The one managed CPA instance directory. */
-export function defaultCpaHome(): string {
-  return path.join(miniCpaRoot(), "instances", "default");
-}
-
-/** @deprecated v0.1 layout; used only if it exists and default does not. */
-export function legacyCpaHome(): string {
+/** The one canonical CPA instance directory. */
+export function cpaHome(): string {
   return path.join(miniCpaRoot(), "instance");
 }
 
@@ -67,51 +56,13 @@ export function miniCpaTempExtractDir(prefix = "extract-"): string {
   return fs.mkdtempSync(path.join(miniCpaTempRoot(), prefix));
 }
 
-export function cliConfigPath(): string {
-  return path.join(miniCpaRoot(), "config.json");
-}
-
-export function readCliGlobalConfig(): CliGlobalConfig {
-  const file = cliConfigPath();
-  if (!fs.existsSync(file)) return {};
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {
-    return {};
-  }
-  // A structurally corrupt config.json must not crash every command, so keep
-  // only the fields that match the declared shape.
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
-  const home = (parsed as Record<string, unknown>).home;
-  return typeof home === "string" ? { home } : {};
-}
-
-export function writeCliGlobalConfig(config: CliGlobalConfig): void {
-  const dir = miniCpaRoot();
-  ensureDir(dir);
-  const merged: CliGlobalConfig = { ...readCliGlobalConfig(), ...config };
-  writeFileAtomic(cliConfigPath(), `${JSON.stringify(merged, null, 2)}\n`);
-}
-
 export function resolveCpaHome(): string {
   if (process.env.CPA_HOME?.trim()) {
     throw new Error(
-      "CPA_HOME is no longer supported: MiniCPA manages one instance only. Unset it and migrate the existing home before continuing.",
+      "CPA_HOME is not supported: MiniCPA manages one canonical instance only. Unset it before continuing.",
     );
   }
-  // Honor the previous persisted selection so upgrades retain the one existing install.
-  const global = readCliGlobalConfig().home;
-  if (global?.trim()) return path.resolve(global.trim());
-  const current = defaultCpaHome();
-  const legacy = legacyCpaHome();
-  if (
-    fs.existsSync(path.join(legacy, "config.yaml")) &&
-    !fs.existsSync(path.join(current, "config.yaml"))
-  ) {
-    return legacy;
-  }
-  return current;
+  return cpaHome();
 }
 
 export type CpaLayout = {

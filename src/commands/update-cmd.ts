@@ -2,7 +2,12 @@ import { formatCliError } from "../cli-errors.js";
 import { createContext, printHome } from "../context.js";
 import { withMiniCpaLock } from "../process/lock.js";
 import { checkBinaryUpdate, updateBinary } from "../update/binary.js";
-import { checkPanelUpdate, updatePanel, type PanelSkipReason } from "../update/panel.js";
+import {
+  checkPanelUpdate,
+  updatePanel,
+  type PanelSkipReason,
+  type PanelUpdateTrigger,
+} from "../update/panel.js";
 import { consoleUpdateReporter } from "../update/reporter.js";
 
 export function assertUpdateScopeFlags(opts: {
@@ -168,67 +173,94 @@ export type UpdateDeps = {
   updatePanel: typeof updatePanel;
 };
 
+export type UpdateOptions = {
+  /** Update panel only. */
+  panelOnly?: boolean;
+  /** Binary only (skip panel). Default is binary + panel. */
+  binaryOnly?: boolean;
+  version?: string;
+  /** Re-download even if already latest. */
+  force?: boolean;
+  /** Skip binary checksum verification (unsafe). */
+  insecure?: boolean;
+  /** Internal caller policy; a plain update leaves this implicit (auto). */
+  panelTrigger?: PanelUpdateTrigger;
+};
+
+export type UpdateExecutionResult = {
+  /** The binary leg succeeded but the optional Web panel leg failed. */
+  partialFailure: boolean;
+};
+
 const realUpdateDeps: UpdateDeps = { updateBinary, updatePanel };
 
+/**
+ * Execute component updates for a caller that already owns the MiniCPA lock.
+ * This keeps init and update on exactly the same install, reporting, and partial-failure path.
+ */
+export async function performUpdate(
+  home: string,
+  opts: UpdateOptions,
+  deps: UpdateDeps = realUpdateDeps,
+): Promise<UpdateExecutionResult> {
+  const reporter = consoleUpdateReporter();
+
+  if (opts.panelOnly) {
+    try {
+      printPanelResult(
+        await deps.updatePanel(home, { force: opts.force, trigger: "explicit", reporter }),
+      );
+    } catch (err) {
+      // Name the leg that failed: a raw "GitHub API 403 …" as the final line
+      // reads as if the whole command (and the binary) had failed.
+      throw new Error(`Web panel update failed: ${formatCliError(err)}`, { cause: err });
+    }
+    return { partialFailure: false };
+  }
+
+  // Default: replace CLIProxyAPI + Web panel. A running CLIProxyAPI is restarted automatically.
+  const binary = await deps.updateBinary(home, {
+    version: opts.version,
+    force: opts.force,
+    insecure: opts.insecure,
+    reporter,
+  });
+  if (binary.skipped) {
+    console.log(`CLIProxyAPI is already up to date (${binary.version})`);
+  } else {
+    console.log(updateResultLine("CLIProxyAPI", binary, opts.version !== undefined));
+  }
+
+  if (opts.binaryOnly) return { partialFailure: false };
+
+  // The binary leg has already succeeded and printed its outcome, so a panel
+  // failure must not become the command's only visible result. Report it as a
+  // warning, keep exit 1 (the update is only partially done), and point at the
+  // narrow retry that does not touch the binary again.
+  try {
+    printPanelResult(
+      await deps.updatePanel(home, {
+        force: opts.force,
+        trigger: opts.panelTrigger,
+        reporter,
+      }),
+    );
+    return { partialFailure: false };
+  } catch (err) {
+    console.error(`Warning: Web panel update failed: ${formatCliError(err)}`);
+    console.error(
+      "CLIProxyAPI completed successfully. Retry only the Web panel: cpa update --panel",
+    );
+    process.exitCode = 1;
+    return { partialFailure: true };
+  }
+}
+
 export async function runUpdate(
-  opts: {
-    /** Update panel only */
-    panelOnly?: boolean;
-    /** Binary only (skip panel). Default is binary + panel. */
-    binaryOnly?: boolean;
-    version?: string;
-    /** Re-download even if already latest. */
-    force?: boolean;
-    /** Skip binary checksum verification (unsafe). */
-    insecure?: boolean;
-  },
+  opts: UpdateOptions,
   deps: UpdateDeps = realUpdateDeps,
 ): Promise<void> {
   const ctx = createContext();
   printHome(ctx);
-
-  const reporter = consoleUpdateReporter();
-  await withMiniCpaLock("update", async () => {
-    if (opts.panelOnly) {
-      try {
-        printPanelResult(
-          await deps.updatePanel(ctx.home, { force: opts.force, trigger: "explicit", reporter }),
-        );
-      } catch (err) {
-        // Name the leg that failed: a raw "GitHub API 403 …" as the final line
-        // reads as if the whole command (and the binary) had failed.
-        throw new Error(`Web panel update failed: ${formatCliError(err)}`, { cause: err });
-      }
-      return;
-    }
-
-    // Default: replace CLIProxyAPI + Web panel. A running CLIProxyAPI is restarted automatically.
-    const binary = await deps.updateBinary(ctx.home, {
-      version: opts.version,
-      force: opts.force,
-      insecure: opts.insecure,
-      reporter,
-    });
-    if (binary.skipped) {
-      console.log(`CLIProxyAPI is already up to date (${binary.version})`);
-    } else {
-      console.log(updateResultLine("CLIProxyAPI", binary, opts.version !== undefined));
-    }
-
-    if (opts.binaryOnly) return;
-
-    // The binary leg has already succeeded and printed its outcome, so a panel
-    // failure must not become the command's only visible result. Report it as a
-    // warning, keep exit 1 (the update is only partially done), and point at the
-    // narrow retry that does not touch the binary again.
-    try {
-      printPanelResult(await deps.updatePanel(ctx.home, { force: opts.force, reporter }));
-    } catch (err) {
-      console.error(`Warning: Web panel update failed: ${formatCliError(err)}`);
-      console.error(
-        "CLIProxyAPI completed successfully. Retry only the Web panel: cpa update --panel",
-      );
-      process.exitCode = 1;
-    }
-  });
+  await withMiniCpaLock("update", () => performUpdate(ctx.home, opts, deps));
 }

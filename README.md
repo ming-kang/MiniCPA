@@ -23,15 +23,14 @@ Running `cpa`, `cpa -h`, or `cpa --help` prints the same help. `cpa -v`, `cpa -V
 ## Quick start
 
 ```bash
-cpa init    # create config.yaml and the instance data directories
-cpa update  # install CLIProxyAPI and the web management panel
-cpa start   # start CLIProxyAPI in the background
-cpa web     # open the web management panel
+cpa init   # create config.yaml and install the latest CLIProxyAPI + Web panel
+cpa start  # start CLIProxyAPI in the background
+cpa web    # open the web management panel
 ```
 
-`cpa init` generates a random `api-keys` entry in `config.yaml` without printing it. Rotate the key before exposing the API publicly. `cpa init --force` backs up an existing config as `config.yaml.bak.<timestamp>` before replacing it.
+`cpa init` generates a random `api-keys` entry in `config.yaml` without printing it, then downloads and integrity-checks the latest CLIProxyAPI binary and Web panel. Rotate the key before exposing the API publicly. If a component download fails, the initialized configuration remains in place and `cpa init` can be retried. `cpa init --force` backs up and replaces only `config.yaml`; use `cpa update --force` to reinstall components.
 
-MiniCPA uses the one directory printed by `cpa home`. `--home` and `CPA_HOME` are intentionally unsupported. An existing home persisted by an older MiniCPA release remains the managed instance.
+MiniCPA always uses the one directory printed by `cpa home`: `<cpa root>/instance`. `--home` and `CPA_HOME` are intentionally unsupported.
 
 ## Update CLIProxyAPI or MiniCPA
 
@@ -54,7 +53,7 @@ cpa update --version 7.2.66
 
 Binary archives are verified against upstream `checksums.txt`; the web panel requires its published GitHub SHA-256 asset digest. `--insecure` skips only binary checksum verification and is unsafe.
 
-If `remote-management.disable-auto-update-panel: true` is set in `config.yaml`, a plain update leaves the panel alone and `update check` reports it as ignored. An explicit `cpa update --panel` still updates it once.
+If `remote-management.disable-auto-update-panel: true` is set in `config.yaml`, a plain update leaves the panel alone and `update check` reports it as ignored. Explicit installation through `cpa init` or `cpa update --panel` still installs it.
 
 `cpa update check` exits 1 when an update is available or either component check fails. If the binary succeeds but the panel fails, the command preserves and reports the binary result, exits 1, and recommends retrying only `cpa update --panel`.
 
@@ -87,7 +86,7 @@ Upgrading MiniCPA does not stop, restart, or modify the managed CLIProxyAPI proc
 
 | Command | Purpose |
 |---------|---------|
-| `cpa init` | Set up `config.yaml` and the instance data directories |
+| `cpa init` | Set up `config.yaml` and install the latest CLIProxyAPI and Web panel |
 | `cpa start` | Start CLIProxyAPI in the background; waits until HTTP/HTTPS is ready |
 | `cpa stop` | Stop CLIProxyAPI |
 | `cpa restart` | Restart CLIProxyAPI |
@@ -122,7 +121,7 @@ Mutating lifecycle commands, `cpa update`, `cpa clean`, and the installing phase
 | Command | Windows | macOS | Linux |
 |---------|---------|-------|-------|
 | `cpa root` | `%LOCALAPPDATA%\MiniCPA` | `~/Library/Application Support/MiniCPA` | `$XDG_DATA_HOME/MiniCPA` or `~/.local/share/MiniCPA` |
-| `cpa home` | `…\MiniCPA\instances\default` | same under root | same under root |
+| `cpa home` | `…\MiniCPA\instance` | same under root | same under root |
 | `cpa temp` | `<cpa root>\temp` | `<cpa root>/temp` | `<cpa root>/temp` |
 
 CLIProxyAPI runs detached and remains running if MiniCPA is uninstalled. Stop it first and record the data paths:

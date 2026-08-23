@@ -12,7 +12,6 @@ import { describeProxyEnv, hasProxyEnvConfigured } from "../http.js";
 import {
   activeExecutablePath,
   backupExecutablePath,
-  cliConfigPath,
   miniCpaTempRoot,
   unlockProbePath,
 } from "../paths.js";
@@ -186,15 +185,6 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
       } catch {
         /* best-effort diagnostic */
       }
-    }
-  }
-
-  const globalCfg = cliConfigPath();
-  if (fs.existsSync(globalCfg)) {
-    try {
-      JSON.parse(fs.readFileSync(globalCfg, "utf8"));
-    } catch {
-      console.log(`[warn] MiniCPA config.json is corrupt (${globalCfg})`);
     }
   }
 

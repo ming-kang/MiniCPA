@@ -14,7 +14,7 @@ When MiniCPA starts CLIProxyAPI:
 - **Outbound HTTP (CLIProxyAPI update / MiniCPA upgrade / doctor GitHub probe)** honors shell proxy env: `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` (case-insensitive). `ALL_PROXY` is a fallback for both schemes **only** when it is an `http://` or `https://` URL; any other scheme (`socks5://`, …) is not applied and `cpa doctor` labels it `(scheme not applied)` — set `HTTP_PROXY`/`HTTPS_PROXY` instead. Local `cpa start` / `cpa status` readiness probes use a dedicated direct dispatcher, so they are unaffected by proxy env vars, including under `NODE_USE_ENV_PROXY` / `--use-env-proxy`. With `tls.enable: true`, those probes use HTTPS and accept a self-signed certificate only through that isolated local dispatcher; GitHub/npm requests retain normal certificate validation.
 - **Upgrade npm env** also removes the credential keys above while preserving PATH and proxy settings. Install scripts are disabled. A normal `cpa upgrade` runs npm's named global update and verifies it reached the exact version returned by the registry; `--force` reinstalls that exact version.
 
-Default `config.yaml` from `cpa init` uses `auth-dir: auths` (relative to home). Optional `.env` in the same directory is loaded by CLIProxyAPI at startup.
+Default `config.yaml` from `cpa init` uses `auth-dir: auths` (relative to home). Optional `.env` in the same directory is loaded by CLIProxyAPI at startup. After writing these files, `cpa init` installs the latest integrity-checked CLIProxyAPI binary and Web panel; it does not start the process.
 
 OAuth, routing, API keys, and management secrets: edit `config.yaml` / `.env` or use the web management panel after `cpa web`.
 
@@ -27,9 +27,9 @@ OAuth, routing, API keys, and management secrets: edit `config.yaml` / `.env` or
 - `commercial-mode: true` — CLIProxyAPI product flag; adjust if your deployment expects otherwise
 - `tls.enable: false` — when enabled with the corresponding CLIProxyAPI certificate/key settings, MiniCPA uses `https://` for readiness, status, and management URLs
 
-`cpa init --force` overwrites `config.yaml` after copying it to `config.yaml.bak.<timestamp>` (previous backups are kept).
+`cpa init --force` overwrites `config.yaml` after copying it to `config.yaml.bak.<timestamp>` (previous backups are kept). The flag does not force component reinstallation; use `cpa update --force` for that. Initialization is retryable: a binary failure skips the panel and leaves the generated configuration in place, while a panel failure keeps the successfully installed binary and recommends `cpa update --panel`.
 
-MiniCPA manages one instance. `cpa home` prints its location. `--home` and `CPA_HOME` are unsupported; an existing persisted home from an older MiniCPA release is honored during upgrade so the existing install remains the one managed instance.
+MiniCPA manages one instance at `<cpa root>/instance`. `cpa home` prints its location. `--home` and `CPA_HOME` are unsupported.
 
 ## Lifecycle and locking
 
@@ -46,7 +46,7 @@ MiniCPA manages one instance. `cpa home` prints its location. `--home` and `CPA_
 
 ## Update behaviour
 
-- `cpa update` replaces the managed CLIProxyAPI **binary + panel** by default. It never updates the MiniCPA npm package; use `cpa upgrade` for that.
+- The component-install phase of `cpa init` and a plain `cpa update` both install the managed CLIProxyAPI **binary + panel**. `cpa update` is used for subsequent updates; it never updates the MiniCPA npm package, so use `cpa upgrade` for that.
 - Release discovery prefers `github.com/releases/latest` redirects and browser download URLs; REST API is fallback only.
 - Asset names try current upstream labels (`aarch64`, `no-plugin`) then same-architecture legacy aliases (`arm64`, `portable`); 404s try the next candidate. ARM64 never falls back to an AMD64/x86_64 archive.
 - Binary path: **download → checksum → extract** while CLIProxyAPI may still be running, then **stop → replace → restart** only for the install window. Network/checksum failures do **not** stop a running instance.
@@ -56,6 +56,7 @@ MiniCPA manages one instance. `cpa home` prints its location. `--home` and `CPA_
 - Outbound GitHub/API calls retry transient errors (429/5xx/timeouts) a few times with backoff.
 - Binary integrity: downloads release `checksums.txt` and verifies the **archive** SHA-256. Panel updates fetch GitHub release metadata and require the published asset SHA-256 digest; a missing digest fails closed. Asset download URLs from the GitHub API must be on GitHub/CDN hosts (`github.com`, `api.github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`); off-platform URLs are rejected.
 - Already-latest versions are **skipped** unless you pass `--force` (or `--version` for a specific binary tag).
+- `remote-management.disable-auto-update-panel: true` suppresses the implicit panel leg of a plain `cpa update`, but not explicit installation through `cpa init`, `cpa update --panel`, or `cpa update --force`.
 - `cpa update check` exits non-zero if anything is outdated **or** either check (binary / panel) errors. A panel excluded by `remote-management.disable-auto-update-panel: true` is reported as ignored and does not fail this gate.
 - `--binary` and `--panel` are mutually exclusive. The older `--all` spelling remains accepted as a hidden compatibility option; a plain `cpa update` already selects both components.
 
@@ -92,8 +93,8 @@ MiniCPA manages one instance. `cpa home` prints its location. `--home` and `CPA_
 | npm registry error during upgrade | Confirm HTTPS/proxy access to `registry.npmjs.org`, then retry `cpa upgrade check`. MiniCPA never sends GitHub/npm token environment variables to the public registry or npm child. |
 | Large logs / temp residue | Logs rotate on next `cpa start` past 50 MiB; `cpa clean` for old temp downloads |
 | Default api-key warning from doctor | Edit `api-keys` in `config.yaml` before exposing the API |
-| Wrong install directory | `cpa home` / `cpa root`; MiniCPA manages one canonical home (or preserves the one persisted by an older release) |
-| `init` used wrong home | MiniCPA uses one canonical home; inspect it with `cpa home` and migrate any older persisted installation before initializing |
+| Wrong install directory | `cpa home` / `cpa root`; MiniCPA always manages `<cpa root>/instance` |
+| `init` used wrong home | MiniCPA uses only `<cpa root>/instance`; `CPA_HOME` and alternate homes are unsupported |
 
 Useful paths:
 

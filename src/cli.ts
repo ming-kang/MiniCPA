@@ -53,7 +53,7 @@ program.on("option:V", () => {
 
 program
   .command("init")
-  .description("Set up the CLIProxyAPI configuration and data directories")
+  .description("Initialize configuration and install the latest components")
   .option("--force", "Overwrite config.yaml (backs up to config.yaml.bak.<timestamp>)")
   .action(
     withCliErrors(async (opts: { force?: boolean }) => {
@@ -359,7 +359,7 @@ program
   .allowExcessArguments(true)
   .addHelpText(
     "after",
-    "\nQuick start:\n  cpa init\n  cpa update\n  cpa start\n  cpa web\n\nRun cpa <command> --help for command details.\n",
+    "\nQuick start:\n  cpa init\n  cpa start\n  cpa web\n\nRun cpa <command> --help for command details.\n",
   )
   .action(() => {
     const unknownCommand = program.args[0];
