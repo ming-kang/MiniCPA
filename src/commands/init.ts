@@ -26,16 +26,16 @@ export async function runInit(opts: { force?: boolean }): Promise<void> {
       }
       const apiKey = generateApiKey();
       writeFileAtomic(layout.configFile, defaultConfigYaml(apiKey));
-      console.log(`Created  ${layout.configFile}`);
-      console.log("api-key  created in config.yaml (not printed to protect it)");
+      console.log(`Created    ${layout.configFile}`);
+      console.log("API key    Created in config.yaml (not shown)");
     } else {
-      console.log(`Exists   ${layout.configFile}`);
+      console.log(`Exists     ${layout.configFile}`);
     }
 
     if (!fs.existsSync(layout.envFile)) {
       writeFileAtomic(
         layout.envFile,
-        "# Optional overrides for CPA (MANAGEMENT_PASSWORD, storage backends, etc.)\n",
+        "# Optional overrides for CLIProxyAPI (MANAGEMENT_PASSWORD, storage backends, etc.)\n",
       );
     }
 
@@ -43,9 +43,10 @@ export async function runInit(opts: { force?: boolean }): Promise<void> {
     writeCliGlobalConfig({ home });
     hardenCpaPermissions(home);
     console.log(`MiniCPA root  ${miniCpaRoot()}`);
-    console.log(`Instance      ${home}`);
-    console.log(`Next: cpa update`);
-    console.log(`      cpa start`);
-    console.log(`      cpa open`);
+    console.log(`Home          ${home}`);
+    console.log("Next:");
+    console.log("  cpa update");
+    console.log("  cpa start");
+    console.log("  cpa web");
   });
 }

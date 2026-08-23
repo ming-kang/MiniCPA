@@ -11,6 +11,7 @@ import {
   inferNpmGlobalRoot,
   installMinicpaVersion,
   type CaptureCommand,
+  updateMinicpaVersion,
   type SpawnCommand,
   type SupportedNpmGlobalInstall,
 } from "./self-upgrade.js";
@@ -340,6 +341,72 @@ describe("detectNpmGlobalInstall", () => {
   });
 });
 
+describe("updateMinicpaVersion", () => {
+  it("uses fixed safe npm update arguments and a credential-safe inherited environment", async () => {
+    const detection = supportedInstall();
+    await updateMinicpaVersion(detection, "2.3.4", {
+      env: {
+        PATH: "/custom/bin",
+        https_proxy: "http://proxy.example",
+        NpM_ToKeN: "secret",
+        NODE_TLS_REJECT_UNAUTHORIZED: "0",
+      },
+      spawn: closingSpawn(0, null, (command, args, options) => {
+        assert.equal(command, "npm");
+        assert.deepEqual(args, [
+          "--prefix",
+          "/global prefix",
+          "update",
+          "--global",
+          "--ignore-scripts",
+          "--no-audit",
+          "--no-fund",
+          "--registry=https://registry.npmjs.org",
+          "@astralyn/minicpa",
+        ]);
+        assert.equal(options.shell, false);
+        assert.equal(options.stdio, "inherit");
+        assert.equal(options.windowsHide, true);
+        assert.equal(options.env?.PATH, "/custom/bin");
+        assert.equal(options.env?.https_proxy, "http://proxy.example");
+        assert.equal(options.env?.NpM_ToKeN, undefined);
+        assert.equal(options.env?.NODE_TLS_REJECT_UNAUTHORIZED, "0");
+      }),
+      readFile: async () => JSON.stringify({ name: "@astralyn/minicpa", version: "2.3.4" }),
+    });
+  });
+
+  it("reports npm update failures with the correct retry command", async () => {
+    await assert.rejects(
+      updateMinicpaVersion(supportedInstall(), "2.3.4", { spawn: closingSpawn(17) }),
+      (error: Error) => {
+        assert.match(error.message, /^MiniCPA upgrade failed:.*status 17/s);
+        assert.match(error.message, /npm --prefix "\/global prefix" update --global/);
+        assert.match(error.message, /@astralyn\/minicpa/);
+        assert.doesNotMatch(error.message, / install --global/);
+        assert.doesNotMatch(error.message, /self-upgrade|self-update/i);
+        return true;
+      },
+    );
+  });
+
+  it("fails when npm succeeds without installing the fetched latest version", async () => {
+    await assert.rejects(
+      updateMinicpaVersion(supportedInstall(), "2.3.4", {
+        spawn: closingSpawn(0),
+        readFile: async () => JSON.stringify({ name: "@astralyn/minicpa", version: "2.3.3" }),
+      }),
+      (error: Error) => {
+        assert.match(error.message, /post-upgrade verification expected/);
+        assert.match(error.message, /received @astralyn\/minicpa@2\.3\.3/);
+        assert.match(error.message, /npm --prefix "\/global prefix" install --global/);
+        assert.match(error.message, /@astralyn\/minicpa@latest/);
+        return true;
+      },
+    );
+  });
+});
+
 describe("installMinicpaVersion", () => {
   it("uses fixed safe npm arguments and a credential-safe inherited environment", async () => {
     const detection = supportedInstall();
@@ -380,9 +447,10 @@ describe("installMinicpaVersion", () => {
     await assert.rejects(
       installMinicpaVersion(detection, "2.3.4", { spawn: closingSpawn(17) }),
       (error: Error) => {
-        assert.match(error.message, /status 17/);
+        assert.match(error.message, /^MiniCPA upgrade failed:.*status 17/s);
         assert.match(error.message, /npm --prefix "\/global prefix" install --global/);
         assert.match(error.message, /@astralyn\/minicpa@2\.3\.4/);
+        assert.doesNotMatch(error.message, /self-upgrade|self-update/i);
         return true;
       },
     );
@@ -418,7 +486,7 @@ describe("installMinicpaVersion", () => {
         spawn: closingSpawn(0),
         readFile: async () => JSON.stringify({ name: "@astralyn/minicpa", version: "2.3.5" }),
       }),
-      /post-install verification expected/,
+      /post-upgrade verification expected/,
     );
 
     await installMinicpaVersion(detection, "2.3.4-beta.1", {

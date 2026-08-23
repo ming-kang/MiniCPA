@@ -46,16 +46,32 @@ const MAX_EXTRACTED_EXECUTABLE_BYTES = 512 * 1024 * 1024;
 
 export class BinaryUpdateError extends Error {
   readonly previousRestarted: boolean;
+  readonly previousRestored: boolean;
   readonly causeMessage: string;
 
-  constructor(causeMessage: string, previousRestarted: boolean) {
-    const suffix = previousRestarted
-      ? "\nPrevious CPA was restarted after failed update."
-      : "\nAlso failed to restart CPA. Run: cpa start";
+  constructor(
+    causeMessage: string,
+    previousRestarted: boolean,
+    recovery?: { previousRestored?: boolean; previousAvailable?: boolean },
+  ) {
+    const previousRestored = recovery?.previousRestored === true;
+    let suffix: string;
+    if (previousRestarted) {
+      suffix = previousRestored
+        ? "\nThe previous CLIProxyAPI version was restored and restarted."
+        : "\nThe existing CLIProxyAPI version was restarted.";
+    } else if (recovery?.previousAvailable === false) {
+      suffix = "\nNo previous CLIProxyAPI executable could be restored. Run: cpa update";
+    } else {
+      suffix = previousRestored
+        ? "\nThe previous CLIProxyAPI version was restored but could not be restarted. Run: cpa start"
+        : "\nThe existing CLIProxyAPI version could not be restarted. Run: cpa start";
+    }
     super(`${causeMessage}${suffix}`);
     this.name = "BinaryUpdateError";
     this.causeMessage = causeMessage;
     this.previousRestarted = previousRestarted;
+    this.previousRestored = previousRestored;
   }
 }
 
@@ -192,6 +208,8 @@ export function verifyArchiveChecksum(
 export type BinaryUpdateResult = {
   version: string;
   skipped: boolean;
+  /** Recorded CLIProxyAPI version before this operation, when known. */
+  previousVersion?: string;
   /** True if process was stopped for the update and started again. */
   restarted: boolean;
 };
@@ -278,7 +296,7 @@ export async function installBinaryPhase(
   const { version, extractedExe, wasRunning, currentVersion } = args;
 
   if (wasRunning) {
-    reporter.info("Stopping CPA for binary replace…");
+    reporter.info("Stopping CLIProxyAPI to install the update…");
     await deps.stopDaemon(home);
   }
 
@@ -293,7 +311,7 @@ export async function installBinaryPhase(
 
     let restarted = false;
     if (wasRunning) {
-      reporter.info("Restarting CPA…");
+      reporter.info("Restarting CLIProxyAPI…");
       // startDaemon waits for HTTP ready by default.
       await deps.startDaemon(home);
       restarted = true;
@@ -309,7 +327,7 @@ export async function installBinaryPhase(
     return { restarted };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    reporter.warn("Update failed; restoring previous binary…");
+    reporter.warn("CLIProxyAPI update failed; recovering the previous installation…");
 
     // Half-started new process may still be running after a failed restart.
     if (deps.resolveRunning(home)) {
@@ -339,19 +357,18 @@ export async function installBinaryPhase(
 
     if (wasRunning) {
       if (!binaryPresent) {
-        throw new BinaryUpdateError(
-          `${msg}\nBackup missing; previous binary not restored. Run: cpa update`,
-          false,
-        );
+        throw new BinaryUpdateError(msg, false, { previousAvailable: false });
       }
       try {
         await deps.startDaemon(home);
-        throw new BinaryUpdateError(msg, true);
+        throw new BinaryUpdateError(msg, true, { previousRestored: restored });
       } catch (restartErr) {
         if (restartErr instanceof BinaryUpdateError) throw restartErr;
         const restartMessage =
           restartErr instanceof Error ? restartErr.message : String(restartErr);
-        throw new BinaryUpdateError(`${msg}\nRestart error: ${restartMessage}`, false);
+        throw new BinaryUpdateError(`${msg}\nRestart error: ${restartMessage}`, false, {
+          previousRestored: restored,
+        });
       }
     }
 
@@ -390,7 +407,7 @@ export async function updateBinary(
   const alreadyLatest = !options?.version && !!currentVersion && currentVersion === version;
 
   if (alreadyLatest && !options?.force) {
-    return { version, skipped: true, restarted: false };
+    return { version, previousVersion: currentVersion, skipped: true, restarted: false };
   }
 
   const candidates = listReleaseAssetCandidates(release, process.platform, process.arch);
@@ -429,7 +446,7 @@ export async function updateBinary(
       deps,
       reporter,
     );
-    return { version, skipped: false, restarted };
+    return { version, previousVersion: currentVersion, skipped: false, restarted };
   } finally {
     // Never let temp cleanup turn a completed update into a reported failure.
     removeDirBestEffort(staging, (message) => reporter.warn(message));

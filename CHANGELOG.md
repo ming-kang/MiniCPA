@@ -4,6 +4,25 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-23
+
+### Added
+
+- Added `cpa web` as the canonical web-panel command while retaining `cpa open` as a hidden compatibility alias.
+- Added `-v` alongside `-V` and `--version` for the one-line MiniCPA version.
+
+### Changed
+
+- Running `cpa` without arguments now prints the same grouped help as `cpa --help` and exits successfully.
+- Simplified root help by grouping common commands and hiding compatibility/recovery commands and `cpa update --all`.
+- A normal `cpa upgrade` now uses a verified `npm update -g @astralyn/minicpa` flow; `--force` retains exact-version reinstallation.
+- Standardized CLI output around the names MiniCPA, CLIProxyAPI, Web panel, and Home, with clearer update, rollback, and recovery results.
+
+### Fixed
+
+- `cpa update check` now reports a configured web-panel auto-update opt-out instead of incorrectly claiming the panel is current.
+- Panel opt-out output now recommends the narrow `cpa update --panel` override instead of unnecessarily reinstalling both components with `--force`.
+
 ## [0.1.3] - 2026-08-22
 
 ### Added

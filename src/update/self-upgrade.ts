@@ -489,65 +489,84 @@ function assertCanonicalExactVersion(version: string): void {
   }
 }
 
-function manualInstallCommand(detection: SupportedNpmGlobalInstall, version: string): string {
+type UpgradeOperation = "install" | "update";
+
+function manualRetryCommand(
+  detection: SupportedNpmGlobalInstall,
+  operation: UpgradeOperation,
+  version: string,
+): string {
   return [
     detection.npmCommand,
     "--prefix",
     JSON.stringify(detection.prefix),
-    "install",
+    operation,
     "--global",
     "--ignore-scripts",
     "--no-audit",
     "--no-fund",
     `--registry=${NPM_REGISTRY_BASE_URL}`,
-    `${MINICPA_PACKAGE_NAME}@${version}`,
+    operation === "install" ? `${MINICPA_PACKAGE_NAME}@${version}` : MINICPA_PACKAGE_NAME,
   ].join(" ");
 }
 
-function installationFailure(
+function upgradeFailure(
   detection: SupportedNpmGlobalInstall,
+  operation: UpgradeOperation,
   version: string,
   detail: string,
   cause?: unknown,
+  retryCommand = manualRetryCommand(detection, operation, version),
 ): Error {
   return new Error(
-    `MiniCPA self-upgrade failed: ${detail}\nRetry manually with:\n${manualInstallCommand(detection, version)}`,
+    `MiniCPA upgrade failed: ${detail}\nRetry manually with:\n${retryCommand}`,
     cause === undefined ? undefined : { cause },
   );
 }
 
-/** Install an already validated exact release into a proven direct npm global installation. */
-export async function installMinicpaVersion(
+function npmArguments(
+  detection: SupportedNpmGlobalInstall,
+  operation: UpgradeOperation,
+  version: string,
+): string[] {
+  return [
+    "--prefix",
+    detection.prefix,
+    operation,
+    "--global",
+    "--ignore-scripts",
+    "--no-audit",
+    "--no-fund",
+    `--registry=${NPM_REGISTRY_BASE_URL}`,
+    operation === "install" ? `${MINICPA_PACKAGE_NAME}@${version}` : MINICPA_PACKAGE_NAME,
+  ];
+}
+
+async function runNpmUpgrade(
   detection: SupportedNpmGlobalInstall,
   version: string,
-  dependencies: Partial<SelfUpgradeInstallDependencies> = {},
+  operation: UpgradeOperation,
+  dependencies: Partial<SelfUpgradeInstallDependencies>,
 ): Promise<void> {
   assertCanonicalExactVersion(version);
   const spawnCommand = dependencies.spawn ?? (spawn as SpawnCommand);
   const readFile =
     dependencies.readFile ?? ((filePath, encoding) => fs.readFile(filePath, encoding));
   const env = dependencies.env ?? process.env;
-  const args = [
-    "--prefix",
-    detection.prefix,
-    "install",
-    "--global",
-    "--ignore-scripts",
-    "--no-audit",
-    "--no-fund",
-    `--registry=${NPM_REGISTRY_BASE_URL}`,
-    `${MINICPA_PACKAGE_NAME}@${version}`,
-  ];
 
   let result: { status: number | null; signal: NodeJS.Signals | null };
   try {
     result = await new Promise((resolve, reject) => {
-      const child = spawnCommand(detection.npmCommand, args, {
-        shell: false,
-        stdio: "inherit",
-        windowsHide: true,
-        env: buildCredentialSafeChildEnv(env),
-      });
+      const child = spawnCommand(
+        detection.npmCommand,
+        npmArguments(detection, operation, version),
+        {
+          shell: false,
+          stdio: "inherit",
+          windowsHide: true,
+          env: buildCredentialSafeChildEnv(env),
+        },
+      );
       child.once("error", reject);
       child.once("close", (status, signal) => resolve({ status, signal }));
     });
@@ -556,15 +575,21 @@ export async function installMinicpaVersion(
       errorCode(error) === "ENOENT"
         ? `${detection.npmCommand} was not found. Reinstall npm or restore MiniCPA with the command below.`
         : `could not start npm (${error instanceof Error ? error.message : String(error)}).`;
-    throw installationFailure(detection, version, detail, error);
+    throw upgradeFailure(detection, operation, version, detail, error);
   }
 
   if (result.signal !== null) {
-    throw installationFailure(detection, version, `npm was terminated by signal ${result.signal}.`);
+    throw upgradeFailure(
+      detection,
+      operation,
+      version,
+      `npm was terminated by signal ${result.signal}.`,
+    );
   }
   if (result.status !== 0) {
-    throw installationFailure(
+    throw upgradeFailure(
       detection,
+      operation,
       version,
       `npm exited with status ${String(result.status)}.`,
     );
@@ -583,18 +608,41 @@ export async function installMinicpaVersion(
         ? (parsed as { name?: unknown; version?: unknown })
         : {};
   } catch (error) {
-    throw installationFailure(
+    throw upgradeFailure(
       detection,
+      operation,
       version,
-      `npm exited successfully, but the installed package.json could not be read or parsed.`,
+      "npm exited successfully, but the installed package.json could not be read or parsed.",
       error,
+      manualRetryCommand(detection, "install", "latest"),
     );
   }
   if (installedManifest.name !== MINICPA_PACKAGE_NAME || installedManifest.version !== version) {
-    throw installationFailure(
+    throw upgradeFailure(
       detection,
+      operation,
       version,
-      `post-install verification expected ${MINICPA_PACKAGE_NAME}@${version}, received ${String(installedManifest.name)}@${String(installedManifest.version)}.`,
+      `post-upgrade verification expected ${MINICPA_PACKAGE_NAME}@${version}, received ${String(installedManifest.name)}@${String(installedManifest.version)}.`,
+      undefined,
+      manualRetryCommand(detection, "install", "latest"),
     );
   }
+}
+
+/** Install an already validated exact release into a proven direct npm global installation. */
+export async function installMinicpaVersion(
+  detection: SupportedNpmGlobalInstall,
+  version: string,
+  dependencies: Partial<SelfUpgradeInstallDependencies> = {},
+): Promise<void> {
+  await runNpmUpgrade(detection, version, "install", dependencies);
+}
+
+/** Update a proven direct npm global installation and verify the fetched release was installed. */
+export async function updateMinicpaVersion(
+  detection: SupportedNpmGlobalInstall,
+  version: string,
+  dependencies: Partial<SelfUpgradeInstallDependencies> = {},
+): Promise<void> {
+  await runNpmUpgrade(detection, version, "update", dependencies);
 }

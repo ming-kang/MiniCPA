@@ -165,7 +165,7 @@ function assertSafeToStop(home: string, pid: number): void {
   const current = resolveRunning(home);
   if (!current || current.pid !== pid || current.identityUnknown) {
     throw new Error(
-      `Refusing to stop PID=${pid}: MiniCPA can no longer verify it is the managed CPA process. ` +
+      `Refusing to stop PID=${pid}: MiniCPA can no longer verify it is the managed CLIProxyAPI process. ` +
         "Stop it manually if appropriate, then retry.",
     );
   }
@@ -207,7 +207,7 @@ export async function waitForBinaryUnlocked(
   }
   recoverUnlockProbeBinary(home);
   throw new Error(
-    `CPA binary still locked after ${timeoutMs}ms: ${target}. Close programs using it and retry.`,
+    `CLIProxyAPI binary is still locked after ${timeoutMs}ms: ${target}. Close programs using it and retry.`,
   );
 }
 
@@ -230,7 +230,7 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
       );
       if (!ready) {
         throw new Error(
-          `CPA PID=${existing.pid} is up but HTTP not reachable. Try: cpa restart${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
+          `CLIProxyAPI is running (PID=${existing.pid}) but HTTP is not reachable. Try: cpa restart${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
         );
       }
     }
@@ -282,7 +282,7 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
   }
 
   if (!child.pid) {
-    throw new Error("Failed to start CPA process");
+    throw new Error("Failed to start the CLIProxyAPI process");
   }
 
   const startedAt = new Date().toISOString();
@@ -296,7 +296,7 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
     await killUntrackedChild(child.pid);
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(
-      `Started CPA but failed to record its PID; the new process was terminated: ${reason}`,
+      `CLIProxyAPI started, but MiniCPA could not record its PID; the new process was terminated: ${reason}`,
       { cause: err },
     );
   }
@@ -304,12 +304,14 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
 
   if (spawnError) {
     clearPid(home);
-    throw new Error(`Failed to start CPA: ${spawnError.message}`);
+    throw new Error(`Failed to start CLIProxyAPI: ${spawnError.message}`);
   }
 
   if (!isProcessAlive(child.pid)) {
     clearPid(home);
-    throw new Error(`CPA exited immediately.${dumpRecentLogs(home)}\n${logPathsHint(home)}`);
+    throw new Error(
+      `CLIProxyAPI exited immediately.${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
+    );
   }
 
   if (!options?.noWait) {
@@ -319,12 +321,12 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
       if (!isProcessAlive(child.pid)) {
         clearPid(home);
         throw new Error(
-          `CPA exited before becoming ready.${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
+          `CLIProxyAPI exited before becoming ready.${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
         );
       }
       // Leave process running for diagnostics; do not clear PID.
       throw new Error(
-        `CPA started (PID=${child.pid}) but HTTP not ready within ${readyMs}ms. Try: cpa restart${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
+        `CLIProxyAPI started (PID=${child.pid}) but was not ready within ${readyMs}ms. Try: cpa restart${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
       );
     }
   }
@@ -350,7 +352,9 @@ export async function runCpaTuiProcess(home: string): Promise<void> {
       }
       reject(
         new Error(
-          signal ? `CPA TUI terminated by ${signal}` : `CPA TUI exited with code ${code ?? 1}`,
+          signal
+            ? `CLIProxyAPI TUI terminated by ${signal}`
+            : `CLIProxyAPI TUI exited with code ${code ?? 1}`,
         ),
       );
     });
@@ -419,7 +423,7 @@ export async function stopDaemon(home: string): Promise<boolean> {
 
   if (isProcessAlive(pid)) {
     throw new Error(
-      `CPA PID=${pid} still running after stop. Not clearing PID file. Try: taskkill /PID ${pid} /F (Windows) or kill -9 ${pid}`,
+      `CLIProxyAPI is still running after stop (PID=${pid}). The PID file was kept. Try: taskkill /PID ${pid} /F (Windows) or kill -9 ${pid}`,
     );
   }
 

@@ -11,5 +11,5 @@ export function createContext(): CommandContext {
 }
 
 export function printHome(ctx: CommandContext): void {
-  console.log(`CPA home  ${ctx.home}`);
+  console.log(`Home       ${ctx.home}`);
 }

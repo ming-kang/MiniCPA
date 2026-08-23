@@ -161,12 +161,12 @@ describe("runDoctor", () => {
     }
 
     if (process.platform === "win32") {
-      assert.ok(hasLine(lines, "[fail] CPA home not writable"), lines.join("\n"));
+      assert.ok(hasLine(lines, "[fail] instance directory not writable"), lines.join("\n"));
       assert.equal(process.exitCode, 1);
       assert.equal(fs.existsSync(path.join(home, ".minicpa-write-probe")), false);
     } else {
       // POSIX keeps access(W_OK), which is accurate there, so the probe never runs.
-      assert.ok(hasLine(lines, "[ ok ] CPA home writable"), lines.join("\n"));
+      assert.ok(hasLine(lines, "[ ok ] instance directory writable"), lines.join("\n"));
     }
   });
 
@@ -180,9 +180,12 @@ describe("runDoctor", () => {
 
     const lines = await runDoctorCapturing();
 
-    assert.ok(hasLine(lines, "[ ok ] binary "), lines.join("\n"));
+    assert.ok(hasLine(lines, "[ ok ] CLIProxyAPI binary "), lines.join("\n"));
     assert.ok(
-      hasLine(lines, "[warn] binary present but not runnable (version probe failed)"),
+      hasLine(
+        lines,
+        "[warn] CLIProxyAPI binary is present but not runnable (version probe failed)",
+      ),
       lines.join("\n"),
     );
   });
@@ -229,7 +232,7 @@ describe("runDoctor", () => {
 
     const lines = await runDoctorCapturing();
 
-    assert.ok(hasLine(lines, "[warn] active binary missing"), lines.join("\n"));
+    assert.ok(hasLine(lines, "[warn] active CLIProxyAPI binary missing"), lines.join("\n"));
     assert.deepEqual(snapshotHome(home), before, "doctor must not mutate the instance home");
   });
 

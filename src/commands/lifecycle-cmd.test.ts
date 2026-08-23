@@ -174,7 +174,7 @@ describe("runOpen", () => {
           out.join("\n"),
         );
         assert.ok(
-          errs.some((line) => line.includes("could not launch a browser (xdg-open not found)")),
+          errs.some((line) => line.includes("could not open a browser (xdg-open not found)")),
           errs.join("\n"),
         );
         assert.ok(!process.exitCode, `exit code must stay successful, got ${process.exitCode}`);
@@ -267,15 +267,15 @@ describe("runStatus", () => {
         }
 
         assert.ok(
-          lines.some((l) => l.includes(`API       ${baseUrl}`)),
+          lines.some((l) => l.includes(`API        ${baseUrl}`)),
           lines.join("\n"),
         );
         assert.ok(
-          lines.some((l) => l.includes(`Manage    ${baseUrl}/management.html`)),
+          lines.some((l) => l.includes(`Web        ${baseUrl}/management.html`)),
           lines.join("\n"),
         );
         assert.ok(
-          lines.some((l) => l.includes("HTTP      ok")),
+          lines.some((l) => l.includes("HTTP       ok")),
           lines.join("\n"),
         );
         assert.equal(process.exitCode, 0);

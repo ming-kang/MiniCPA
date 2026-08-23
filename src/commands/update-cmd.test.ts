@@ -31,11 +31,11 @@ describe("assertUpdateScopeFlags", () => {
   it("rejects binary-only flags combined with --panel", () => {
     assert.throws(
       () => assertUpdateScopeFlags({ panel: true, version: "7.2.66" }),
-      /--version and --insecure apply to the CPA binary only/,
+      /--version and --insecure apply to CLIProxyAPI only/,
     );
     assert.throws(
       () => assertUpdateScopeFlags({ panel: true, insecure: true }),
-      /--version and --insecure apply to the CPA binary only/,
+      /--version and --insecure apply to CLIProxyAPI only/,
     );
   });
 
@@ -124,12 +124,14 @@ const RATE_LIMIT_ERROR =
 
 const binaryUpdated: () => Promise<BinaryUpdateResult> = async () => ({
   version: "7.2.92",
+  previousVersion: "7.2.91",
   skipped: false,
   restarted: true,
 });
 
 const panelCurrent: () => Promise<PanelUpdateResult> = async () => ({
   version: "9.9.9",
+  previousVersion: "9.9.9",
   skipped: true,
   reason: "already-current",
 });
@@ -158,9 +160,12 @@ describe("runUpdate leg reporting", () => {
     // Must resolve, not reject: the binary leg succeeded and printed its outcome.
     const { stdout, stderr } = await captureOutput(() => runUpdate({}, deps));
 
-    assert.match(stdout, /CPA updated to 7\.2\.92 \(restarted\)/);
-    assert.match(stderr, /Warning: panel update failed: GitHub API 403/);
-    assert.match(stderr, /Retry the panel with: cpa update --panel/);
+    assert.match(stdout, /CLIProxyAPI updated: 7\.2\.91 → 7\.2\.92 \(restarted\)/);
+    assert.match(stderr, /Warning: Web panel update failed: GitHub API 403/);
+    assert.match(
+      stderr,
+      /CLIProxyAPI completed successfully\. Retry only the Web panel: cpa update --panel/,
+    );
     // The remedy line must not claim the binary leg failed too.
     assert.ok(!/restored previous binary/i.test(stderr));
     assert.equal(process.exitCode, 1);
@@ -172,8 +177,8 @@ describe("runUpdate leg reporting", () => {
 
     const { stdout, stderr } = await captureOutput(() => runUpdate({}, deps));
 
-    assert.match(stdout, /CPA updated to 7\.2\.92 \(restarted\)/);
-    assert.match(stdout, /Panel already 9\.9\.9 \(use --force to reinstall\)/);
+    assert.match(stdout, /CLIProxyAPI updated: 7\.2\.91 → 7\.2\.92 \(restarted\)/);
+    assert.match(stdout, /Web panel is already up to date \(9\.9\.9\)/);
     assert.equal(stderr, "");
     assert.equal(process.exitCode, undefined);
   });
@@ -192,8 +197,76 @@ describe("runUpdate leg reporting", () => {
     const { stdout } = await captureOutput(() => runUpdate({ binaryOnly: true }, deps));
 
     assert.equal(panelCalled, false);
-    assert.match(stdout, /Panel skipped \(--binary\)\./);
+    assert.match(stdout, /CLIProxyAPI updated: 7\.2\.91 → 7\.2\.92 \(restarted\)/);
+    assert.doesNotMatch(stdout, /Web panel|skipped/i);
     assert.equal(process.exitCode, undefined);
+  });
+
+  it("explains the config opt-out and recommends an explicit Web panel update", async () => {
+    isolateMiniCpaRoot();
+    const deps: UpdateDeps = {
+      updateBinary: binaryUpdated,
+      updatePanel: async () => ({
+        version: "1.2.3",
+        previousVersion: "1.2.3",
+        skipped: true,
+        reason: "config-opt-out",
+      }),
+    };
+
+    const { stdout } = await captureOutput(() => runUpdate({}, deps));
+
+    assert.match(stdout, /automatic panel updates are disabled in config\.yaml/);
+    assert.match(stdout, /To update it once: cpa update --panel/);
+    assert.doesNotMatch(stdout, /--force/);
+  });
+
+  it("distinguishes install, reinstall, and explicit version changes", async () => {
+    isolateMiniCpaRoot();
+    const panelMustNotRun: UpdateDeps["updatePanel"] = async () => {
+      throw new Error("unexpected Web panel call");
+    };
+    const cases: Array<{
+      result: BinaryUpdateResult;
+      opts: { binaryOnly: true; version?: string };
+      expected: RegExp;
+    }> = [
+      {
+        result: { version: "7.2.92", skipped: false, restarted: false },
+        opts: { binaryOnly: true },
+        expected: /CLIProxyAPI installed: 7\.2\.92/,
+      },
+      {
+        result: {
+          version: "7.2.92",
+          previousVersion: "7.2.92",
+          skipped: false,
+          restarted: false,
+        },
+        opts: { binaryOnly: true },
+        expected: /CLIProxyAPI reinstalled: 7\.2\.92/,
+      },
+      {
+        result: {
+          version: "7.2.90",
+          previousVersion: "7.2.92",
+          skipped: false,
+          restarted: false,
+        },
+        opts: { binaryOnly: true, version: "7.2.90" },
+        expected: /CLIProxyAPI version changed: 7\.2\.92 → 7\.2\.90/,
+      },
+    ];
+
+    for (const { result, opts, expected } of cases) {
+      const { stdout } = await captureOutput(() =>
+        runUpdate(opts, {
+          updateBinary: async () => result,
+          updatePanel: panelMustNotRun,
+        }),
+      );
+      assert.match(stdout, expected);
+    }
   });
 
   it("prefixes --panel failures so a raw GitHub error is not the whole story", async () => {
@@ -207,7 +280,7 @@ describe("runUpdate leg reporting", () => {
 
     await assert.rejects(
       captureOutput(() => runUpdate({ panelOnly: true }, deps)),
-      /Panel update failed: GitHub API 403/,
+      /Web panel update failed: GitHub API 403/,
     );
   });
 });
@@ -229,8 +302,58 @@ describe("runUpdateCheck leg reporting", () => {
 
     const { stdout } = await captureOutput(() => runUpdateCheck(deps));
 
-    assert.match(stdout, /CPA binary\s+error \(GitHub API 403/);
-    assert.match(stdout, /Panel\s+current=9\.9\.9\s+latest=9\.9\.9\s+up-to-date/);
+    assert.match(stdout, /CLIProxyAPI\s+check failed: GitHub API 403/);
+    assert.match(stdout, /Web panel\s+current=9\.9\.9\s+latest=9\.9\.9\s+up to date/);
     assert.equal(process.exitCode, 1);
+  });
+
+  it("prints the update command when an actionable update is available", async () => {
+    isolateMiniCpaRoot();
+    const deps: UpdateCheckDeps = {
+      checkBinaryUpdate: async () => ({
+        current: "7.2.91",
+        latest: "7.2.92",
+        upToDate: false,
+      }),
+      checkPanelUpdate: async () => ({
+        current: "9.9.9",
+        latest: "9.9.9",
+        upToDate: true,
+        autoUpdateDisabled: false,
+      }),
+    };
+
+    const { stdout } = await captureOutput(() => runUpdateCheck(deps));
+
+    assert.match(stdout, /CLIProxyAPI\s+current=7\.2\.91\s+latest=7\.2\.92\s+update available/);
+    assert.match(stdout, /\nRun: cpa update$/);
+    assert.equal(process.exitCode, 1);
+  });
+
+  it("reports an opted-out panel as ignored without failing the gate or suggesting update", async () => {
+    isolateMiniCpaRoot();
+    const deps: UpdateCheckDeps = {
+      checkBinaryUpdate: async () => ({
+        current: "7.2.92",
+        latest: "7.2.92",
+        upToDate: true,
+      }),
+      checkPanelUpdate: async () => ({
+        current: "1.2.3",
+        latest: "9.9.9",
+        upToDate: true,
+        autoUpdateDisabled: true,
+      }),
+    };
+
+    const { stdout } = await captureOutput(() => runUpdateCheck(deps));
+
+    assert.match(
+      stdout,
+      /Web panel\s+current=1\.2\.3\s+latest=9\.9\.9\s+ignored \(automatic updates disabled in config\.yaml\)/,
+    );
+    assert.doesNotMatch(stdout, /Web panel.*up to date/);
+    assert.doesNotMatch(stdout, /Run: cpa update/);
+    assert.equal(process.exitCode, 0);
   });
 });

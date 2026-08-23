@@ -66,10 +66,10 @@ export function cpaAssetNameCandidates(
   const v = normalizeTagVersion(version);
   const candidates: string[] = [];
   if (arch !== "x64" && arch !== "arm64") {
-    throw new Error(`Unsupported CPU architecture for CPA updates: ${platform}/${arch}`);
+    throw new Error(`Unsupported CPU architecture for CLIProxyAPI updates: ${platform}/${arch}`);
   }
   if (platform !== "win32" && platform !== "darwin" && platform !== "linux") {
-    throw new Error(`Unsupported platform for CPA updates: ${platform}/${arch}`);
+    throw new Error(`Unsupported platform for CLIProxyAPI updates: ${platform}/${arch}`);
   }
 
   if (platform === "win32") {

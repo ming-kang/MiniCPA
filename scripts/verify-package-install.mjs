@@ -250,12 +250,36 @@ try {
     throw new Error(`npm did not create the platform cpa shim at ${executableBinPath}.`);
   }
 
-  const cliVersion = runCli(executableBinPath, ["--version"], smokeEnvironment).trim();
-  assertEqual(cliVersion, expectedVersion, "cpa --version output");
+  for (const flag of ["-v", "-V", "--version"]) {
+    const cliVersion = runCli(executableBinPath, [flag], smokeEnvironment).trim();
+    assertEqual(cliVersion, expectedVersion, `cpa ${flag} output`);
+  }
 
   const rootHelp = runCli(executableBinPath, ["--help"], smokeEnvironment);
-  if (!/^\s*update(?:\s|$)/m.test(rootHelp) || !/^\s*upgrade(?:\s|$)/m.test(rootHelp)) {
-    throw new Error("cpa --help must list both the update and upgrade commands.");
+  const bareHelp = runCli(executableBinPath, [], smokeEnvironment);
+  assertEqual(bareHelp, rootHelp, "bare cpa help output");
+  for (const command of ["web", "update", "upgrade"]) {
+    if (!new RegExp(`^\\s*${command}(?:\\s|$)`, "m").test(rootHelp)) {
+      throw new Error(`cpa --help must list the ${command} command.`);
+    }
+  }
+  for (const hidden of ["open", "clean", "root", "temp"]) {
+    if (new RegExp(`^\\s*${hidden}(?:\\s|$)`, "m").test(rootHelp)) {
+      throw new Error(`cpa --help must not list the hidden ${hidden} command.`);
+    }
+  }
+  if (!/-v, -V, --version/.test(rootHelp)) {
+    throw new Error("cpa --help must show all three MiniCPA version flags.");
+  }
+
+  const webHelp = runCli(executableBinPath, ["web", "--help"], smokeEnvironment);
+  if (!/Usage:\s+cpa web\b/.test(webHelp)) {
+    throw new Error("cpa web --help did not show help for the web command.");
+  }
+
+  const updateHelp = runCli(executableBinPath, ["update", "--help"], smokeEnvironment);
+  if (/^\s*--all(?:\s|$)/m.test(updateHelp)) {
+    throw new Error("cpa update --help must hide the redundant --all compatibility option.");
   }
 
   const upgradeHelp = runCli(executableBinPath, ["upgrade", "--help"], smokeEnvironment);

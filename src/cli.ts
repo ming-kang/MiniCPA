@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import "./node-version-guard.js";
-import { Command, CommanderError } from "commander";
+import { Command, CommanderError, type Help, Option } from "commander";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,18 +33,27 @@ const pkg = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf
 const program = new Command();
 program
   .name("cpa")
-  .description("MiniCPA — manage one CLIProxyAPI instance")
-  .version(pkg.version)
+  .description("MiniCPA — manage, run, and update one local CLIProxyAPI instance.")
+  .version(pkg.version, "-v, --version", "Show the MiniCPA version")
+  // Commander options accept at most two flags. Keep the third version spelling as a
+  // separate hidden option, handled through its public option event below.
+  .addOption(new Option("-V", "Show the MiniCPA version").hideHelp())
+  .helpOption("-h, --help", "Show help")
   .showHelpAfterError(false)
-  // Without this, the program-level `-V, --version` is also matched AFTER a subcommand
-  // name, so `cpa update --version 7.2.66` printed MiniCPA's version and exited 0
-  // instead of reaching update's own `--version <ver>` pin.
+  // Without this, a program-level version flag may be matched AFTER a subcommand
+  // name, so `cpa update --version 7.2.66` would print MiniCPA's version instead of
+  // reaching update's own `--version <ver>` pin.
   .enablePositionalOptions()
   .exitOverride();
 
+program.on("option:V", () => {
+  console.log(pkg.version);
+  throw new CommanderError(0, "commander.version", pkg.version);
+});
+
 program
   .command("init")
-  .description("Create the single CPA instance layout")
+  .description("Set up the CLIProxyAPI configuration and data directories")
   .option("--force", "Overwrite config.yaml (backs up to config.yaml.bak.<timestamp>)")
   .action(
     withCliErrors(async (opts: { force?: boolean }) => {
@@ -54,8 +63,8 @@ program
 
 program
   .command("start")
-  .description("Start CPA in background (waits until HTTP is ready)")
-  .option("--no-wait", "Do not wait for HTTP ready")
+  .description("Start CLIProxyAPI in the background and wait until it is ready")
+  .option("--no-wait", "Do not wait for CLIProxyAPI to become ready")
   .action(
     withCliErrors(async (opts: { wait?: boolean }) => {
       await runStart({ noWait: opts.wait === false });
@@ -64,7 +73,7 @@ program
 
 program
   .command("stop")
-  .description("Stop CPA")
+  .description("Stop CLIProxyAPI")
   .action(
     withCliErrors(async () => {
       await runStop();
@@ -73,8 +82,8 @@ program
 
 program
   .command("restart")
-  .description("Restart CPA")
-  .option("--no-wait", "Do not wait for HTTP ready")
+  .description("Restart CLIProxyAPI")
+  .option("--no-wait", "Do not wait for CLIProxyAPI to become ready")
   .action(
     withCliErrors(async (opts: { wait?: boolean }) => {
       await runRestart({ noWait: opts.wait === false });
@@ -83,7 +92,7 @@ program
 
 program
   .command("status")
-  .description("Show CPA status")
+  .description("Show CLIProxyAPI runtime status and endpoints")
   .action(
     withCliErrors(async () => {
       await runStatus();
@@ -91,8 +100,17 @@ program
   );
 
 program
-  .command("open")
-  .description("Open management UI in browser")
+  .command("web")
+  .description("Open the web management panel")
+  .action(
+    withCliErrors(async () => {
+      await runOpen();
+    }),
+  );
+
+program
+  .command("open", { hidden: true })
+  .description("Open the web management panel")
   .action(
     withCliErrors(async () => {
       await runOpen();
@@ -101,7 +119,7 @@ program
 
 program
   .command("logs")
-  .description("Show CPA logs (stdout + stderr by default)")
+  .description("Show CLIProxyAPI logs (stdout and stderr by default)")
   .option("-f, --follow", "Follow log output")
   .option("-n, --lines <n>", "Number of lines per file", "80")
   .option("--err", "Show error log only")
@@ -117,7 +135,7 @@ program
 
 program
   .command("tui")
-  .description("Open official CPA terminal UI")
+  .description("Open the CLIProxyAPI terminal UI")
   .action(
     withCliErrors(async () => {
       await runTui();
@@ -126,11 +144,11 @@ program
 
 const updateCmd = program
   .command("update")
-  .description("Update managed CLIProxyAPI binary/panel, not MiniCPA (default: both)");
+  .description("Update the managed CLIProxyAPI binary and web management panel");
 
 updateCmd
   .command("check")
-  .description("Check for updates (exit 1 if any outdated or check failed)")
+  .description("Check CLIProxyAPI and web panel versions without installing")
   .action(
     withCliErrors(async () => {
       await runUpdateCheck();
@@ -138,15 +156,23 @@ updateCmd
   );
 
 updateCmd
-  .option("--all", "Update binary and panel (default; kept for compatibility)")
-  .option("--binary", "Update CPA binary only")
-  .option("--panel", "Update management panel only")
-  .option("--version <ver>", "Install specific CPA version (e.g. 7.2.66)")
-  .option(
-    "--force",
-    "Reinstall even if already latest (running CPA is always restarted on replace)",
+  .addOption(
+    new Option("--all", "Update the CLIProxyAPI binary and web panel (the default)")
+      .hideHelp()
+      .conflicts(["binary", "panel"]),
   )
-  .option("--insecure", "Skip binary checksum verification (unsafe)")
+  .addOption(
+    new Option("--binary", "Update only the CLIProxyAPI binary").conflicts(["all", "panel"]),
+  )
+  .addOption(
+    new Option("--panel", "Update only the web management panel").conflicts(["all", "binary"]),
+  )
+  .option(
+    "--version <version>",
+    "Install a specific CLIProxyAPI binary version (for example, 7.2.66)",
+  )
+  .option("--force", "Reinstall selected components even when up to date")
+  .option("--insecure", "Skip CLIProxyAPI checksum verification (unsafe)")
   .action(
     withCliErrors(
       async (opts: {
@@ -169,32 +195,54 @@ updateCmd
     ),
   );
 
+updateCmd.addHelpText(
+  "after",
+  [
+    "",
+    "Both components are updated by default.",
+    "A running instance is restarted only when its CLIProxyAPI binary is replaced.",
+    "To upgrade MiniCPA itself, run cpa upgrade.",
+    "",
+  ].join("\n"),
+);
+
 const upgradeCmd = program
   .command("upgrade")
-  .description("Upgrade MiniCPA itself from npm, not the managed CLIProxyAPI");
+  .description("Upgrade the globally installed MiniCPA package through npm");
 
 upgradeCmd
   .command("check")
-  .description("Check for a MiniCPA update (exit 1 if outdated or check failed)")
+  .description("Check npm for a newer MiniCPA version without installing")
   .action(
     withCliErrors(async () => {
       await runUpgradeCheck(pkg.version);
     }),
   );
 
-upgradeCmd.option("--force", "Reinstall npm latest when already current (never downgrade)").action(
-  withCliErrors(async (opts: { force?: boolean }) => {
-    await runUpgrade({
-      currentVersion: pkg.version,
-      packageRoot,
-      force: opts.force,
-    });
-  }),
-);
+upgradeCmd
+  .option("--force", "Reinstall the latest npm version when current (never downgrade)")
+  .action(
+    withCliErrors(async (opts: { force?: boolean }) => {
+      await runUpgrade({
+        currentVersion: pkg.version,
+        packageRoot,
+        force: opts.force,
+      });
+    }),
+  )
+  .addHelpText(
+    "after",
+    [
+      "",
+      "This command does not update, stop, or restart the managed CLIProxyAPI instance.",
+      "To update CLIProxyAPI or the web panel, run cpa update.",
+      "",
+    ].join("\n"),
+  );
 
 program
   .command("doctor")
-  .description("Validate the single CPA instance")
+  .description("Diagnose CLIProxyAPI installation and runtime problems")
   .action(
     withCliErrors(async () => {
       await runDoctor();
@@ -202,8 +250,8 @@ program
   );
 
 program
-  .command("clean")
-  .description("Remove old MiniCPA staging files (never touches the CPA instance)")
+  .command("clean", { hidden: true })
+  .description("Remove old MiniCPA staging files (never touches the CLIProxyAPI instance)")
   .action(
     withCliErrors(async () => {
       await runClean();
@@ -212,7 +260,7 @@ program
 
 program
   .command("version")
-  .description("Show MiniCPA and CPA runtime versions")
+  .description("Show installed component versions")
   .action(
     withCliErrors(async () => {
       await runVersion(pkg.version);
@@ -221,7 +269,7 @@ program
 
 program
   .command("home")
-  .description("Print the single CPA instance directory")
+  .description("Print the CLIProxyAPI instance directory")
   .action(
     withCliErrors(async () => {
       const ctx = createContext();
@@ -230,7 +278,7 @@ program
   );
 
 program
-  .command("root")
+  .command("root", { hidden: true })
   .description("Print MiniCPA root (persistent data)")
   .action(
     withCliErrors(async () => {
@@ -239,13 +287,90 @@ program
   );
 
 program
-  .command("temp")
+  .command("temp", { hidden: true })
   .description("Print private staging directory")
   .action(
     withCliErrors(async () => {
       console.log(miniCpaTempRoot());
     }),
   );
+
+const rootCommandGroups = [
+  { title: "Lifecycle", commands: ["init", "start", "stop", "restart", "status"] },
+  { title: "Interfaces", commands: ["web", "tui", "logs"] },
+  { title: "Updates", commands: ["update", "upgrade"] },
+  { title: "Diagnostics", commands: ["doctor"] },
+  { title: "Information", commands: ["version", "home"] },
+] as const;
+
+/** Keep the root command list concise while retaining Commander's normal help elsewhere. */
+function formatRootHelp(cmd: Command, helper: Help): string {
+  const termWidth = helper.padWidth(cmd, helper);
+  const formatOption = (option: Option): string => {
+    const term = option.long === "--version" ? "-v, -V, --version" : helper.optionTerm(option);
+    return helper.formatItem(
+      helper.styleOptionTerm(term),
+      termWidth,
+      helper.styleOptionDescription(helper.optionDescription(option)),
+      helper,
+    );
+  };
+  const formatCommand = (command: Command): string =>
+    helper.formatItem(
+      helper.styleSubcommandTerm(helper.subcommandTerm(command)),
+      termWidth,
+      helper.styleSubcommandDescription(helper.subcommandDescription(command)),
+      helper,
+    );
+
+  const output = [
+    `${helper.styleTitle("Usage:")} ${helper.styleUsage(helper.commandUsage(cmd))}`,
+    "",
+    helper.boxWrap(
+      helper.styleCommandDescription(helper.commandDescription(cmd)),
+      helper.helpWidth ?? 80,
+    ),
+    "",
+    helper.styleTitle("Options:"),
+    ...helper.visibleOptions(cmd).map(formatOption),
+    "",
+  ];
+
+  for (const group of rootCommandGroups) {
+    const commands = group.commands.map((name) =>
+      cmd.commands.find((item) => item.name() === name),
+    );
+    output.push(
+      helper.styleTitle(`${group.title}:`),
+      ...commands.filter((command): command is Command => command !== undefined).map(formatCommand),
+      "",
+    );
+  }
+
+  return output.join("\n");
+}
+
+// Configure only the root after creating the children, so command-specific help keeps
+// Commander's standard renderer.
+program
+  .configureHelp({ formatHelp: formatRootHelp })
+  // With a root action Commander treats a bare operand as an excess argument. Accept it
+  // through parsing so the action can preserve the clearer "unknown command" diagnostic.
+  .allowExcessArguments(true)
+  .addHelpText(
+    "after",
+    "\nQuick start:\n  cpa init\n  cpa update\n  cpa start\n  cpa web\n\nRun cpa <command> --help for command details.\n",
+  )
+  .action(() => {
+    const unknownCommand = program.args[0];
+    if (unknownCommand !== undefined) {
+      program.error(`error: unknown command '${unknownCommand}'`, {
+        code: "commander.unknownCommand",
+        exitCode: 1,
+      });
+    }
+    program.outputHelp();
+  });
 
 try {
   await program.parseAsync(process.argv);

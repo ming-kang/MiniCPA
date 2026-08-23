@@ -31,9 +31,9 @@ export function parseLogLineCount(value: string): number {
 
 function printRunningSummary(ctx: ReturnType<typeof createContext>, pid: number): void {
   printHome(ctx);
-  console.log(`Running   PID=${pid}`);
-  console.log(`API       ${apiBaseUrl(ctx.home)}`);
-  console.log(`Manage    ${managementUrl(ctx.home)}`);
+  console.log(`Status     running (PID=${pid})`);
+  console.log(`API        ${apiBaseUrl(ctx.home)}`);
+  console.log(`Web        ${managementUrl(ctx.home)}`);
 }
 
 export async function runStart(opts: { noWait?: boolean }): Promise<void> {
@@ -60,7 +60,7 @@ export async function runStop(): Promise<void> {
   const ctx = createContext();
   const stopped = await withMiniCpaLock("stop", () => stopDaemon(ctx.home));
   printHome(ctx);
-  console.log(stopped ? "Stopped" : "Not running");
+  console.log(stopped ? "CLIProxyAPI stopped" : "CLIProxyAPI is not running");
 }
 
 export async function runRestart(opts: { noWait?: boolean }): Promise<void> {
@@ -78,20 +78,20 @@ export async function runStatus(): Promise<void> {
   const running = inspectRunning(ctx.home);
   const version = await readCurrentRuntimeVersion(ctx.home);
   printHome(ctx);
-  console.log(`Version   ${version ?? "(not installed)"}`);
+  console.log(`Version    ${version ?? "(not installed)"}`);
   if (running) {
-    console.log(`Running   PID=${running.pid}`);
-    if (running.startedAt) console.log(`Started   ${running.startedAt}`);
-    console.log(`API       ${apiBaseUrl(ctx.home)}`);
-    console.log(`Manage    ${managementUrl(ctx.home)}`);
+    console.log(`Status     running (PID=${running.pid})`);
+    if (running.startedAt) console.log(`Started    ${running.startedAt}`);
+    console.log(`API        ${apiBaseUrl(ctx.home)}`);
+    console.log(`Web        ${managementUrl(ctx.home)}`);
     const reachable = await waitForAnyHttpOk(readinessUrls(ctx.home), 2000);
-    console.log(`HTTP      ${reachable ? "ok" : "not reachable"}`);
+    console.log(`HTTP       ${reachable ? "ok" : "not reachable"}`);
     if (!reachable) {
-      console.log("Hint     try: cpa restart   (or cpa logs --err)");
+      console.log("Hint       Try: cpa restart (or cpa logs --err)");
     }
     process.exitCode = reachable ? 0 : 1;
   } else {
-    console.log("Running   no");
+    console.log("Status     stopped");
     process.exitCode = 1;
   }
 }
@@ -100,7 +100,7 @@ export async function runStatus(): Promise<void> {
  * Name of the missing launcher when a browser could not be spawned at all.
  *
  * Node reports this as `spawn <command> ENOENT`; a headless Linux box, a WSL
- * shell or a container simply has no `xdg-open`, which must not turn `cpa open`
+ * shell or a container simply has no `xdg-open`, which must not turn `cpa web`
  * into a failed command — the URL is already on stdout.
  */
 function missingBrowserCommand(err: unknown): string | undefined {
@@ -124,10 +124,10 @@ export async function runOpen(deps?: {
     const serverUp = await waitForAnyHttpOk(readinessUrls(ctx.home), 2000);
     if (serverUp) {
       throw new Error(
-        "Management panel not installed (management.html missing). Run: cpa update --panel",
+        "Web management panel is not installed (management.html is missing). Run: cpa update --panel",
       );
     }
-    throw new Error(`CPA does not appear reachable at ${url}. Run: cpa start`);
+    throw new Error(`CLIProxyAPI is not reachable at ${url}. Run: cpa start`);
   }
   // Print before launching: the URL is the useful output even when no browser
   // can be started.
@@ -138,9 +138,8 @@ export async function runOpen(deps?: {
   } catch (err) {
     const missing = missingBrowserCommand(err);
     if (missing === undefined) throw err;
-    console.error(
-      `Warning: could not launch a browser (${missing} not found) — open the URL above manually`,
-    );
+    console.error(`Warning: could not open a browser (${missing} not found)`);
+    console.error("Open the URL above manually.");
   }
 }
 
@@ -289,11 +288,11 @@ export async function runTui(deps?: TuiDeps): Promise<void> {
   const inspect = deps?.inspectRunning ?? inspectRunning;
   const running = inspect(ctx.home);
   if (!running) {
-    throw new Error("CPA is not running. Run: cpa start");
+    throw new Error("CLIProxyAPI is not running. Run: cpa start");
   }
   const found = inspectRunnableExecutable(ctx.home);
   if (!found) {
-    throw new Error(`CPA binary not found under ${ctx.home}. Run: cpa update`);
+    throw new Error(`CLIProxyAPI binary not found under ${ctx.home}. Run: cpa update`);
   }
   if (found.kind !== "active") {
     // Recovering the residue here would be a write from an unlocked command, so
@@ -305,6 +304,6 @@ export async function runTui(deps?: TuiDeps): Promise<void> {
   const run = deps?.runRuntimeAttached ?? runRuntimeAttached;
   await run(found.path, ["-config", ctx.layout.configFile, "-tui"], {
     cwd: ctx.home,
-    label: "CPA TUI",
+    label: "CLIProxyAPI TUI",
   });
 }

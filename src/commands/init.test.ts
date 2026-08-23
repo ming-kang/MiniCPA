@@ -57,6 +57,8 @@ describe("runInit", () => {
     assert.ok(fs.existsSync(env));
     assert.match(configText, /api-keys:/);
     assert.ok(!output.join("\n").includes(apiKey));
+    assert.match(output.join("\n"), /Next:[\s\S]*cpa update[\s\S]*cpa start[\s\S]*cpa web/);
+    assert.doesNotMatch(output.join("\n"), /cpa open/);
     assert.equal(fs.existsSync(path.join(home, "state", "cpa.lock")), false);
 
     if (process.platform !== "win32") {

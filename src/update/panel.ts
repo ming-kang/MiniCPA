@@ -33,6 +33,8 @@ export type PanelUpdateResult = {
    */
   version: string;
   skipped: boolean;
+  /** Recorded version before this operation, when known. */
+  previousVersion?: string;
   /** Set whenever `skipped` is true. */
   reason?: PanelSkipReason;
 };
@@ -163,10 +165,9 @@ export function isPanelCurrent(
  * Report the installed vs latest panel version.
  *
  * When `remote-management.disable-auto-update-panel` is set the panel is pinned
- * on purpose, so it is reported as up to date: `cpa update check` is a scripted
- * health gate, and a panel `cpa update` is configured never to replace must not
- * hold that gate at exit 1 forever. `autoUpdateDisabled` lets callers say *why*
- * instead of claiming a stale panel is current.
+ * on purpose. It remains a passing result for the scripted health gate, while
+ * `autoUpdateDisabled` lets callers report the opt-out instead of claiming the
+ * installed panel is current.
  */
 export async function checkPanelUpdate(
   home: string,
@@ -216,8 +217,10 @@ export async function updatePanel(
   ) {
     // No warning here: the command layer renders the returned reason, and both
     // would print for the same skip.
+    const previousVersion = readInstallState(home).panelVersion;
     return {
-      version: readInstallState(home).panelVersion ?? "",
+      version: previousVersion ?? "",
+      previousVersion,
       skipped: true,
       reason: "config-opt-out",
     };
@@ -227,7 +230,12 @@ export async function updatePanel(
   const state = readInstallState(home);
 
   if (isPanelCurrent(state, layout.managementHtml, version, expectedDigest) && !options?.force) {
-    return { version, skipped: true, reason: "already-current" };
+    return {
+      version,
+      previousVersion: state.panelVersion,
+      skipped: true,
+      reason: "already-current",
+    };
   }
 
   const downloadDir = miniCpaTempDownloadDir("panel-");
@@ -250,7 +258,7 @@ export async function updatePanel(
       lastUpdateCheck: new Date().toISOString(),
     });
 
-    return { version, skipped: false };
+    return { version, previousVersion: state.panelVersion, skipped: false };
   } finally {
     // Never let temp cleanup turn a completed update into a reported failure.
     removeDirBestEffort(downloadDir, (message) => reporter.warn(message));

@@ -36,7 +36,7 @@ const WRITE_PROBE_NAME = ".minicpa-write-probe";
  */
 function reportHomeWritable(home: string): boolean {
   if (!fs.existsSync(home)) {
-    console.log("[fail] CPA home missing — run: cpa init");
+    console.log("[fail] instance directory missing — run: cpa init");
     return false;
   }
 
@@ -44,10 +44,10 @@ function reportHomeWritable(home: string): boolean {
     const probe = path.join(home, WRITE_PROBE_NAME);
     try {
       writeFileAtomic(probe, "");
-      console.log("[ ok ] CPA home writable");
+      console.log("[ ok ] instance directory writable");
       return true;
     } catch {
-      console.log("[fail] CPA home not writable");
+      console.log("[fail] instance directory not writable");
       return false;
     } finally {
       try {
@@ -60,10 +60,10 @@ function reportHomeWritable(home: string): boolean {
 
   try {
     fs.accessSync(home, fs.constants.W_OK);
-    console.log("[ ok ] CPA home writable");
+    console.log("[ ok ] instance directory writable");
     return true;
   } catch {
-    console.log("[fail] CPA home not writable");
+    console.log("[fail] instance directory not writable");
     return false;
   }
 }
@@ -118,20 +118,24 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
   const exe = findRunnableExecutable(ctx.home);
   const activeExe = activeExecutablePath(ctx.home);
   if (exe === undefined) {
-    console.log("[fail] cli-proxy-api missing — run: cpa update");
+    console.log("[fail] CLIProxyAPI binary missing — run: cpa update");
     ok = false;
   } else if (exe === activeExe) {
-    console.log(`[ ok ] binary ${exe}`);
+    console.log(`[ ok ] CLIProxyAPI binary ${exe}`);
   } else {
-    console.log(`[warn] active binary missing; only ${exe} present — run: cpa start or cpa update`);
+    console.log(
+      `[warn] active CLIProxyAPI binary missing; only ${exe} is present — run: cpa start or cpa update`,
+    );
   }
 
   const version = await readCurrentRuntimeVersion(ctx.home);
   const state = readInstallState(ctx.home);
-  console.log(`[info] cpa runtime ${version ?? "-"} (state=${state.runtimeVersion ?? "-"})`);
+  console.log(
+    `[info] CLIProxyAPI version ${version ?? "-"} (state=${state.runtimeVersion ?? "-"})`,
+  );
   if (exe === activeExe && !version) {
     console.log(
-      "[warn] binary present but not runnable (version probe failed) — run: cpa update --force",
+      "[warn] CLIProxyAPI binary is present but not runnable (version probe failed) — run: cpa update --force",
     );
   }
   if (state.runtimeVersion && !version) {
@@ -139,12 +143,12 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
   } else if (state.runtimeVersion && version && state.runtimeVersion !== version) {
     console.log("[warn] runtime version differs from install state — run: cpa update --force");
   }
-  console.log(`[info] panel ${state.panelVersion ?? "(not installed)"}`);
+  console.log(`[info] Web panel ${state.panelVersion ?? "(not installed)"}`);
 
   if (fs.existsSync(ctx.layout.managementHtml)) {
-    console.log(`[ ok ] management.html`);
+    console.log("[ ok ] Web panel (management.html)");
   } else {
-    console.log("[warn] management.html missing — run: cpa update --panel (or default update)");
+    console.log("[warn] Web panel missing — run: cpa update --panel (or cpa update)");
   }
 
   for (const dir of [
@@ -216,7 +220,7 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
   const bak = backupExecutablePath(ctx.home);
   if (fs.existsSync(bak)) {
     console.log(
-      `[warn] binary backup present (${bak}) — kept after incomplete update; cleared after healthy restart`,
+      `[warn] CLIProxyAPI binary backup present (${bak}) — kept after incomplete update; cleared after healthy restart`,
     );
   }
 
@@ -271,9 +275,11 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
   const running = inspectRunning(ctx.home);
   if (running) {
     if (running.identityUnknown) {
-      console.log(`[warn] running PID=${running.pid} (identity probe inconclusive — not cleared)`);
+      console.log(
+        `[warn] CLIProxyAPI running (PID=${running.pid}; identity probe inconclusive — not cleared)`,
+      );
     } else {
-      console.log(`[ ok ] running PID=${running.pid}`);
+      console.log(`[ ok ] CLIProxyAPI running (PID=${running.pid})`);
     }
     try {
       const urls = readinessUrls(ctx.home);
@@ -291,7 +297,7 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
       ok = false;
     }
   } else {
-    console.log("[info] not running (cpa start)");
+    console.log("[info] CLIProxyAPI is not running (cpa start)");
   }
 
   if (hasProxyEnvConfigured()) {

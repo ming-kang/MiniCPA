@@ -4,7 +4,11 @@ import {
   fetchLatestMinicpaVersion,
   type MinicpaVersionStatus,
 } from "../update/minicpa-release.js";
-import { detectNpmGlobalInstall, installMinicpaVersion } from "../update/self-upgrade.js";
+import {
+  detectNpmGlobalInstall,
+  installMinicpaVersion,
+  updateMinicpaVersion,
+} from "../update/self-upgrade.js";
 
 export type UpgradeCheckDeps = {
   fetchLatestMinicpaVersion: typeof fetchLatestMinicpaVersion;
@@ -16,6 +20,7 @@ type UpgradeLock = <T>(command: string, fn: () => Promise<T>) => Promise<T>;
 export type UpgradeDeps = UpgradeCheckDeps & {
   detectNpmGlobalInstall: typeof detectNpmGlobalInstall;
   installMinicpaVersion: typeof installMinicpaVersion;
+  updateMinicpaVersion: typeof updateMinicpaVersion;
   withMiniCpaLock: UpgradeLock;
 };
 
@@ -28,21 +33,24 @@ const realUpgradeDeps: UpgradeDeps = {
   ...realUpgradeCheckDeps,
   detectNpmGlobalInstall,
   installMinicpaVersion,
+  updateMinicpaVersion,
   withMiniCpaLock,
 };
-
-function statusText(status: MinicpaVersionStatus): string {
-  if (status === "current") return "up-to-date";
-  if (status === "outdated") return "update available";
-  return "ahead (will not downgrade)";
-}
 
 function printVersionStatus(
   currentVersion: string,
   latestVersion: string,
   status: MinicpaVersionStatus,
 ): void {
-  console.log(`MiniCPA current=${currentVersion}  latest=${latestVersion}  ${statusText(status)}`);
+  if (status === "current") {
+    console.log(`MiniCPA is already up to date (${currentVersion})`);
+  } else if (status === "outdated") {
+    console.log(`MiniCPA upgrade available: ${currentVersion} → ${latestVersion}`);
+  } else {
+    console.log(
+      `MiniCPA is newer than the latest published version (${currentVersion} > ${latestVersion}). No changes made.`,
+    );
+  }
 }
 
 /** Check npm's latest MiniCPA version without inspecting the installation or taking a lock. */
@@ -53,6 +61,7 @@ export async function runUpgradeCheck(
   const latestVersion = await deps.fetchLatestMinicpaVersion();
   const status = deps.compareMinicpaVersions(currentVersion, latestVersion);
   printVersionStatus(currentVersion, latestVersion, status);
+  if (status === "outdated") console.log("Run: cpa upgrade");
   process.exitCode = status === "outdated" ? 1 : 0;
 }
 
@@ -67,32 +76,46 @@ export async function runUpgrade(
 ): Promise<void> {
   const latestVersion = await deps.fetchLatestMinicpaVersion();
   const status = deps.compareMinicpaVersions(opts.currentVersion, latestVersion);
-  printVersionStatus(opts.currentVersion, latestVersion, status);
 
   // A local version newer than npm's latest must never become a downgrade candidate,
   // including when --force was supplied.
-  if (status === "ahead") return;
-  if (status === "current" && !opts.force) return;
+  if (status === "ahead") {
+    printVersionStatus(opts.currentVersion, latestVersion, status);
+    return;
+  }
+  if (status === "current" && !opts.force) {
+    printVersionStatus(opts.currentVersion, latestVersion, status);
+    return;
+  }
+  if (status === "outdated") {
+    printVersionStatus(opts.currentVersion, latestVersion, status);
+  }
 
   await deps.withMiniCpaLock("upgrade", async () => {
     const detection = await deps.detectNpmGlobalInstall(opts.packageRoot);
     if (!detection.supported) {
       throw new Error(
         [
-          "MiniCPA self-upgrade supports only direct npm-global installations.",
+          "MiniCPA cannot upgrade this installation automatically.",
           detection.message,
-          "Install manually with:",
+          "Upgrade manually with:",
           "npm install -g @astralyn/minicpa@latest",
         ].join("\n"),
       );
     }
 
-    await deps.installMinicpaVersion(detection, latestVersion);
+    if (opts.force) {
+      console.log(`Reinstalling MiniCPA ${latestVersion} with npm…`);
+      await deps.installMinicpaVersion(detection, latestVersion);
+    } else {
+      console.log("Upgrading MiniCPA with npm…");
+      await deps.updateMinicpaVersion(detection, latestVersion);
+    }
   });
 
   console.log(
-    status === "current"
-      ? `MiniCPA reinstalled at ${latestVersion}`
-      : `MiniCPA upgraded to ${latestVersion}`,
+    opts.force
+      ? `MiniCPA reinstalled: ${latestVersion}`
+      : `MiniCPA upgraded: ${opts.currentVersion} → ${latestVersion}`,
   );
 }

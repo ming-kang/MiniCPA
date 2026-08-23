@@ -130,7 +130,8 @@ describe("installBinaryPhase", () => {
       (err: unknown) => {
         assert.ok(err instanceof BinaryUpdateError);
         assert.equal(err.previousRestarted, true);
-        assert.match(err.message, /Previous CPA was restarted/);
+        assert.equal(err.previousRestored, true);
+        assert.match(err.message, /previous CLIProxyAPI version was restored and restarted/i);
         return true;
       },
     );
@@ -161,6 +162,8 @@ describe("installBinaryPhase", () => {
       (err: unknown) => {
         assert.ok(err instanceof BinaryUpdateError);
         assert.equal(err.previousRestarted, false);
+        assert.equal(err.previousRestored, true);
+        assert.match(err.message, /restored but could not be restarted/i);
         assert.match(err.message, /Restart error/);
         return true;
       },
@@ -192,7 +195,7 @@ describe("installBinaryPhase", () => {
       (err: unknown) => {
         assert.ok(err instanceof BinaryUpdateError);
         assert.equal(err.previousRestarted, false);
-        assert.match(err.message, /Backup missing/);
+        assert.match(err.message, /No previous CLIProxyAPI executable could be restored/);
         return true;
       },
     );
@@ -228,8 +231,9 @@ describe("installBinaryPhase", () => {
       (err: unknown) => {
         assert.ok(err instanceof BinaryUpdateError);
         assert.equal(err.previousRestarted, true);
-        // The untouched binary is still on disk, so this is NOT a missing-backup case.
-        assert.doesNotMatch(err.message, /Backup missing/);
+        // The untouched executable is still on disk, so recovery restarted it in place.
+        assert.doesNotMatch(err.message, /could be restored/);
+        assert.match(err.message, /existing CLIProxyAPI version was restarted/i);
         assert.match(err.message, /still locked/);
         return true;
       },
@@ -270,7 +274,7 @@ describe("installBinaryPhase", () => {
       (err: unknown) => {
         assert.ok(err instanceof BinaryUpdateError);
         assert.equal(err.previousRestarted, false);
-        assert.match(err.message, /Backup missing/);
+        assert.match(err.message, /No previous CLIProxyAPI executable could be restored/);
         return true;
       },
     );
@@ -306,7 +310,8 @@ describe("installBinaryPhase", () => {
       (err: unknown) => {
         assert.ok(err instanceof BinaryUpdateError);
         assert.equal(err.previousRestarted, true);
-        assert.doesNotMatch(err.message, /Backup missing/);
+        assert.equal(err.previousRestored, false);
+        assert.match(err.message, /existing CLIProxyAPI version was restarted/i);
         return true;
       },
     );

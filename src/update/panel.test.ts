@@ -229,6 +229,7 @@ describe("updatePanel with disable-auto-update-panel", () => {
     assert.equal(result.skipped, true);
     assert.equal(result.reason, "config-opt-out");
     assert.equal(result.version, "1.2.3");
+    assert.equal(result.previousVersion, "1.2.3");
     assert.deepEqual(deps.calls, []);
     assert.equal(fs.readFileSync(layout.managementHtml, "utf8"), PINNED_PANEL_HTML);
     // The skip reason is returned for the command layer to render (it used to be
@@ -249,6 +250,7 @@ describe("updatePanel with disable-auto-update-panel", () => {
     assert.equal(result.skipped, false);
     assert.equal(result.reason, undefined);
     assert.equal(result.version, "9.9.9");
+    assert.equal(result.previousVersion, "1.2.3");
     assert.deepEqual(deps.calls, ["resolveAsset", "download"]);
     assert.equal(fs.readFileSync(layout.managementHtml, "utf8"), LATEST_PANEL_HTML);
     assert.equal(readInstallState(home).panelVersion, "9.9.9");
@@ -266,6 +268,7 @@ describe("updatePanel with disable-auto-update-panel", () => {
 
     assert.equal(result.skipped, false);
     assert.equal(result.version, "9.9.9");
+    assert.equal(result.previousVersion, "1.2.3");
     assert.deepEqual(deps.calls, ["resolveAsset", "download"]);
     assert.equal(fs.readFileSync(layout.managementHtml, "utf8"), LATEST_PANEL_HTML);
   });
@@ -282,6 +285,7 @@ describe("updatePanel with disable-auto-update-panel", () => {
     // misleading "Panel already unknown (use --force to reinstall)".
     assert.notEqual(result.version, "unknown");
     assert.equal(result.version, "");
+    assert.equal(result.previousVersion, undefined);
     assert.deepEqual(deps.calls, []);
   });
 
@@ -297,6 +301,7 @@ describe("updatePanel with disable-auto-update-panel", () => {
     assert.equal(result.skipped, true);
     assert.equal(result.reason, "already-current");
     assert.equal(result.version, "9.9.9");
+    assert.equal(result.previousVersion, "9.9.9");
     assert.deepEqual(deps.calls, ["resolveAsset"]);
   });
 });

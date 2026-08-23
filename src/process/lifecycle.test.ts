@@ -246,7 +246,7 @@ describe("startDaemon", () => {
     try {
       await assert.rejects(
         () => startDaemon(home, { noWait: true }),
-        /Started CPA but failed to record its PID; the new process was terminated: /,
+        /CLIProxyAPI started, but MiniCPA could not record its PID; the new process was terminated: /,
       );
     } finally {
       fs.renameSync = originalRename;

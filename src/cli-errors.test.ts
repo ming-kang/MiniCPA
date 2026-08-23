@@ -15,9 +15,9 @@ describe("formatCliError", () => {
 
   it("preserves the BinaryUpdateError restart suffix", () => {
     const restarted = new BinaryUpdateError("Checksum mismatch", true);
-    assert.match(formatCliError(restarted), /Previous CPA was restarted/);
+    assert.match(formatCliError(restarted), /existing CLIProxyAPI version was restarted/);
     const notRestarted = new BinaryUpdateError("Checksum mismatch", false);
-    assert.match(formatCliError(notRestarted), /Also failed to restart CPA/);
+    assert.match(formatCliError(notRestarted), /CLIProxyAPI version could not be restarted/);
   });
 
   it("returns plain error messages unchanged", () => {
