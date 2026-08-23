@@ -4,7 +4,17 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-08-23
+## [0.2.1] - 2026-08-24
+
+### Changed
+
+- Eliminated internal dead code, unused helper wrappers (`runCpaTuiProcess`, `normalizeCpaConfig`), and legacy aliases (`buildCpaChildEnv`, `probePidIdentity`) across commands and process lifecycle modules.
+- Candidate asset resolution in `cpa update` now fails fast when a fetched release has empty assets instead of attempting a synthetic candidate with no usable download URLs.
+- Consolidated test isolation helpers and console capture into a unified `test-env.ts` test fixture.
+
+### Fixed
+
+- Fixed potential environment variable leakage across test suites by restoring process environment variables in a cleanup `finally` block before temporary directory deletion.
 
 ### Changed
 
