@@ -228,14 +228,21 @@ describe("runStatus", () => {
     });
     const before = snapshotHome(home);
 
+    const lines: string[] = [];
     const originalLog = console.log;
-    console.log = (): void => {};
+    console.log = (...args: unknown[]): void => {
+      lines.push(args.map((arg) => String(arg)).join(" "));
+    };
     try {
-      await runStatus();
+      await runStatus({ isAutostartEnabled: async () => false });
     } finally {
       console.log = originalLog;
     }
 
+    assert.ok(
+      lines.some((line) => line.includes("Autostart  off")),
+      lines.join("\n"),
+    );
     assert.deepEqual(snapshotHome(home), before, "cpa status must not mutate the instance home");
     assert.equal(fs.existsSync(activeExecutablePath(home)), false);
   });
@@ -263,11 +270,15 @@ describe("runStatus", () => {
           lines.push(args.map((arg) => String(arg)).join(" "));
         };
         try {
-          await runStatus();
+          await runStatus({ isAutostartEnabled: async () => true });
         } finally {
           console.log = originalLog;
         }
 
+        assert.ok(
+          lines.some((l) => l.includes("Autostart  on")),
+          lines.join("\n"),
+        );
         assert.ok(
           lines.some((l) => l.includes(`API        ${baseUrl}`)),
           lines.join("\n"),

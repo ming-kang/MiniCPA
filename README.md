@@ -90,7 +90,8 @@ Upgrading MiniCPA does not stop, restart, or modify the managed CLIProxyAPI proc
 | `cpa start` | Start CLIProxyAPI in the background; waits until HTTP/HTTPS is ready |
 | `cpa stop` | Stop CLIProxyAPI |
 | `cpa restart` | Restart CLIProxyAPI |
-| `cpa status` | Show runtime status, versions, and API/web endpoints; exits 1 when stopped or unreachable |
+| `cpa auto` | Toggle automatic startup for the current user |
+| `cpa status` | Show runtime and autostart status, versions, and API/web endpoints; exits 1 when stopped or unreachable |
 | `cpa web` | Open the web management panel; prints the URL when no browser launcher is available |
 | `cpa tui` | Open the CLIProxyAPI terminal UI; CLIProxyAPI must already be running |
 | `cpa logs` | Show logs; supports `-n`, `--err`, and `-f` |
@@ -101,6 +102,8 @@ Upgrading MiniCPA does not stop, restart, or modify the managed CLIProxyAPI proc
 | `cpa home` | Print the managed instance directory |
 
 `cpa open` remains a compatibility alias for `cpa web`. Advanced recovery/path commands (`clean`, `root`, and `temp`) remain callable but are intentionally omitted from root help.
+
+`cpa auto` toggles login autostart on or off. It changes only future automatic startup and does not start or stop the current CLIProxyAPI process.
 
 `cpa logs` prints the last `-n, --lines <n>` lines from stdout and stderr logs (default `80`; positive whole numbers only). `--err` selects the error log, while `-f`/`--follow` streams new output and ignores `--lines`.
 
@@ -114,7 +117,7 @@ Local readiness probes bypass proxy variables. With `tls.enable: true`, those is
 
 `GITHUB_TOKEN` or `GH_TOKEN` can increase GitHub API quota for panel metadata. GitHub/npm credential environment variables are removed from CLIProxyAPI child processes, version probes, and npm upgrade processes.
 
-Mutating lifecycle commands, `cpa update`, `cpa clean`, and the installing phase of `cpa upgrade` share one exclusive MiniCPA lock. A blocked command reports the in-flight command and PID.
+Mutating lifecycle commands, `cpa auto`, `cpa update`, `cpa clean`, and the installing phase of `cpa upgrade` share one exclusive MiniCPA lock. A blocked command reports the in-flight command and PID.
 
 ## Paths and uninstall
 
@@ -127,6 +130,7 @@ Mutating lifecycle commands, `cpa update`, `cpa clean`, and the installing phase
 CLIProxyAPI runs detached and remains running if MiniCPA is uninstalled. Stop it first and record the data paths:
 
 ```bash
+cpa auto  # turn autostart off if status currently shows it on
 cpa stop
 cpa home
 cpa root

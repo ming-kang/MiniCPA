@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { openInBrowser } from "../browser.js";
 import { readCpaConfigWithWarnings } from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
+import { isAutostartEnabled } from "../process/autostart.js";
 import {
   apiBaseUrl,
   managementUrl,
@@ -72,13 +73,19 @@ export async function runRestart(opts: { noWait?: boolean }): Promise<void> {
   printRunningSummary(ctx, running.pid);
 }
 
-export async function runStatus(): Promise<void> {
+export type StatusDependencies = {
+  isAutostartEnabled?: () => Promise<boolean>;
+};
+
+export async function runStatus(deps?: StatusDependencies): Promise<void> {
   const ctx = createContext();
   // Read-only: an unlocked command must not repair (or race) the instance home.
   const running = inspectRunning(ctx.home);
   const version = await readCurrentRuntimeVersion(ctx.home);
+  const autostart = await (deps?.isAutostartEnabled ?? isAutostartEnabled)();
   printHome(ctx);
   console.log(`Version    ${version ?? "(not installed)"}`);
+  console.log(`Autostart  ${autostart ? "on" : "off"}`);
   if (running) {
     console.log(`Status     running (PID=${running.pid})`);
     if (running.startedAt) console.log(`Started    ${running.startedAt}`);

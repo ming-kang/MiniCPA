@@ -33,12 +33,13 @@ MiniCPA manages one instance at `<cpa root>/instance`. `cpa home` prints its loc
 
 ## Lifecycle and locking
 
-- `cpa start`, `stop`, `restart`, `init`, `update`, `clean`, and the installing phase of `upgrade` take one exclusive lock at `<cpa root>/state/cpa.lock` (atomic create via `O_EXCL` / `wx`). `cpa upgrade check` and an already-current upgrade do not take the lock.
+- `cpa start`, `stop`, `restart`, `auto`, `init`, `update`, `clean`, and the installing phase of `upgrade` take one exclusive lock at `<cpa root>/state/cpa.lock` (atomic create via `O_EXCL` / `wx`). `cpa upgrade check` and an already-current upgrade do not take the lock.
 - If another MiniCPA command holds the lock, you get an error naming its PID — wait and retry.
 - Stale locks (dead PID, or PID reuse detected via a process start marker) are preempted safely: the lock is renamed aside, its content re-verified against the stale decision, and only then removed. A freshly created but not-yet-written lock is waited out, never deleted.
 - PID ownership requires an exact executable-path match **or** a matching spawn-time start marker (boot id + process start time, immune to PID reuse). If neither can be verified, MiniCPA preserves the PID record to avoid a duplicate start and **refuses to terminate the process**.
 - Stop waits for process death after force-kill before clearing the PID file. `cpa stop` no longer waits for the binary **file** to become unlocked — that wait belongs to `cpa update`, which performs it before replacing the binary.
 - Windows stop: soft `taskkill /T`; when the graceful signal cannot be delivered (typical for the windowless background process), MiniCPA force-kills immediately instead of waiting out the grace period, so stop completes in about a second. Unlock probes recover `*.unlock-probe` residue; the update path waits up to ~30s (backoff) for the binary file lock.
+- `cpa auto` toggles automatic startup for the current user. The registered startup action runs `cpa start --no-wait`; toggling it does not start or stop the current process. `cpa status` reports the switch as `Autostart  on` or `Autostart  off`.
 - CLIProxyAPI is spawned **detached** and outlives the `cpa` process — including `npm uninstall -g @astralyn/minicpa`. Run `cpa stop` before removing MiniCPA; afterwards only `taskkill /PID <pid> /F` (Windows) or `kill <pid>` can end it, using the PID in `<cpa home>/state/cpa.pid`. Uninstalling never deletes `cpa root`, so `config.yaml` (with its generated api-key) and the `auths/` OAuth tokens stay on disk until you remove them.
 - `cpa start` and `cpa doctor` print warnings when `host`, `port`, or recognized `tls` fields in `config.yaml` have invalid shapes and are ignored or replaced by defaults.
 - Readiness probes try `/management.html` then `/` so binary-only installs can start without a panel. They use HTTP by default and HTTPS when `tls.enable` is true; wildcard listen addresses also probe the corresponding IPv4/IPv6 loopback URL.
@@ -99,6 +100,7 @@ MiniCPA manages one instance at `<cpa root>/instance`. `cpa home` prints its loc
 Useful paths:
 
 ```bash
+cpa auto    # toggle automatic startup for the current user
 cpa home    # instance (config, binary, logs)
 cpa root    # MiniCPA app data
 cpa temp    # download/extract staging (safe to wipe)

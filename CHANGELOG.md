@@ -4,6 +4,10 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+### Added
+
+- Added `cpa auto` to toggle automatic startup for the current user, with the switch state shown by `cpa status`.
+
 ## [0.2.1] - 2026-08-24
 
 ### Changed

@@ -81,6 +81,7 @@ describe("cli smoke", () => {
       "start",
       "stop",
       "restart",
+      "auto",
       "status",
       "web",
       "tui",
@@ -100,8 +101,18 @@ describe("cli smoke", () => {
       stdout,
       /^ {2}init \[options\]\s+Initialize configuration and install the latest components$/m,
     );
+    assert.match(stdout, /^ {2}auto\s+Toggle CLIProxyAPI autostart for the current user$/m);
     assert.match(stdout, /^ {2}web\s+Open the web management panel$/m);
     assert.match(stdout, /^ {2}tui\s+Open the CLIProxyAPI terminal UI$/m);
+  });
+
+  it("shows help for the autostart toggle without changing its state", () => {
+    const auto = runCli(["auto", "--help"]);
+
+    assert.equal(auto.status, 0);
+    assert.equal(auto.stderr, "");
+    assert.match(auto.stdout, /Usage: cpa auto/);
+    assert.match(auto.stdout, /Toggle CLIProxyAPI autostart for the current user/);
   });
 
   it("keeps web canonical and open as a hidden compatibility command", () => {

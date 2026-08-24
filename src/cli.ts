@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { withCliErrors } from "./cli-errors.js";
+import { runAuto } from "./commands/auto-cmd.js";
 import { runClean } from "./commands/clean.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runInit } from "./commands/init.js";
@@ -91,8 +92,17 @@ program
   );
 
 program
+  .command("auto")
+  .description("Toggle CLIProxyAPI autostart for the current user")
+  .action(
+    withCliErrors(async () => {
+      await runAuto();
+    }),
+  );
+
+program
   .command("status")
-  .description("Show CLIProxyAPI runtime status and endpoints")
+  .description("Show CLIProxyAPI runtime, autostart, and endpoints")
   .action(
     withCliErrors(async () => {
       await runStatus();
@@ -296,7 +306,7 @@ program
   );
 
 const rootCommandGroups = [
-  { title: "Lifecycle", commands: ["init", "start", "stop", "restart", "status"] },
+  { title: "Lifecycle", commands: ["init", "start", "stop", "restart", "auto", "status"] },
   { title: "Interfaces", commands: ["web", "tui", "logs"] },
   { title: "Updates", commands: ["update", "upgrade"] },
   { title: "Diagnostics", commands: ["doctor"] },
