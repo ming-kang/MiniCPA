@@ -103,7 +103,7 @@ Upgrading MiniCPA does not stop, restart, or modify the managed CLIProxyAPI proc
 
 `cpa open` remains a compatibility alias for `cpa web`. Advanced recovery/path commands (`clean`, `root`, and `temp`) remain callable but are intentionally omitted from root help.
 
-`cpa auto` toggles login autostart on or off. It changes only future automatic startup and does not start or stop the current CLIProxyAPI process.
+`cpa auto` toggles login autostart on or off. Enabling it requires a stable, direct npm-global MiniCPA installation; npx caches, local/source installs, and links are rejected. It changes only future automatic startup and does not start or stop the current CLIProxyAPI process. Linux uses a systemd user unit. `cpa status` reports stale registrations as off and reports `unknown` without hiding runtime status when the OS switch cannot be inspected.
 
 `cpa logs` prints the last `-n, --lines <n>` lines from stdout and stderr logs (default `80`; positive whole numbers only). `--err` selects the error log, while `-f`/`--follow` streams new output and ignores `--lines`.
 

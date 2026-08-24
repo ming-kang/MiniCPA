@@ -97,6 +97,10 @@ export type SelfUpgradeDetectionDependencies = {
   env: NodeJS.ProcessEnv;
 };
 
+export type NpmGlobalInstallDetectionOptions = {
+  requireWritable?: boolean;
+};
+
 export type SelfUpgradeInstallDependencies = {
   spawn: SpawnCommand;
   readFile(filePath: string, encoding: "utf8"): Promise<string>;
@@ -288,10 +292,12 @@ async function globalBinTargetsPackage(
 /**
  * Prove that packageRoot is a direct npm global installation. Ambiguous layouts are rejected.
  * This function never mutates the installation and only invokes `npm root -g`.
+ * Callers that only need a stable launcher may skip the write-access checks.
  */
 export async function detectNpmGlobalInstall(
   packageRoot: string,
   dependencies: Partial<SelfUpgradeDetectionDependencies> = {},
+  options: NpmGlobalInstallDetectionOptions = {},
 ): Promise<NpmGlobalInstallDetection> {
   const platform = dependencies.platform ?? process.platform;
   const fileSystem = dependencies.fs ?? defaultFileSystem;
@@ -301,7 +307,7 @@ export async function detectNpmGlobalInstall(
   const resolvedPackageRoot = api.resolve(packageRoot);
 
   if (hasPathPart(resolvedPackageRoot, "_npx", platform)) {
-    return unsupported("npx", "npx cache installations cannot be upgraded in place.");
+    return unsupported("npx", "npx cache installations are not stable npm-global installs.");
   }
   const otherManagerParts = [".pnpm", "pnpm-global", ".yarn", ".bun"];
   if (otherManagerParts.some((part) => hasPathPart(resolvedPackageRoot, part, platform))) {
@@ -450,9 +456,11 @@ export async function detectNpmGlobalInstall(
       }
     }
 
-    await fileSystem.access(layout.prefix, constants.W_OK);
-    await fileSystem.access(layout.globalRoot, constants.W_OK);
-    await fileSystem.access(expectedPackageRoot, constants.W_OK);
+    if (options.requireWritable !== false) {
+      await fileSystem.access(layout.prefix, constants.W_OK);
+      await fileSystem.access(layout.globalRoot, constants.W_OK);
+      await fileSystem.access(expectedPackageRoot, constants.W_OK);
+    }
   } catch (error) {
     if (
       errorCode(error) === "EACCES" ||

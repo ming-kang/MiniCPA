@@ -247,6 +247,30 @@ describe("runStatus", () => {
     assert.equal(fs.existsSync(activeExecutablePath(home)), false);
   });
 
+  it("continues reporting runtime status when autostart inspection fails", async () => {
+    useTempRoot();
+
+    const output = await captureConsole(() =>
+      runStatus({
+        isAutostartEnabled: async () => {
+          throw new Error("user manager unavailable");
+        },
+      }),
+    );
+
+    assert.ok(
+      output.stdout.some((line) => line.startsWith("Home       ")),
+      output.stdout.join("\n"),
+    );
+    assert.ok(output.stdout.includes("Version    (not installed)"), output.stdout.join("\n"));
+    assert.ok(output.stdout.includes("Autostart  unknown"), output.stdout.join("\n"));
+    assert.ok(output.stdout.includes("Status     stopped"), output.stdout.join("\n"));
+    assert.deepEqual(output.stderr, [
+      "Warning: could not inspect autostart: user manager unavailable",
+    ]);
+    assert.equal(process.exitCode, 1);
+  });
+
   it("reports HTTPS URLs and HTTP ok when running with TLS enabled", async () => {
     useTempRoot();
     await withHttpsFixture(

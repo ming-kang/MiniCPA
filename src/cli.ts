@@ -96,7 +96,7 @@ program
   .description("Toggle CLIProxyAPI autostart for the current user")
   .action(
     withCliErrors(async () => {
-      await runAuto();
+      await runAuto({ packageRoot });
     }),
   );
 

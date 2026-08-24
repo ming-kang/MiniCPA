@@ -82,10 +82,20 @@ export async function runStatus(deps?: StatusDependencies): Promise<void> {
   // Read-only: an unlocked command must not repair (or race) the instance home.
   const running = inspectRunning(ctx.home);
   const version = await readCurrentRuntimeVersion(ctx.home);
-  const autostart = await (deps?.isAutostartEnabled ?? isAutostartEnabled)();
+  let autostart: boolean | undefined;
+  let autostartWarning: string | undefined;
+  try {
+    autostart = await (deps?.isAutostartEnabled ?? isAutostartEnabled)();
+  } catch (err) {
+    autostartWarning = err instanceof Error && err.message ? err.message : String(err);
+  }
+  const autostartLabel = autostart === undefined ? "unknown" : autostart ? "on" : "off";
   printHome(ctx);
   console.log(`Version    ${version ?? "(not installed)"}`);
-  console.log(`Autostart  ${autostart ? "on" : "off"}`);
+  console.log(`Autostart  ${autostartLabel}`);
+  if (autostartWarning) {
+    console.error(`Warning: could not inspect autostart: ${autostartWarning}`);
+  }
   if (running) {
     console.log(`Status     running (PID=${running.pid})`);
     if (running.startedAt) console.log(`Started    ${running.startedAt}`);

@@ -304,6 +304,31 @@ describe("detectNpmGlobalInstall", () => {
     }
   });
 
+  it("can prove a stable global install without requiring write access", async () => {
+    const installation = await makeGlobalInstall("read-only");
+    let accessCalled = false;
+    const result = await detectNpmGlobalInstall(
+      installation.packageRoot,
+      {
+        platform: testPlatform,
+        capture: captureRoot(installation.globalRoot),
+        fs: {
+          readFile: (filePath, encoding) => fs.readFile(filePath, encoding),
+          realpath: (filePath) => fs.realpath(filePath),
+          lstat: (filePath) => fs.lstat(filePath),
+          access: async () => {
+            accessCalled = true;
+            throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+          },
+        },
+      },
+      { requireWritable: false },
+    );
+
+    assert.equal(result.supported, true);
+    assert.equal(accessCalled, false);
+  });
+
   it("rejects a project prefix, an unwritable prefix, and npm ENOENT", async () => {
     const project = await makeGlobalInstall("project-prefix");
     await fs.writeFile(path.join(project.prefix, "package.json"), "{}");
