@@ -4,9 +4,16 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-24
+
 ### Added
 
-- Added `cpa auto` to toggle automatic startup for the current user, with the switch state shown by `cpa status`.
+- Added `cpa auto` to toggle automatic startup for the current user, plus explicit `cpa auto on` / `cpa auto off` modes and effective state reporting through `cpa status`.
+
+### Fixed
+
+- Distinguished stale and OS-disabled registrations from a genuinely absent autostart entry, and made explicit disable remove registrations without relying on inspection.
+- Preserved Linux's effective `XDG_DATA_HOME`, rolled back unit files when `systemctl` fails or cannot start, and stopped autostart writes from changing existing standard directory permissions.
 
 ## [0.2.1] - 2026-08-24
 

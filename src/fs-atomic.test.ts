@@ -56,6 +56,14 @@ describe("writeFileAtomic", () => {
     }
   });
 
+  it("can preserve an existing standard directory mode", () => {
+    if (process.platform === "win32") return;
+    const dir = tempDir();
+    fs.chmodSync(dir, 0o755);
+    writeFileAtomic(path.join(dir, "launcher.conf"), "launcher", { hardenDirectory: false });
+    assert.equal(fs.statSync(dir).mode & 0o777, 0o755);
+  });
+
   it("overwrites existing file", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-atomic-"));
     temps.push(dir);

@@ -5,7 +5,8 @@ import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import {
   type AutostartDependencies,
-  isAutostartEnabled,
+  type AutostartState,
+  inspectAutostartState,
   launchAgentContents,
   setAutostartEnabled,
   systemdUnitContents,
@@ -40,39 +41,36 @@ function createNode(root: string, relativePath: string): string {
   return nodePath;
 }
 
-function successfulRunner(calls: CommandCall[]): CommandRunner {
-  return async (command, args) => {
-    calls.push({ command, args });
-    return {
-      code: 0,
-      stdout: args[1] === "is-enabled" ? "enabled\n" : "",
-      stderr: "",
-    };
-  };
-}
-
 afterEach(() => {
   for (const dir of temps.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 describe("Windows autostart", () => {
-  it("inspects the registered command and updates the current-user Run value", async () => {
+  it("distinguishes off, on, stale, and OS-disabled registrations", async () => {
     const root = tempDir();
     const cliPath = createCli(root);
     const nodePath = createNode(root, path.join("Program Files", "nodejs", "node.exe"));
     const expected = `"${nodePath}" "${cliPath}" start --no-wait`;
+    let state: AutostartState = "off";
     const calls: CommandCall[] = [];
-    let registration: "absent" | "enabled" | "stale" = "absent";
     const runCommand: CommandRunner = async (command, args, options) => {
       calls.push({ command, args });
-      if (command === "powershell.exe") {
-        assert.equal(options?.env?.MINICPA_AUTOSTART_EXPECTED, expected);
-        if (registration === "enabled") return { code: 0, stdout: "enabled", stderr: "" };
-        if (registration === "stale") return { code: 2, stdout: "stale", stderr: "" };
-        return { code: 1, stdout: "absent", stderr: "" };
+      const mode = options?.env?.MINICPA_AUTOSTART_MODE;
+      if (mode !== undefined) {
+        assert.ok(args.at(-1)?.includes("StartupApproved"));
+        assert.ok(args.at(-1)?.includes("DeleteValue"));
+        state = mode === "on" ? "on" : "off";
+        return { code: 0, stdout: "", stderr: "" };
       }
-      registration = args[0] === "add" ? "enabled" : "absent";
-      return { code: 0, stdout: "", stderr: "" };
+
+      assert.equal(options?.env?.MINICPA_AUTOSTART_EXPECTED, expected);
+      const result = {
+        on: { code: 0, stdout: "on", stderr: "" },
+        off: { code: 1, stdout: "off", stderr: "" },
+        stale: { code: 2, stdout: "stale", stderr: "" },
+        disabled: { code: 4, stdout: "disabled", stderr: "" },
+      }[state];
+      return result;
     };
     const deps: AutostartDependencies = {
       platform: "win32",
@@ -81,29 +79,34 @@ describe("Windows autostart", () => {
       runCommand,
     };
 
-    assert.equal(await isAutostartEnabled(deps), false);
+    for (const expectedState of ["off", "stale", "disabled"] as const) {
+      state = expectedState;
+      assert.equal(await inspectAutostartState(deps), expectedState);
+    }
+
     await setAutostartEnabled(true, deps);
-    assert.equal(await isAutostartEnabled(deps), true);
-
-    registration = "stale";
-    assert.equal(await isAutostartEnabled(deps), false);
-    registration = "enabled";
+    assert.equal(await inspectAutostartState(deps), "on");
     await setAutostartEnabled(false, deps);
-    assert.equal(registration, "absent", "an existing registration must toggle off directly");
+    assert.equal(await inspectAutostartState(deps), "off");
 
-    const inspect = calls.find((call) => call.command === "powershell.exe");
-    assert.ok(inspect?.args.includes("-NoProfile"));
-    const add = calls.find((call) => call.args[0] === "add");
-    assert.equal(add?.command, "reg.exe");
-    assert.ok(add?.args.includes(expected));
-    const remove = calls.find((call) => call.args[0] === "delete");
-    assert.equal(remove?.command, "reg.exe");
+    assert.ok(calls.every((call) => call.command === "powershell.exe"));
+    assert.ok(calls.every((call) => call.args.includes("-NoProfile")));
   });
 
-  it("surfaces registry inspection failures", async () => {
+  it("makes disabling idempotent and surfaces registry inspection failures", async () => {
+    let mode: string | undefined;
+    await setAutostartEnabled(false, {
+      platform: "win32",
+      runCommand: async (_command, _args, options) => {
+        mode = options?.env?.MINICPA_AUTOSTART_MODE;
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    });
+    assert.equal(mode, "off");
+
     await assert.rejects(
       () =>
-        isAutostartEnabled({
+        inspectAutostartState({
           platform: "win32",
           runCommand: async () => ({ code: 3, stdout: "", stderr: "access denied" }),
         }),
@@ -113,20 +116,37 @@ describe("Windows autostart", () => {
 });
 
 describe("macOS autostart", () => {
-  it("writes and removes a user LaunchAgent", async () => {
+  it("writes, inspects, re-enables, and removes a user LaunchAgent", async () => {
     const home = tempDir();
     const cliPath = createCli(home);
     const nodePath = createNode(home, path.join("opt", "Node & Tools", "node"));
+    const calls: CommandCall[] = [];
+    let osDisabled = false;
     const deps: AutostartDependencies = {
       platform: "darwin",
       homedir: home,
+      uid: 501,
       nodePath,
       cliPath,
+      runCommand: async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "enable") {
+          osDisabled = false;
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        return {
+          code: 0,
+          stdout: osDisabled
+            ? 'disabled services = { "com.astralyn.minicpa" => true }'
+            : 'disabled services = { "com.astralyn.minicpa" => false }',
+          stderr: "",
+        };
+      },
     };
 
-    assert.equal(await isAutostartEnabled(deps), false);
+    assert.equal(await inspectAutostartState(deps), "off");
     await setAutostartEnabled(true, deps);
-    assert.equal(await isAutostartEnabled(deps), true);
+    assert.equal(await inspectAutostartState(deps), "on");
 
     const plist = path.join(home, "Library", "LaunchAgents", "com.astralyn.minicpa.plist");
     const contents = fs.readFileSync(plist, "utf8");
@@ -134,13 +154,22 @@ describe("macOS autostart", () => {
     assert.match(contents, /<key>KeepAlive<\/key>\n {2}<false\/>/);
     assert.ok(contents.includes(nodePath.replace("&", "&amp;")));
     assert.ok(contents.includes("<string>--no-wait</string>"));
+    assert.deepEqual(calls[0], {
+      command: "launchctl",
+      args: ["enable", "gui/501/com.astralyn.minicpa"],
+    });
+
+    osDisabled = true;
+    assert.equal(await inspectAutostartState(deps), "disabled");
+    await setAutostartEnabled(true, deps);
+    assert.equal(osDisabled, false, "enabling must clear launchctl's disabled override");
 
     deps.nodePath = createNode(home, path.join("new-node", "node"));
-    assert.equal(await isAutostartEnabled(deps), false, "a stale launcher must not report on");
+    assert.equal(await inspectAutostartState(deps), "stale");
     deps.nodePath = nodePath;
 
     await setAutostartEnabled(false, deps);
-    assert.equal(await isAutostartEnabled(deps), false);
+    assert.equal(await inspectAutostartState(deps), "off");
   });
 
   it("escapes XML path characters and rejects control characters", () => {
@@ -153,44 +182,73 @@ describe("macOS autostart", () => {
     );
   });
 
-  it("surfaces LaunchAgent inspection errors", async () => {
+  it("surfaces inspection errors and removes a plist when launchctl enable throws", async () => {
     const home = tempDir();
+    const cliPath = createCli(home);
+    const deps: AutostartDependencies = {
+      platform: "darwin",
+      homedir: home,
+      uid: 501,
+      cliPath,
+      runCommand: async () => {
+        throw new Error("launchctl unavailable");
+      },
+    };
     const plist = path.join(home, "Library", "LaunchAgents", "com.astralyn.minicpa.plist");
-    fs.mkdirSync(plist, { recursive: true });
 
-    await assert.rejects(() => isAutostartEnabled({ platform: "darwin", homedir: home }));
+    await assert.rejects(() => setAutostartEnabled(true, deps), /launchctl unavailable/);
+    assert.equal(fs.existsSync(plist), false);
+
+    fs.mkdirSync(plist, { recursive: true });
+    await assert.rejects(() => inspectAutostartState(deps));
   });
 });
 
 describe("Linux autostart", () => {
-  it("writes, enables, disables, and removes a systemd user unit", async () => {
+  it("writes, enables, inspects, disables, and removes a systemd user unit", async () => {
     const home = tempDir();
-    const configHome = path.join(home, "config");
+    const configHome = path.join(home, ".config");
+    const dataHome = path.join(home, "data home");
     const cliPath = createCli(home);
     const calls: CommandCall[] = [];
+    let enablement: "enabled" | "disabled" = "disabled";
     const deps: AutostartDependencies = {
       platform: "linux",
       homedir: home,
-      env: { XDG_CONFIG_HOME: configHome },
+      env: { XDG_CONFIG_HOME: path.join(home, "shell-config"), XDG_DATA_HOME: dataHome },
       nodePath: createNode(home, path.join("opt", "node", "bin", "node")),
       cliPath,
-      runCommand: successfulRunner(calls),
+      runCommand: async (command, args) => {
+        calls.push({ command, args });
+        if (args[1] === "enable") enablement = "enabled";
+        if (args[1] === "disable") enablement = "disabled";
+        if (args[1] === "is-enabled") {
+          return {
+            code: enablement === "enabled" ? 0 : 1,
+            stdout: `${enablement}\n`,
+            stderr: "",
+          };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
     };
 
-    assert.equal(await isAutostartEnabled(deps), false);
+    assert.equal(await inspectAutostartState(deps), "off");
     await setAutostartEnabled(true, deps);
-    assert.equal(await isAutostartEnabled(deps), true);
+    assert.equal(await inspectAutostartState(deps), "on");
 
     const unit = path.join(configHome, "systemd", "user", "minicpa.service");
     const contents = fs.readFileSync(unit, "utf8");
     assert.match(contents, /^Type=oneshot$/m);
     assert.match(contents, /^RemainAfterExit=yes$/m);
+    assert.ok(
+      contents.includes(`Environment="XDG_DATA_HOME=${dataHome.replaceAll("\\", "\\\\")}"`),
+    );
     assert.match(contents, /start --no-wait/);
     assert.deepEqual(calls[0], {
       command: "systemctl",
-      args: ["--user", "enable", "minicpa.service"],
+      args: ["--user", "enable", unit],
     });
-
     assert.deepEqual(calls[1], {
       command: "systemctl",
       args: ["--user", "is-enabled", "minicpa.service"],
@@ -201,72 +259,115 @@ describe("Linux autostart", () => {
       command: "systemctl",
       args: ["--user", "disable", "minicpa.service"],
     });
-    assert.equal(await isAutostartEnabled(deps), false);
+    assert.equal(await inspectAutostartState(deps), "off");
   });
 
-  it("reports the systemd enablement state and surfaces inspection failures", async () => {
+  it("reports disabled and stale registrations without calling them off", async () => {
     const home = tempDir();
-    const configHome = path.join(home, "config");
+    const configHome = path.join(home, ".config");
     const cliPath = createCli(home);
-    let inspection: "disabled" | "enabled-runtime" | "error" = "disabled";
+    let inspection: "disabled" | "enabled-runtime" = "disabled";
+    let inspectionCalls = 0;
+    const deps: AutostartDependencies = {
+      platform: "linux",
+      homedir: home,
+      env: { XDG_CONFIG_HOME: configHome, XDG_DATA_HOME: path.join(home, "data") },
+      cliPath,
+      runCommand: async (_command, args) => {
+        if (args[1] !== "is-enabled") return { code: 0, stdout: "", stderr: "" };
+        inspectionCalls++;
+        return {
+          code: inspection === "enabled-runtime" ? 0 : 1,
+          stdout: `${inspection}\n`,
+          stderr: "",
+        };
+      },
+    };
+
+    await setAutostartEnabled(true, deps);
+    assert.equal(await inspectAutostartState(deps), "disabled");
+    inspection = "enabled-runtime";
+    assert.equal(await inspectAutostartState(deps), "disabled");
+
+    deps.env = { ...deps.env, XDG_DATA_HOME: path.join(home, "new-data") };
+    assert.equal(await inspectAutostartState(deps), "stale");
+    assert.equal(inspectionCalls, 2, "stale content must not query an unrelated enablement state");
+  });
+
+  it("escapes systemd argument and environment syntax", () => {
+    const contents = systemdUnitContents(
+      "/opt/node%24/node",
+      `/tmp/\${cache}/a"b/cli.js`,
+      '/data/$cash/"quoted"/%store',
+    );
+    assert.ok(contents.includes('ExecStart="/opt/node%%24/node" "/tmp/$${cache}/a\\"b/cli.js"'));
+    assert.ok(contents.includes('Environment="XDG_DATA_HOME=/data/$cash/\\"quoted\\"/%%store"'));
+    assert.throws(
+      () => systemdUnitContents("/node", "/tmp/bad\npath/cli.js", "/data"),
+      /cannot contain control characters/,
+    );
+    assert.throws(
+      () => systemdUnitContents("/node", "/cli.js", "/bad\ndata"),
+      /cannot contain control characters/,
+    );
+  });
+
+  it("removes the unit when systemctl returns a failure or throws", async () => {
+    for (const outcome of ["nonzero", "throw"] as const) {
+      const home = tempDir();
+      const configHome = path.join(home, ".config");
+      const cliPath = createCli(home);
+      let commandCalls = 0;
+      const deps: AutostartDependencies = {
+        platform: "linux",
+        homedir: home,
+        env: { XDG_CONFIG_HOME: configHome },
+        cliPath,
+        runCommand: async () => {
+          commandCalls++;
+          if (outcome === "throw") throw new Error("spawn systemctl ENOENT");
+          return { code: 1, stdout: "", stderr: "no user manager" };
+        },
+      };
+      const unit = path.join(configHome, "systemd", "user", "minicpa.service");
+
+      await assert.rejects(
+        () => setAutostartEnabled(true, deps),
+        outcome === "throw" ? /spawn systemctl ENOENT/ : /no user manager/,
+      );
+      assert.equal(fs.existsSync(unit), false);
+      assert.equal(await inspectAutostartState(deps), "off");
+      assert.equal(commandCalls, 1, "an absent unit must not wedge later inspection");
+    }
+  });
+
+  it("removes the unit even when systemctl cannot disable it", async () => {
+    const home = tempDir();
+    const configHome = path.join(home, ".config");
+    const cliPath = createCli(home);
+    let failDisable = false;
     const deps: AutostartDependencies = {
       platform: "linux",
       homedir: home,
       env: { XDG_CONFIG_HOME: configHome },
       cliPath,
       runCommand: async (_command, args) => {
-        if (args[1] !== "is-enabled") return { code: 0, stdout: "", stderr: "" };
-        if (inspection === "disabled") return { code: 1, stdout: "disabled\n", stderr: "" };
-        if (inspection === "enabled-runtime") {
-          return { code: 0, stdout: "enabled-runtime\n", stderr: "" };
-        }
-        return { code: 1, stdout: "", stderr: "user manager unavailable" };
+        if (failDisable && args[1] === "disable") throw new Error("user manager disappeared");
+        return { code: 0, stdout: args[1] === "is-enabled" ? "enabled\n" : "", stderr: "" };
       },
     };
 
     await setAutostartEnabled(true, deps);
-    assert.equal(await isAutostartEnabled(deps), false);
-
-    inspection = "enabled-runtime";
-    assert.equal(await isAutostartEnabled(deps), false, "runtime enablement is not persistent");
-
-    inspection = "error";
-    await assert.rejects(
-      () => isAutostartEnabled(deps),
-      /Failed to inspect autostart: user manager unavailable/,
-    );
-  });
-
-  it("escapes systemd argument syntax and rejects control characters", () => {
-    const contents = systemdUnitContents("/opt/node%24/node", `/tmp/\${cache}/a"b/cli.js`);
-    assert.ok(contents.includes(`ExecStart="/opt/node%%24/node" "/tmp/$\${cache}/a\\"b/cli.js"`));
-    assert.throws(
-      () => systemdUnitContents("/node", "/tmp/bad\npath/cli.js"),
-      /cannot contain control characters/,
-    );
-  });
-
-  it("removes the unit when systemctl cannot enable it", async () => {
-    const home = tempDir();
-    const configHome = path.join(home, "config");
-    const cliPath = createCli(home);
-    const deps: AutostartDependencies = {
-      platform: "linux",
-      homedir: home,
-      env: { XDG_CONFIG_HOME: configHome },
-      cliPath,
-      runCommand: async () => ({ code: 1, stdout: "", stderr: "no user manager" }),
-    };
-
-    await assert.rejects(() => setAutostartEnabled(true, deps), /no user manager/);
-    assert.equal(await isAutostartEnabled(deps), false);
+    failDisable = true;
+    await assert.rejects(() => setAutostartEnabled(false, deps), /user manager disappeared/);
+    assert.equal(await inspectAutostartState(deps), "off");
   });
 });
 
 describe("unsupported platform", () => {
   it("rejects autostart operations", async () => {
     await assert.rejects(
-      () => isAutostartEnabled({ platform: "freebsd" }),
+      () => inspectAutostartState({ platform: "freebsd" }),
       /not supported on freebsd/,
     );
   });

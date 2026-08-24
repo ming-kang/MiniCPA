@@ -80,18 +80,22 @@ function recoverReplaceBackup(filePath: string, backupPath: string): void {
 
 /**
  * Write a private file via exclusive temp + rename.
+ * By default the parent directory is hardened to 0700; callers writing standard
+ * OS directories can preserve an existing mode with `hardenDirectory: false`.
  * If replacement is unsupported (notably on Windows), preserve the old file until
  * the new file is safely in place and restore it on failure.
  */
 export function writeFileAtomic(
   filePath: string,
   data: string | Buffer,
-  options?: { mode?: number },
+  options?: { mode?: number; hardenDirectory?: boolean },
 ): void {
   const directory = path.dirname(filePath);
   const mode = options?.mode ?? PRIVATE_FILE_MODE;
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  if (process.platform !== "win32") fs.chmodSync(directory, 0o700);
+  if (process.platform !== "win32" && options?.hardenDirectory !== false) {
+    fs.chmodSync(directory, 0o700);
+  }
 
   recoverReplaceBackup(filePath, replaceBackupPath(filePath));
 

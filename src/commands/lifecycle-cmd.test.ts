@@ -234,7 +234,7 @@ describe("runStatus", () => {
       lines.push(args.map((arg) => String(arg)).join(" "));
     };
     try {
-      await runStatus({ isAutostartEnabled: async () => false });
+      await runStatus({ inspectAutostartState: async () => "off" });
     } finally {
       console.log = originalLog;
     }
@@ -252,7 +252,7 @@ describe("runStatus", () => {
 
     const output = await captureConsole(() =>
       runStatus({
-        isAutostartEnabled: async () => {
+        inspectAutostartState: async () => {
           throw new Error("user manager unavailable");
         },
       }),
@@ -269,6 +269,17 @@ describe("runStatus", () => {
       "Warning: could not inspect autostart: user manager unavailable",
     ]);
     assert.equal(process.exitCode, 1);
+  });
+
+  it("does not collapse stale or OS-disabled registrations into off", async () => {
+    useTempRoot();
+
+    for (const state of ["stale", "disabled"] as const) {
+      const output = await captureConsole(() =>
+        runStatus({ inspectAutostartState: async () => state }),
+      );
+      assert.ok(output.stdout.includes(`Autostart  ${state}`), output.stdout.join("\n"));
+    }
   });
 
   it("reports HTTPS URLs and HTTP ok when running with TLS enabled", async () => {
@@ -294,7 +305,7 @@ describe("runStatus", () => {
           lines.push(args.map((arg) => String(arg)).join(" "));
         };
         try {
-          await runStatus({ isAutostartEnabled: async () => true });
+          await runStatus({ inspectAutostartState: async () => "on" });
         } finally {
           console.log = originalLog;
         }

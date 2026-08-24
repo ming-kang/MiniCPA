@@ -90,7 +90,7 @@ Upgrading MiniCPA does not stop, restart, or modify the managed CLIProxyAPI proc
 | `cpa start` | Start CLIProxyAPI in the background; waits until HTTP/HTTPS is ready |
 | `cpa stop` | Stop CLIProxyAPI |
 | `cpa restart` | Restart CLIProxyAPI |
-| `cpa auto` | Toggle automatic startup for the current user |
+| `cpa auto [on\|off]` | Toggle or explicitly set automatic startup for the current user |
 | `cpa status` | Show runtime and autostart status, versions, and API/web endpoints; exits 1 when stopped or unreachable |
 | `cpa web` | Open the web management panel; prints the URL when no browser launcher is available |
 | `cpa tui` | Open the CLIProxyAPI terminal UI; CLIProxyAPI must already be running |
@@ -103,7 +103,9 @@ Upgrading MiniCPA does not stop, restart, or modify the managed CLIProxyAPI proc
 
 `cpa open` remains a compatibility alias for `cpa web`. Advanced recovery/path commands (`clean`, `root`, and `temp`) remain callable but are intentionally omitted from root help.
 
-`cpa auto` toggles login autostart on or off. Enabling it requires a stable, direct npm-global MiniCPA installation; npx caches, local/source installs, and links are rejected. It changes only future automatic startup and does not start or stop the current CLIProxyAPI process. Linux uses a systemd user unit. `cpa status` reports stale registrations as off and reports `unknown` without hiding runtime status when the OS switch cannot be inspected.
+`cpa auto` toggles login autostart; `cpa auto on` and `cpa auto off` set it explicitly. Use the explicit `off` form for deterministic cleanup even when inspection is unavailable. Enabling requires a stable, direct npm-global MiniCPA installation; npx caches, local/source installs, and links are rejected. It changes only future automatic startup and does not start or stop the current CLIProxyAPI process. Linux uses a systemd user unit and records the effective `XDG_DATA_HOME` so the login service selects the same MiniCPA instance.
+
+`cpa status` reports `Autostart  on`, `off`, `stale`, or `disabled`. `stale` means an OS registration exists but targets a different launcher; an argument-free `cpa auto` removes it. `disabled` means the registration is present but disabled by the OS; an argument-free `cpa auto` re-enables it. Inspection failures are reported as `unknown` without hiding runtime status.
 
 `cpa logs` prints the last `-n, --lines <n>` lines from stdout and stderr logs (default `80`; positive whole numbers only). `--err` selects the error log, while `-f`/`--follow` streams new output and ignores `--lines`.
 
@@ -130,7 +132,7 @@ Mutating lifecycle commands, `cpa auto`, `cpa update`, `cpa clean`, and the inst
 CLIProxyAPI runs detached and remains running if MiniCPA is uninstalled. Stop it first and record the data paths:
 
 ```bash
-cpa auto  # turn autostart off if status currently shows it on
+cpa auto off  # remove active, stale, or OS-disabled autostart registrations
 cpa stop
 cpa home
 cpa root

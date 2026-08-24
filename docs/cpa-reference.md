@@ -39,7 +39,8 @@ MiniCPA manages one instance at `<cpa root>/instance`. `cpa home` prints its loc
 - PID ownership requires an exact executable-path match **or** a matching spawn-time start marker (boot id + process start time, immune to PID reuse). If neither can be verified, MiniCPA preserves the PID record to avoid a duplicate start and **refuses to terminate the process**.
 - Stop waits for process death after force-kill before clearing the PID file. `cpa stop` no longer waits for the binary **file** to become unlocked — that wait belongs to `cpa update`, which performs it before replacing the binary.
 - Windows stop: soft `taskkill /T`; when the graceful signal cannot be delivered (typical for the windowless background process), MiniCPA force-kills immediately instead of waiting out the grace period, so stop completes in about a second. Unlock probes recover `*.unlock-probe` residue; the update path waits up to ~30s (backoff) for the binary file lock.
-- `cpa auto` toggles automatic startup for the current user. Enabling requires a stable, direct npm-global MiniCPA installation; npx caches, local/source installs, and links are rejected. The registered startup action runs `cpa start --no-wait`; toggling it does not start or stop the current process. Linux uses a systemd user unit. `cpa status` reports stale or disabled registrations as `Autostart  off`; inspection failures are shown as `Autostart  unknown` without suppressing runtime status.
+- `cpa auto` toggles automatic startup; `cpa auto on` and `cpa auto off` set it explicitly. Explicit `off` removes active, stale, or OS-disabled registrations without requiring state inspection. Enabling requires a stable, direct npm-global MiniCPA installation; npx caches, local/source installs, and links are rejected. The registered action runs `cpa start --no-wait`; changing it does not start or stop the current process. Linux uses a systemd user unit that records the effective `XDG_DATA_HOME`.
+- `cpa status` reports autostart as `on`, `off`, `stale`, `disabled`, or `unknown`. `stale` is an existing registration for a different launcher; an argument-free `cpa auto` removes it. `disabled` is an otherwise current registration suppressed by the OS; an argument-free `cpa auto` re-enables it. Inspection failures become `unknown` without suppressing runtime status.
 - CLIProxyAPI is spawned **detached** and outlives the `cpa` process — including `npm uninstall -g @astralyn/minicpa`. Run `cpa stop` before removing MiniCPA; afterwards only `taskkill /PID <pid> /F` (Windows) or `kill <pid>` can end it, using the PID in `<cpa home>/state/cpa.pid`. Uninstalling never deletes `cpa root`, so `config.yaml` (with its generated api-key) and the `auths/` OAuth tokens stay on disk until you remove them.
 - `cpa start` and `cpa doctor` print warnings when `host`, `port`, or recognized `tls` fields in `config.yaml` have invalid shapes and are ignored or replaced by defaults.
 - Readiness probes try `/management.html` then `/` so binary-only installs can start without a panel. They use HTTP by default and HTTPS when `tls.enable` is true; wildcard listen addresses also probe the corresponding IPv4/IPv6 loopback URL.
@@ -100,7 +101,8 @@ MiniCPA manages one instance at `<cpa root>/instance`. `cpa home` prints its loc
 Useful paths:
 
 ```bash
-cpa auto    # toggle automatic startup for the current user
+cpa auto on  # enable automatic startup
+cpa auto off # remove automatic startup deterministically
 cpa home    # instance (config, binary, logs)
 cpa root    # MiniCPA app data
 cpa temp    # download/extract staging (safe to wipe)

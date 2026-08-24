@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import "./node-version-guard.js";
-import { Command, CommanderError, type Help, Option } from "commander";
+import { Argument, Command, CommanderError, type Help, Option } from "commander";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,10 +93,11 @@ program
 
 program
   .command("auto")
-  .description("Toggle CLIProxyAPI autostart for the current user")
+  .description("Toggle or set CLIProxyAPI autostart for the current user")
+  .addArgument(new Argument("[mode]", "Set autostart explicitly").choices(["on", "off"]))
   .action(
-    withCliErrors(async () => {
-      await runAuto({ packageRoot });
+    withCliErrors(async (mode?: "on" | "off") => {
+      await runAuto({ packageRoot, mode });
     }),
   );
 

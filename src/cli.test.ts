@@ -92,7 +92,7 @@ describe("cli smoke", () => {
       "version",
       "home",
     ]) {
-      assert.match(stdout, new RegExp(`^  ${command}(?: \\[options\\])?\\s{2,}`, "m"));
+      assert.match(stdout, new RegExp(`^  ${command}(?: \\[[^\\]]+\\])*\\s{2,}`, "m"));
     }
     for (const hidden of ["open", "clean", "root", "temp"]) {
       assert.doesNotMatch(stdout, new RegExp(`^  ${hidden}(?: \\[options\\])?\\s{2,}`, "m"));
@@ -101,7 +101,10 @@ describe("cli smoke", () => {
       stdout,
       /^ {2}init \[options\]\s+Initialize configuration and install the latest components$/m,
     );
-    assert.match(stdout, /^ {2}auto\s+Toggle CLIProxyAPI autostart for the current user$/m);
+    assert.match(
+      stdout,
+      /^ {2}auto \[mode\]\s+Toggle or set CLIProxyAPI autostart for the current user$/m,
+    );
     assert.match(stdout, /^ {2}web\s+Open the web management panel$/m);
     assert.match(stdout, /^ {2}tui\s+Open the CLIProxyAPI terminal UI$/m);
   });
@@ -112,7 +115,9 @@ describe("cli smoke", () => {
     assert.equal(auto.status, 0);
     assert.equal(auto.stderr, "");
     assert.match(auto.stdout, /Usage: cpa auto/);
-    assert.match(auto.stdout, /Toggle CLIProxyAPI autostart for the current user/);
+    assert.match(auto.stdout, /Toggle or set CLIProxyAPI autostart for the current user/);
+    assert.match(auto.stdout, /Arguments:\s+mode\s+Set autostart explicitly/);
+    assert.match(auto.stdout, /choices: "on", "off"/);
   });
 
   it("keeps web canonical and open as a hidden compatibility command", () => {

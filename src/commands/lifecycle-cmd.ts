@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { openInBrowser } from "../browser.js";
 import { readCpaConfigWithWarnings } from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
-import { isAutostartEnabled } from "../process/autostart.js";
+import { inspectAutostartState, type AutostartState } from "../process/autostart.js";
 import {
   apiBaseUrl,
   managementUrl,
@@ -74,7 +74,7 @@ export async function runRestart(opts: { noWait?: boolean }): Promise<void> {
 }
 
 export type StatusDependencies = {
-  isAutostartEnabled?: () => Promise<boolean>;
+  inspectAutostartState?: () => Promise<AutostartState>;
 };
 
 export async function runStatus(deps?: StatusDependencies): Promise<void> {
@@ -82,17 +82,16 @@ export async function runStatus(deps?: StatusDependencies): Promise<void> {
   // Read-only: an unlocked command must not repair (or race) the instance home.
   const running = inspectRunning(ctx.home);
   const version = await readCurrentRuntimeVersion(ctx.home);
-  let autostart: boolean | undefined;
+  let autostart: AutostartState | "unknown" = "unknown";
   let autostartWarning: string | undefined;
   try {
-    autostart = await (deps?.isAutostartEnabled ?? isAutostartEnabled)();
+    autostart = await (deps?.inspectAutostartState ?? inspectAutostartState)();
   } catch (err) {
     autostartWarning = err instanceof Error && err.message ? err.message : String(err);
   }
-  const autostartLabel = autostart === undefined ? "unknown" : autostart ? "on" : "off";
   printHome(ctx);
   console.log(`Version    ${version ?? "(not installed)"}`);
-  console.log(`Autostart  ${autostartLabel}`);
+  console.log(`Autostart  ${autostart}`);
   if (autostartWarning) {
     console.error(`Warning: could not inspect autostart: ${autostartWarning}`);
   }

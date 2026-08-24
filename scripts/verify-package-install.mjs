@@ -258,7 +258,7 @@ try {
   const rootHelp = runCli(executableBinPath, ["--help"], smokeEnvironment);
   const bareHelp = runCli(executableBinPath, [], smokeEnvironment);
   assertEqual(bareHelp, rootHelp, "bare cpa help output");
-  for (const command of ["web", "update", "upgrade"]) {
+  for (const command of ["auto", "web", "update", "upgrade"]) {
     if (!new RegExp(`^\\s*${command}(?:\\s|$)`, "m").test(rootHelp)) {
       throw new Error(`cpa --help must list the ${command} command.`);
     }
@@ -270,6 +270,11 @@ try {
   }
   if (!/-v, -V, --version/.test(rootHelp)) {
     throw new Error("cpa --help must show all three MiniCPA version flags.");
+  }
+
+  const autoHelp = runCli(executableBinPath, ["auto", "--help"], smokeEnvironment);
+  if (!/Usage:\s+cpa auto\s+\[options\]\s+\[mode\]/.test(autoHelp)) {
+    throw new Error("cpa auto --help did not show the explicit on/off mode.");
   }
 
   const webHelp = runCli(executableBinPath, ["web", "--help"], smokeEnvironment);
