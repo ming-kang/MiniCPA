@@ -3,14 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeFileAtomic } from "../fs-atomic.js";
-import { miniCpaRoot } from "../paths.js";
 import { runCommand } from "./runtime.js";
 
 const WINDOWS_RUN_KEY = String.raw`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`;
+const WINDOWS_RUN_SUBKEY = String.raw`Software\Microsoft\Windows\CurrentVersion\Run`;
 const WINDOWS_VALUE_NAME = "MiniCPA";
+const WINDOWS_EXPECTED_ENV = "MINICPA_AUTOSTART_EXPECTED";
 const LAUNCH_AGENT_NAME = "com.astralyn.minicpa.plist";
 const SYSTEMD_UNIT_NAME = "minicpa.service";
-const AUTOSTART_RECORD_NAME = "autostart.json";
 
 type CommandRunner = typeof runCommand;
 
@@ -20,7 +20,6 @@ export type AutostartDependencies = {
   homedir?: string;
   nodePath?: string;
   cliPath?: string;
-  recordPath?: string;
   runCommand?: CommandRunner;
 };
 
@@ -46,50 +45,6 @@ function cliPathOf(deps?: AutostartDependencies): string {
   return path.resolve(moduleDir, "..", "..", "dist", "cli.js");
 }
 
-function autostartRecordPath(deps?: AutostartDependencies): string {
-  return deps?.recordPath ?? path.join(miniCpaRoot(), "state", AUTOSTART_RECORD_NAME);
-}
-
-function comparablePath(value: string, platform: NodeJS.Platform): string {
-  const api = platform === "win32" ? path.win32 : path.posix;
-  const resolved = api.resolve(value);
-  return platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
-function autostartTargetIsCurrent(deps?: AutostartDependencies): boolean {
-  try {
-    const record = JSON.parse(fs.readFileSync(autostartRecordPath(deps), "utf8")) as {
-      nodePath?: unknown;
-      cliPath?: unknown;
-    };
-    if (typeof record.nodePath !== "string" || typeof record.cliPath !== "string") return false;
-    const platform = platformOf(deps);
-    return (
-      comparablePath(record.nodePath, platform) === comparablePath(nodePathOf(deps), platform) &&
-      comparablePath(record.cliPath, platform) === comparablePath(cliPathOf(deps), platform) &&
-      fs.existsSync(record.nodePath) &&
-      fs.existsSync(record.cliPath)
-    );
-  } catch {
-    return false;
-  }
-}
-
-function writeAutostartRecord(deps?: AutostartDependencies): void {
-  writeFileAtomic(
-    autostartRecordPath(deps),
-    `${JSON.stringify({ nodePath: nodePathOf(deps), cliPath: cliPathOf(deps) }, null, 2)}\n`,
-  );
-}
-
-function removeAutostartRecord(deps?: AutostartDependencies): void {
-  try {
-    fs.rmSync(autostartRecordPath(deps), { force: true });
-  } catch {
-    /* stale metadata cannot enable autostart by itself */
-  }
-}
-
 function commandRunnerOf(deps?: AutostartDependencies): CommandRunner {
   return deps?.runCommand ?? runCommand;
 }
@@ -109,11 +64,47 @@ function systemdUnitPath(deps?: AutostartDependencies): string {
   return path.join(linuxConfigHome(deps), "systemd", "user", SYSTEMD_UNIT_NAME);
 }
 
+function assertSafeLauncherPath(value: string): void {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint <= 0x1f || codePoint === 0x7f) {
+      throw new Error("Autostart launcher paths cannot contain control characters");
+    }
+  }
+}
+
 function windowsCommand(deps?: AutostartDependencies): string {
-  return `"${nodePathOf(deps)}" "${cliPathOf(deps)}" start --no-wait`;
+  const nodePath = nodePathOf(deps);
+  const cliPath = cliPathOf(deps);
+  assertSafeLauncherPath(nodePath);
+  assertSafeLauncherPath(cliPath);
+  return `"${nodePath}" "${cliPath}" start --no-wait`;
+}
+
+const WINDOWS_INSPECT_SCRIPT = [
+  "$ErrorActionPreference = 'Stop';",
+  "try {",
+  `$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${WINDOWS_RUN_SUBKEY}');`,
+  "if ($null -eq $key) { [Console]::Out.Write('absent'); exit 1 };",
+  `$value = $key.GetValue('${WINDOWS_VALUE_NAME}', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames);`,
+  "$key.Dispose();",
+  "if ($null -eq $value) { [Console]::Out.Write('absent'); exit 1 };",
+  `if ([string]::Equals([string]$value, $env:${WINDOWS_EXPECTED_ENV}, [System.StringComparison]::OrdinalIgnoreCase)) { [Console]::Out.Write('enabled'); exit 0 };`,
+  "[Console]::Out.Write('stale'); exit 2;",
+  "} catch { [Console]::Error.Write($_.Exception.Message); exit 3 }",
+].join(" ");
+
+function readFileIfExists(file: string): string | undefined {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw err;
+  }
 }
 
 function escapeXml(value: string): string {
+  assertSafeLauncherPath(value);
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
@@ -144,6 +135,7 @@ export function launchAgentContents(nodePath: string, cliPath: string): string {
 }
 
 function quoteSystemdArgument(value: string): string {
+  assertSafeLauncherPath(value);
   const escaped = value
     .replaceAll("\\", "\\\\")
     .replaceAll('"', '\\"')
@@ -196,24 +188,44 @@ export async function isAutostartEnabled(deps?: AutostartDependencies): Promise<
 
   if (platform === "win32") {
     const result = await commandRunnerOf(deps)(
-      "reg.exe",
-      ["query", WINDOWS_RUN_KEY, "/v", WINDOWS_VALUE_NAME],
-      { env: envOf(deps), timeoutMs: 5_000 },
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_INSPECT_SCRIPT],
+      {
+        env: { ...envOf(deps), [WINDOWS_EXPECTED_ENV]: windowsCommand(deps) },
+        timeoutMs: 10_000,
+      },
     );
-    return result.code === 0 && autostartTargetIsCurrent(deps);
+    const state = result.stdout.trim();
+    if (result.code === 0 && state === "enabled") return true;
+    if ((result.code === 1 && state === "absent") || (result.code === 2 && state === "stale")) {
+      return false;
+    }
+    throw commandFailure("inspect", result);
   }
   if (platform === "darwin") {
-    return fs.existsSync(launchAgentPath(deps)) && autostartTargetIsCurrent(deps);
+    const contents = readFileIfExists(launchAgentPath(deps));
+    return (
+      contents !== undefined && contents === launchAgentContents(nodePathOf(deps), cliPathOf(deps))
+    );
   }
 
-  if (!fs.existsSync(systemdUnitPath(deps))) return false;
+  const contents = readFileIfExists(systemdUnitPath(deps));
+  if (contents === undefined) return false;
+  if (contents !== systemdUnitContents(nodePathOf(deps), cliPathOf(deps))) return false;
   const result = await commandRunnerOf(deps)(
     "systemctl",
     ["--user", "is-enabled", SYSTEMD_UNIT_NAME],
     { env: envOf(deps), timeoutMs: 10_000 },
   );
-  if (result.code === 0) return autostartTargetIsCurrent(deps);
-  if (/^(?:disabled|masked(?:-runtime)?|not-found)$/.test(result.stdout.trim())) return false;
+  const state = result.stdout.trim();
+  if (result.code === 0 && state === "enabled") return true;
+  if (
+    /^(?:enabled-runtime|disabled|masked(?:-runtime)?|not-found|static|indirect|linked(?:-runtime)?|alias|generated|transient)$/.test(
+      state,
+    )
+  ) {
+    return false;
+  }
   throw commandFailure("inspect", result);
 }
 
@@ -283,18 +295,6 @@ export async function setAutostartEnabled(
   const platform = platformOf(deps);
   assertSupportedPlatform(platform);
 
-  if (!enabled) {
-    await setPlatformAutostart(false, platform, deps);
-    removeAutostartRecord(deps);
-    return;
-  }
-
-  assertCliPath(deps);
-  writeAutostartRecord(deps);
-  try {
-    await setPlatformAutostart(true, platform, deps);
-  } catch (err) {
-    removeAutostartRecord(deps);
-    throw err;
-  }
+  if (enabled) assertCliPath(deps);
+  await setPlatformAutostart(enabled, platform, deps);
 }

@@ -40,14 +40,14 @@ function createNode(root: string, relativePath: string): string {
   return nodePath;
 }
 
-function recordPath(root: string): string {
-  return path.join(root, "state", "autostart.json");
-}
-
 function successfulRunner(calls: CommandCall[]): CommandRunner {
   return async (command, args) => {
     calls.push({ command, args });
-    return { code: 0, stdout: "", stderr: "" };
+    return {
+      code: 0,
+      stdout: args[1] === "is-enabled" ? "enabled\n" : "",
+      stderr: "",
+    };
   };
 }
 
@@ -56,40 +56,59 @@ afterEach(() => {
 });
 
 describe("Windows autostart", () => {
-  it("queries and updates the current-user Run value", async () => {
+  it("inspects the registered command and updates the current-user Run value", async () => {
     const root = tempDir();
     const cliPath = createCli(root);
     const nodePath = createNode(root, path.join("Program Files", "nodejs", "node.exe"));
+    const expected = `"${nodePath}" "${cliPath}" start --no-wait`;
     const calls: CommandCall[] = [];
-    let queryCode = 1;
-    const runCommand: CommandRunner = async (command, args) => {
+    let registration: "absent" | "enabled" | "stale" = "absent";
+    const runCommand: CommandRunner = async (command, args, options) => {
       calls.push({ command, args });
-      if (args[0] === "query") return { code: queryCode, stdout: "", stderr: "" };
+      if (command === "powershell.exe") {
+        assert.equal(options?.env?.MINICPA_AUTOSTART_EXPECTED, expected);
+        if (registration === "enabled") return { code: 0, stdout: "enabled", stderr: "" };
+        if (registration === "stale") return { code: 2, stdout: "stale", stderr: "" };
+        return { code: 1, stdout: "absent", stderr: "" };
+      }
+      registration = args[0] === "add" ? "enabled" : "absent";
       return { code: 0, stdout: "", stderr: "" };
     };
     const deps: AutostartDependencies = {
       platform: "win32",
       nodePath,
       cliPath,
-      recordPath: recordPath(root),
       runCommand,
     };
 
     assert.equal(await isAutostartEnabled(deps), false);
-    queryCode = 0;
-    assert.equal(await isAutostartEnabled(deps), false, "an unowned Run value is stale");
-
     await setAutostartEnabled(true, deps);
     assert.equal(await isAutostartEnabled(deps), true);
+
+    registration = "stale";
+    assert.equal(await isAutostartEnabled(deps), false);
+    registration = "enabled";
+    await setAutostartEnabled(false, deps);
+    assert.equal(registration, "absent", "an existing registration must toggle off directly");
+
+    const inspect = calls.find((call) => call.command === "powershell.exe");
+    assert.ok(inspect?.args.includes("-NoProfile"));
     const add = calls.find((call) => call.args[0] === "add");
     assert.equal(add?.command, "reg.exe");
-    assert.ok(add?.args.includes("MiniCPA"));
-    assert.ok(add?.args.includes(`"${nodePath}" "${cliPath}" start --no-wait`));
-
-    await setAutostartEnabled(false, deps);
+    assert.ok(add?.args.includes(expected));
     const remove = calls.find((call) => call.args[0] === "delete");
     assert.equal(remove?.command, "reg.exe");
-    assert.ok(remove?.args.includes("MiniCPA"));
+  });
+
+  it("surfaces registry inspection failures", async () => {
+    await assert.rejects(
+      () =>
+        isAutostartEnabled({
+          platform: "win32",
+          runCommand: async () => ({ code: 3, stdout: "", stderr: "access denied" }),
+        }),
+      /Failed to inspect autostart: access denied/,
+    );
   });
 });
 
@@ -103,7 +122,6 @@ describe("macOS autostart", () => {
       homedir: home,
       nodePath,
       cliPath,
-      recordPath: recordPath(home),
     };
 
     assert.equal(await isAutostartEnabled(deps), false);
@@ -125,10 +143,22 @@ describe("macOS autostart", () => {
     assert.equal(await isAutostartEnabled(deps), false);
   });
 
-  it("escapes XML path characters", () => {
+  it("escapes XML path characters and rejects control characters", () => {
     const contents = launchAgentContents("/A&B/node", "/tmp/<cpa>/cli.js");
     assert.ok(contents.includes("/A&amp;B/node"));
     assert.ok(contents.includes("/tmp/&lt;cpa&gt;/cli.js"));
+    assert.throws(
+      () => launchAgentContents("/node", "/tmp/bad\npath/cli.js"),
+      /cannot contain control characters/,
+    );
+  });
+
+  it("surfaces LaunchAgent inspection errors", async () => {
+    const home = tempDir();
+    const plist = path.join(home, "Library", "LaunchAgents", "com.astralyn.minicpa.plist");
+    fs.mkdirSync(plist, { recursive: true });
+
+    await assert.rejects(() => isAutostartEnabled({ platform: "darwin", homedir: home }));
   });
 });
 
@@ -144,7 +174,6 @@ describe("Linux autostart", () => {
       env: { XDG_CONFIG_HOME: configHome },
       nodePath: createNode(home, path.join("opt", "node", "bin", "node")),
       cliPath,
-      recordPath: recordPath(home),
       runCommand: successfulRunner(calls),
     };
 
@@ -167,38 +196,39 @@ describe("Linux autostart", () => {
       args: ["--user", "is-enabled", "minicpa.service"],
     });
 
-    assert.equal(fs.existsSync(recordPath(home)), true);
-
     await setAutostartEnabled(false, deps);
     assert.deepEqual(calls[2], {
       command: "systemctl",
       args: ["--user", "disable", "minicpa.service"],
     });
     assert.equal(await isAutostartEnabled(deps), false);
-    assert.equal(fs.existsSync(recordPath(home)), false);
   });
 
   it("reports the systemd enablement state and surfaces inspection failures", async () => {
     const home = tempDir();
     const configHome = path.join(home, "config");
     const cliPath = createCli(home);
-    let inspection: "disabled" | "error" = "disabled";
+    let inspection: "disabled" | "enabled-runtime" | "error" = "disabled";
     const deps: AutostartDependencies = {
       platform: "linux",
       homedir: home,
       env: { XDG_CONFIG_HOME: configHome },
       cliPath,
-      recordPath: recordPath(home),
       runCommand: async (_command, args) => {
         if (args[1] !== "is-enabled") return { code: 0, stdout: "", stderr: "" };
-        return inspection === "disabled"
-          ? { code: 1, stdout: "disabled\n", stderr: "" }
-          : { code: 1, stdout: "", stderr: "user manager unavailable" };
+        if (inspection === "disabled") return { code: 1, stdout: "disabled\n", stderr: "" };
+        if (inspection === "enabled-runtime") {
+          return { code: 0, stdout: "enabled-runtime\n", stderr: "" };
+        }
+        return { code: 1, stdout: "", stderr: "user manager unavailable" };
       },
     };
 
     await setAutostartEnabled(true, deps);
     assert.equal(await isAutostartEnabled(deps), false);
+
+    inspection = "enabled-runtime";
+    assert.equal(await isAutostartEnabled(deps), false, "runtime enablement is not persistent");
 
     inspection = "error";
     await assert.rejects(
@@ -207,9 +237,13 @@ describe("Linux autostart", () => {
     );
   });
 
-  it("escapes systemd argument syntax", () => {
+  it("escapes systemd argument syntax and rejects control characters", () => {
     const contents = systemdUnitContents("/opt/node%24/node", `/tmp/\${cache}/a"b/cli.js`);
     assert.ok(contents.includes(`ExecStart="/opt/node%%24/node" "/tmp/$\${cache}/a\\"b/cli.js"`));
+    assert.throws(
+      () => systemdUnitContents("/node", "/tmp/bad\npath/cli.js"),
+      /cannot contain control characters/,
+    );
   });
 
   it("removes the unit when systemctl cannot enable it", async () => {
@@ -221,13 +255,11 @@ describe("Linux autostart", () => {
       homedir: home,
       env: { XDG_CONFIG_HOME: configHome },
       cliPath,
-      recordPath: recordPath(home),
       runCommand: async () => ({ code: 1, stdout: "", stderr: "no user manager" }),
     };
 
     await assert.rejects(() => setAutostartEnabled(true, deps), /no user manager/);
     assert.equal(await isAutostartEnabled(deps), false);
-    assert.equal(fs.existsSync(recordPath(home)), false);
   });
 });
 
