@@ -7,7 +7,7 @@ import { readInstallState, type InstallState, patchInstallState } from "../state
 import { removeDirBestEffort, sha256File } from "../util.js";
 import {
   downloadToFile,
-  fetchLatestReleaseViaApi,
+  fetchLatestRelease,
   normalizeTagVersion,
   parseGithubDigest,
   releaseAssetDownloadUrl,
@@ -68,16 +68,6 @@ export function isInstalledPanelIntact(
   }
 }
 
-export function requireGithubAssetDigest(digest: string | undefined): string {
-  const parsed = parseGithubDigest(digest);
-  if (!parsed) {
-    throw new Error(
-      "management.html has no GitHub SHA-256 digest; refusing unverified panel update",
-    );
-  }
-  return parsed;
-}
-
 /** Basic sanity and integrity checks for a downloaded management panel. */
 export function assertPanelContentSane(filePath: string, expectedDigest?: string): void {
   if (!fs.existsSync(filePath)) {
@@ -115,8 +105,13 @@ export type ResolvedPanelAsset = {
   /** Normalized latest release version. */
   version: string;
   asset: GhAsset;
-  /** Required GitHub SHA-256 asset digest. */
-  expectedDigest: string;
+  /**
+   * GitHub SHA-256 asset digest when available (only REST API fallback payloads
+   * carry one). Verified when present; the default browser-discovery path
+   * synthesizes download URLs without touching the API, so no digest exists
+   * there by design.
+   */
+  expectedDigest?: string;
 };
 
 /** Shared preamble: config → repo → latest release → management.html asset → digest. */
@@ -124,12 +119,14 @@ async function resolveLatestPanelAsset(home: string): Promise<ResolvedPanelAsset
   const layout = cpaLayout(home);
   const cfg = readCpaConfig(layout.configFile);
   const repo = repoFromPanelUrl(getPanelRepository(cfg));
-  const release = await fetchLatestReleaseViaApi(repo);
+  // Same quota-free discovery as CPA binary updates: resolve the latest tag via
+  // the github.com redirect and synthesize the browser download URL. The REST
+  // API is only a fallback (whose payloads may also supply an asset digest).
+  const release = await fetchLatestRelease(repo, () => ["management.html"]);
   const version = normalizeTagVersion(release.tag_name);
   const asset = release.assets.find((candidate) => candidate.name === "management.html");
   if (!asset) throw new Error(`management.html not found in ${repo} ${release.tag_name}`);
-  const expectedDigest = requireGithubAssetDigest(asset.digest);
-  return { repo, version, asset, expectedDigest };
+  return { repo, version, asset, expectedDigest: parseGithubDigest(asset.digest) };
 }
 
 /** Network seam: tests drive the panel flows without touching GitHub. */
@@ -144,21 +141,18 @@ const realPanelUpdateDeps: PanelUpdateDeps = {
 };
 
 /**
- * True when the recorded install matches the latest digest and is intact on disk.
- * `checkPanelUpdate` intentionally omits the version equality: `current` reports
- * the installed version whenever the on-disk panel is verifiably the recorded one.
+ * True when the recorded install matches the latest version and is intact on
+ * disk (on-disk bytes equal the SHA-256 recorded at install time). Upstream
+ * re-published assets under the same tag are noticed only at the next version
+ * bump — the same trade-off the CLIProxyAPI binary leg makes with its
+ * version-string comparison.
  */
 export function isPanelCurrent(
   state: InstallState,
   managementHtml: string,
   version: string,
-  expectedDigest: string,
 ): boolean {
-  return (
-    state.panelVersion === version &&
-    state.panelSha256 === expectedDigest &&
-    isInstalledPanelIntact(managementHtml, state)
-  );
+  return state.panelVersion === version && isInstalledPanelIntact(managementHtml, state);
 }
 
 /**
@@ -179,10 +173,9 @@ export async function checkPanelUpdate(
   autoUpdateDisabled: boolean;
 }> {
   const layout = cpaLayout(home);
-  const { version: latest, expectedDigest } = await deps.resolveAsset(home);
+  const { version: latest } = await deps.resolveAsset(home);
   const state = readInstallState(home);
-  const intact =
-    isInstalledPanelIntact(layout.managementHtml, state) && state.panelSha256 === expectedDigest;
+  const intact = isInstalledPanelIntact(layout.managementHtml, state);
   const current = intact ? state.panelVersion : undefined;
   const autoUpdateDisabled = isPanelAutoUpdateDisabled(readCpaConfig(layout.configFile));
   return {
@@ -229,7 +222,7 @@ export async function updatePanel(
   const { repo, version, asset, expectedDigest } = await deps.resolveAsset(home);
   const state = readInstallState(home);
 
-  if (isPanelCurrent(state, layout.managementHtml, version, expectedDigest) && !options?.force) {
+  if (isPanelCurrent(state, layout.managementHtml, version) && !options?.force) {
     return {
       version,
       previousVersion: state.panelVersion,

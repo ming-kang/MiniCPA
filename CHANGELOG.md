@@ -4,6 +4,11 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+### Changed
+
+- Panel update checks now resolve the latest release through the same quota-free `github.com` redirect and browser download URL path as CLIProxyAPI binary updates, so `cpa update`, `cpa update --panel`, and `cpa update check` no longer consume GitHub REST API rate limit when the panel is already current.
+- The GitHub asset SHA-256 digest is verified only when the REST API fallback supplies one; the default browser-discovery path installs after content sanity checks, with local integrity anchored by the install-time SHA-256 recorded in `install.json`.
+
 ## [0.3.0] - 2026-08-24
 
 ### Added

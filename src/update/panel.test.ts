@@ -12,7 +12,6 @@ import {
   isInstalledPanelIntact,
   isPanelAutoUpdateDisabled,
   isPanelCurrent,
-  requireGithubAssetDigest,
   updatePanel,
   type PanelUpdateDeps,
 } from "./panel.js";
@@ -62,7 +61,7 @@ describe("isInstalledPanelIntact", () => {
 });
 
 describe("isPanelCurrent", () => {
-  it("requires version, digest, and on-disk integrity to all match", () => {
+  it("requires version and on-disk integrity to match", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-panel-"));
     temps.push(dir);
     const file = path.join(dir, "management.html");
@@ -71,27 +70,18 @@ describe("isPanelCurrent", () => {
     const digest = crypto.createHash("sha256").update(content).digest("hex");
     const state = { cpaHome: dir, panelVersion: "1.2.3", panelSha256: digest };
 
-    assert.equal(isPanelCurrent(state, file, "1.2.3", digest), true);
+    assert.equal(isPanelCurrent(state, file, "1.2.3"), true);
     // Newer release version → not current even though the file is intact.
-    assert.equal(isPanelCurrent(state, file, "1.2.4", digest), false);
-    // Digest changed upstream (re-published asset) → not current.
-    assert.equal(isPanelCurrent(state, file, "1.2.3", "b".repeat(64)), false);
+    assert.equal(isPanelCurrent(state, file, "1.2.4"), false);
     // On-disk file tampered → not current.
     fs.writeFileSync(file, "<html>tampered</html>");
-    assert.equal(isPanelCurrent(state, file, "1.2.3", digest), false);
-  });
-});
-
-describe("requireGithubAssetDigest", () => {
-  it("requires a valid GitHub SHA-256 digest", () => {
-    const digest = "a".repeat(64);
-    assert.equal(requireGithubAssetDigest(`sha256:${digest}`), digest);
-    assert.throws(() => requireGithubAssetDigest(undefined), /refusing unverified/);
-    assert.throws(() => requireGithubAssetDigest("md5:abc"), /refusing unverified/);
+    assert.equal(isPanelCurrent(state, file, "1.2.3"), false);
   });
 });
 
 describe("assertPanelContentSane", () => {
+  // The quota-free browser-discovery path synthesizes download URLs without a
+  // REST API payload, so no GitHub asset digest exists there by design.
   it("accepts minimal HTML", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-panel-"));
     temps.push(dir);
@@ -123,15 +113,16 @@ describe("assertPanelContentSane", () => {
     assert.throws(() => assertPanelContentSane(file, "a".repeat(64)), /digest mismatch/);
   });
 
-  it("treats an empty digest as 'no digest supplied' (falsy-skip semantics)", () => {
+  it("treats an empty digest as 'no digest supplied' (best-effort semantics)", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-panel-"));
     temps.push(dir);
     const file = path.join(dir, "management.html");
     fs.writeFileSync(file, "<!doctype html><html><body>panel</body></html>");
-    // Pins the current guard: only a non-empty digest triggers the comparison.
-    // updatePanel never reaches here with an empty digest (requireGithubAssetDigest
-    // throws first), so tightening this is safe — but it must show up in a diff.
+    // Pins the intended semantics: only a non-empty digest triggers the
+    // comparison. resolveLatestPanelAsset passes undefined whenever no API
+    // fallback supplied one, so this is the normal browser-path behavior.
     assert.doesNotThrow(() => assertPanelContentSane(file, ""));
+    assert.doesNotThrow(() => assertPanelContentSane(file, undefined));
   });
 });
 
@@ -159,9 +150,19 @@ function sha256(text: string): string {
 
 type FakePanelDeps = PanelUpdateDeps & { calls: string[] };
 
-/** Offline stand-in for GitHub: resolves a fixed release and "downloads" it. */
-function fakeDeps(options?: { version?: string; content?: string }): FakePanelDeps {
+/**
+ * Offline stand-in for GitHub: resolves a fixed release and "downloads" it.
+ * `digest: false` mimics the quota-free browser-discovery path, where release
+ * metadata is synthesized from the redirect tag and no API payload — hence no
+ * asset digest — exists.
+ */
+function fakeDeps(options?: {
+  version?: string;
+  content?: string;
+  digest?: boolean;
+}): FakePanelDeps {
   const content = options?.content ?? LATEST_PANEL_HTML;
+  const withDigest = options?.digest !== false;
   const digest = sha256(content);
   const calls: string[] = [];
   return {
@@ -175,9 +176,9 @@ function fakeDeps(options?: { version?: string; content?: string }): FakePanelDe
           name: "management.html",
           browser_download_url:
             "https://github.com/router-for-me/CLIProxyAPI/releases/download/v9.9.9/management.html",
-          digest: `sha256:${digest}`,
+          ...(withDigest ? { digest: `sha256:${digest}` } : {}),
         },
-        expectedDigest: digest,
+        ...(withDigest ? { expectedDigest: digest } : {}),
       };
     },
     async download(_url, dest) {
@@ -306,6 +307,55 @@ describe("updatePanel with disable-auto-update-panel", () => {
   });
 });
 
+describe("updatePanel integrity", () => {
+  it("installs without a GitHub digest via the quota-free browser path", async () => {
+    const { home, layout } = panelHome({ optOut: false });
+    const deps = fakeDeps({ digest: false });
+
+    const result = await updatePanel(home, {}, deps);
+
+    assert.equal(result.skipped, false);
+    assert.equal(result.version, "9.9.9");
+    assert.equal(fs.readFileSync(layout.managementHtml, "utf8"), LATEST_PANEL_HTML);
+    // Local integrity anchor recorded as before, independent of any upstream digest.
+    const state = readInstallState(home);
+    assert.equal(state.panelVersion, "9.9.9");
+    assert.equal(state.panelSha256, sha256(LATEST_PANEL_HTML));
+  });
+
+  it("rejects a download whose advertised digest does not match its bytes", async () => {
+    const { home, layout } = panelHome({ optOut: false });
+    const calls: string[] = [];
+    const deps: FakePanelDeps = {
+      calls,
+      async resolveAsset() {
+        calls.push("resolveAsset");
+        return {
+          repo: "router-for-me/CLIProxyAPI",
+          version: "9.9.9",
+          asset: {
+            name: "management.html",
+            browser_download_url:
+              "https://github.com/router-for-me/CLIProxyAPI/releases/download/v9.9.9/management.html",
+            digest: `sha256:${sha256(LATEST_PANEL_HTML)}`,
+          },
+          expectedDigest: sha256(LATEST_PANEL_HTML),
+        };
+      },
+      async download(_url, dest) {
+        calls.push("download");
+        fs.writeFileSync(dest, "<html>totally different panel bytes</html>");
+      },
+    };
+
+    await assert.rejects(() => updatePanel(home, {}, deps), /digest mismatch/);
+    // Nothing was installed or recorded.
+    assert.ok(!fs.existsSync(layout.managementHtml));
+    assert.equal(readInstallState(home).panelVersion, undefined);
+    assert.deepEqual(calls, ["resolveAsset", "download"]);
+  });
+});
+
 describe("checkPanelUpdate with disable-auto-update-panel", () => {
   it("does not report an opted-out panel as outdated", async () => {
     const { home } = panelHome({
@@ -332,7 +382,9 @@ describe("checkPanelUpdate with disable-auto-update-panel", () => {
 
     assert.equal(result.upToDate, false);
     assert.equal(result.autoUpdateDisabled, false);
-    assert.equal(result.current, undefined);
+    // An installed-but-stale panel is still "the recorded one" when its bytes
+    // match the install-time SHA-256, so it reports its real version.
+    assert.equal(result.current, "1.2.3");
     assert.equal(result.latest, "9.9.9");
   });
 });
