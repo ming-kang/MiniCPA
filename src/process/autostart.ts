@@ -233,7 +233,10 @@ function commandFailure(action: string, result: Awaited<ReturnType<CommandRunner
 }
 
 function launchctlReportsDisabled(stdout: string): boolean {
-  return /"com\.astralyn\.minicpa"\s*=>\s*true\b/.test(stdout);
+  // Derive the pattern from the label constant: a hardcoded spelling would
+  // silently stop matching if LAUNCH_AGENT_LABEL ever changed.
+  const label = LAUNCH_AGENT_LABEL.replaceAll(".", String.raw`\.`);
+  return new RegExp(String.raw`"${label}"\s*=>\s*true\b`).test(stdout);
 }
 
 function expectedSystemdUnit(deps?: AutostartDependencies): string {
@@ -293,6 +296,31 @@ export async function inspectAutostartState(deps?: AutostartDependencies): Promi
     return "disabled";
   }
   throw commandFailure("inspect", result);
+}
+
+/**
+ * Whether the current user's systemd units also start without a login.
+ *
+ * A `WantedBy=default.target` user unit runs at login, so a headless machine
+ * needs `loginctl enable-linger`. Returns undefined when the answer cannot be
+ * determined — non-Linux, no loginctl, or a user with no session record.
+ */
+export async function inspectLingerEnabled(
+  deps?: AutostartDependencies,
+): Promise<boolean | undefined> {
+  if (platformOf(deps) !== "linux") return undefined;
+  try {
+    const result = await commandRunnerOf(deps)(
+      "loginctl",
+      ["show-user", String(uidOf(deps)), "--property=Linger"],
+      { env: envOf(deps), timeoutMs: 10_000 },
+    );
+    if (result.code !== 0) return undefined;
+    const match = /^Linger=(yes|no)$/m.exec(result.stdout.trim());
+    return match ? match[1] === "yes" : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function setWindowsAutostart(enabled: boolean, deps?: AutostartDependencies): Promise<void> {

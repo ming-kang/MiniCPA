@@ -1,5 +1,6 @@
 import {
   inspectAutostartState,
+  inspectLingerEnabled,
   type AutostartState,
   setAutostartEnabled,
 } from "../process/autostart.js";
@@ -13,12 +14,15 @@ export type AutoCommandDependencies = {
   setEnabled?: (enabled: boolean) => Promise<void>;
   withLock?: typeof withMiniCpaLock;
   detectGlobalInstall?: typeof detectNpmGlobalInstall;
+  platform?: NodeJS.Platform;
+  inspectLinger?: () => Promise<boolean | undefined>;
 };
 
 function nextAutostartEnabled(current: AutostartState): boolean {
-  if (current === "on") return false;
-  if (current === "stale") return false;
-  return true;
+  // Only a registration that is actually in force gets turned off. "stale" and
+  // "disabled" entries start nothing, so a toggle repairs them: enabling
+  // rewrites the launcher and clears the OS disable flag.
+  return current !== "on";
 }
 
 /** Toggle automatic startup, or set it explicitly when a mode is supplied. */
@@ -56,4 +60,13 @@ export async function runAuto(
     return next;
   });
   console.log(`Autostart ${enabled ? "on" : "off"}`);
+  if (
+    enabled &&
+    (deps?.platform ?? process.platform) === "linux" &&
+    (await (deps?.inspectLinger ?? (() => inspectLingerEnabled(deps)))()) !== true
+  ) {
+    console.error(
+      "Note: systemd user units start at login. For startup without a login, run: loginctl enable-linger",
+    );
+  }
 }

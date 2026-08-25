@@ -97,15 +97,15 @@ Upgrading MiniCPA does not stop, restart, or modify the managed CLIProxyAPI proc
 | `cpa logs` | Show logs; supports `-n`, `--err`, and `-f` |
 | `cpa update` / `update check` | Update or inspect CLIProxyAPI and the web panel |
 | `cpa upgrade` / `upgrade check` | Upgrade or inspect the MiniCPA npm package |
-| `cpa doctor` | Run installation, runtime, network, and integrity diagnostics |
+| `cpa doctor` | Run installation, autostart, runtime, network, and integrity diagnostics |
 | `cpa version` | Show MiniCPA, CLIProxyAPI, web panel, and home information |
 | `cpa home` | Print the managed instance directory |
 
 `cpa open` remains a compatibility alias for `cpa web`. Advanced recovery/path commands (`clean`, `root`, and `temp`) remain callable but are intentionally omitted from root help.
 
-`cpa auto` toggles login autostart; `cpa auto on` and `cpa auto off` set it explicitly. Use the explicit `off` form for deterministic cleanup even when inspection is unavailable. Enabling requires a stable, direct npm-global MiniCPA installation; npx caches, local/source installs, and links are rejected. It changes only future automatic startup and does not start or stop the current CLIProxyAPI process. Linux uses a systemd user unit and records the effective `XDG_DATA_HOME` so the login service selects the same MiniCPA instance.
+`cpa auto` toggles login autostart; `cpa auto on` and `cpa auto off` set it explicitly. Use the explicit `off` form for deterministic cleanup even when inspection is unavailable. Enabling requires a stable, direct npm-global MiniCPA installation; npx caches, local/source installs, and links are rejected. It changes only future automatic startup and does not start or stop the current CLIProxyAPI process. Linux uses a systemd user unit and records the effective `XDG_DATA_HOME` so the login service selects the same MiniCPA instance; that unit starts at login, so a headless machine also needs `loginctl enable-linger` (an argument-free `cpa auto` prints this hint when linger is off).
 
-`cpa status` reports `Autostart  on`, `off`, `stale`, or `disabled`. `stale` means an OS registration exists but targets a different launcher; an argument-free `cpa auto` removes it. `disabled` means the registration is present but disabled by the OS; an argument-free `cpa auto` re-enables it. Inspection failures are reported as `unknown` without hiding runtime status.
+`cpa status` reports `Autostart  on`, `off`, `stale`, or `disabled`. `stale` means an OS registration exists but targets a different launcher; an argument-free `cpa auto` repairs it. `disabled` means the registration is present but disabled by the OS; an argument-free `cpa auto` re-enables it. Inspection failures are reported as `unknown` without hiding runtime status.
 
 `cpa logs` prints the last `-n, --lines <n>` lines from stdout and stderr logs (default `80`; positive whole numbers only). `--err` selects the error log, while `-f`/`--follow` streams new output and ignores `--lines`.
 

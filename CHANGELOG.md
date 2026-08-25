@@ -6,8 +6,14 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ### Changed
 
+- An argument-free `cpa auto` now turns off only a registration that is actually in force: `stale` entries are repaired (launcher rewritten) instead of silently removed, and `disabled` entries are re-enabled as before. `cpa auto off` remains the deterministic cleanup. On Linux, `cpa auto` also prints a note when systemd linger is off, since the user unit starts at login only.
 - Panel update checks now resolve the latest release through the same quota-free `github.com` redirect and browser download URL path as CLIProxyAPI binary updates, so `cpa update`, `cpa update --panel`, and `cpa update check` no longer consume GitHub REST API rate limit when the panel is already current.
 - The GitHub asset SHA-256 digest is verified only when the REST API fallback supplies one; the default browser-discovery path installs after content sanity checks, with local integrity anchored by the install-time SHA-256 recorded in `install.json`.
+
+### Fixed
+
+- Derived the macOS launchctl disabled-check pattern from the launch agent label constant, so renaming the label now fails tests instead of silently breaking `disabled` detection.
+- Extended `cpa doctor` with read-only autostart diagnostics (registration state plus Linux linger), so broken autostart entries surface without waiting for a reboot.
 
 ## [0.3.0] - 2026-08-24
 

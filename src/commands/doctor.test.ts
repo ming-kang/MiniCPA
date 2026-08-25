@@ -15,7 +15,8 @@ import { writeInstallState, writePidRecord } from "../state.js";
 import { withHttpsFixture } from "../test-fixtures/http-server.js";
 import type { GithubReachability } from "../update/github-client.js";
 import { DEFAULT_LOG_ROTATE_BYTES } from "../util.js";
-import { runDoctor } from "./doctor.js";
+import type { AutostartState } from "../process/autostart.js";
+import { runDoctor, type DoctorDeps } from "./doctor.js";
 
 const originalLocalAppData = process.env.LOCALAPPDATA;
 const originalXdgDataHome = process.env.XDG_DATA_HOME;
@@ -56,17 +57,23 @@ const ANONYMOUS_REACHABILITY: GithubReachability = {
   authenticated: false,
 };
 
-/** Run doctor with a stubbed GitHub probe (never touches the network) and collect stdout. */
-async function runDoctorCapturing(
-  reachability: GithubReachability = ANONYMOUS_REACHABILITY,
-): Promise<string[]> {
+/**
+ * Run doctor with stubbed probes (never touches the network, the registry, or
+ * systemctl) and collect stdout. Pass overrides to exercise specific checks.
+ */
+async function runDoctorCapturing(deps: Partial<DoctorDeps> = {}): Promise<string[]> {
   const lines: string[] = [];
   const originalLog = console.log;
   console.log = (...args: unknown[]): void => {
     lines.push(args.map((arg) => String(arg)).join(" "));
   };
   try {
-    await runDoctor({ checkGithubReachability: async () => reachability });
+    await runDoctor({
+      checkGithubReachability: async () => ANONYMOUS_REACHABILITY,
+      inspectAutostartState: async () => "off",
+      inspectLingerEnabled: async () => undefined,
+      ...deps,
+    });
   } finally {
     console.log = originalLog;
   }
@@ -278,7 +285,9 @@ describe("runDoctor", () => {
     ensureDir(home);
     fs.writeFileSync(cpaLayout(home).configFile, "port: 8317\n");
 
-    const lines = await runDoctorCapturing({ ok: true, remaining: 4990, authenticated: true });
+    const lines = await runDoctorCapturing({
+      checkGithubReachability: async () => ({ ok: true, remaining: 4990, authenticated: true }),
+    });
 
     assert.ok(
       hasLine(lines, "[ ok ] GitHub API (rate remaining=4990, authenticated)"),
@@ -318,5 +327,75 @@ describe("runDoctor", () => {
         );
       },
     );
+  });
+
+  it("reports every autostart state before the network probes", async () => {
+    useTempRoot();
+    const home = resolveCpaHome();
+    ensureDir(home);
+    fs.writeFileSync(cpaLayout(home).configFile, "port: 8317\n");
+
+    const cases: Array<[AutostartState, string]> = [
+      ["on", "[ ok ] autostart on"],
+      ["off", "[info] autostart off (cpa auto on)"],
+      ["stale", "[warn] autostart registration targets a different launcher"],
+      ["disabled", "[warn] autostart registration disabled by the OS"],
+    ];
+    for (const [state, expected] of cases) {
+      const lines = await runDoctorCapturing({
+        inspectAutostartState: async () => state,
+      });
+      assert.ok(hasLine(lines, expected), lines.join("\n"));
+      assert.ok(
+        lines.findIndex((line) => line.includes("autostart")) <
+          lines.findIndex((line) => line.includes("proxy env")),
+        "autostart must be reported before proxy/network probes",
+      );
+    }
+  });
+
+  it("reports autostart inspection failures without failing the report", async () => {
+    useTempRoot();
+    const home = resolveCpaHome();
+    ensureDir(home);
+    fs.writeFileSync(cpaLayout(home).configFile, "port: 8317\n");
+
+    const lines = await runDoctorCapturing({
+      inspectAutostartState: async () => {
+        throw new Error("registry denied");
+      },
+    });
+
+    assert.ok(hasLine(lines, "[warn] cannot inspect autostart: registry denied"), lines.join("\n"));
+    // The report continues past the failure: the network probe still runs.
+    assert.ok(hasLine(lines, "GitHub API"), lines.join("\n"));
+  });
+
+  it("warns about systemd linger only on Linux with an enabled registration", async () => {
+    useTempRoot();
+    const home = resolveCpaHome();
+    ensureDir(home);
+    fs.writeFileSync(cpaLayout(home).configFile, "port: 8317\n");
+
+    const on = await runDoctorCapturing({
+      platform: "linux",
+      inspectAutostartState: async () => "on",
+      inspectLingerEnabled: async () => undefined,
+    });
+    assert.ok(hasLine(on, "[info] systemd linger off"), on.join("\n"));
+
+    const lingerOn = await runDoctorCapturing({
+      platform: "linux",
+      inspectAutostartState: async () => "on",
+      inspectLingerEnabled: async () => true,
+    });
+    assert.equal(hasLine(lingerOn, "systemd linger off"), false, lingerOn.join("\n"));
+
+    const notLinux = await runDoctorCapturing({
+      platform: "win32",
+      inspectAutostartState: async () => "on",
+      inspectLingerEnabled: async () => undefined,
+    });
+    assert.equal(hasLine(notLinux, "systemd linger off"), false, notLinux.join("\n"));
   });
 });

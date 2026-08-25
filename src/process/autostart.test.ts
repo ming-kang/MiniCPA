@@ -7,6 +7,7 @@ import {
   type AutostartDependencies,
   type AutostartState,
   inspectAutostartState,
+  inspectLingerEnabled,
   launchAgentContents,
   setAutostartEnabled,
   systemdUnitContents,
@@ -370,5 +371,107 @@ describe("unsupported platform", () => {
       () => inspectAutostartState({ platform: "freebsd" }),
       /not supported on freebsd/,
     );
+  });
+});
+
+describe("inspectLingerEnabled", () => {
+  it("returns undefined without running anything outside Linux", async () => {
+    let called = false;
+    const runCommand: CommandRunner = async () => {
+      called = true;
+      return { code: 0, stdout: "Linger=yes", stderr: "" };
+    };
+    const result = await inspectLingerEnabled({ platform: "win32", runCommand });
+    assert.equal(result, undefined);
+    assert.equal(called, false);
+  });
+
+  it("reads the linger flag for the current user on Linux", async () => {
+    const calls: CommandCall[] = [];
+    const result = await inspectLingerEnabled({
+      platform: "linux",
+      uid: 1000,
+      runCommand: async (command, args) => {
+        calls.push({ command, args });
+        return { code: 0, stdout: "Linger=no\n", stderr: "" };
+      },
+    });
+    assert.equal(result, false);
+    assert.deepEqual(calls, [
+      { command: "loginctl", args: ["show-user", "1000", "--property=Linger"] },
+    ]);
+  });
+
+  it("reports enabled linger as true", async () => {
+    const result = await inspectLingerEnabled({
+      platform: "linux",
+      uid: 1000,
+      runCommand: async () => ({ code: 0, stdout: "Linger=yes", stderr: "" }),
+    });
+    assert.equal(result, true);
+  });
+
+  it("treats failures and unknown output as indeterminate", async () => {
+    const outcomes: Array<[string, Awaited<ReturnType<CommandRunner>>]> = [
+      ["nonzero exit", { code: 1, stdout: "", stderr: "No user 1000 known" }],
+      ["empty output", { code: 0, stdout: "", stderr: "" }],
+      ["unexpected shape", { code: 0, stdout: "Linger=maybe", stderr: "" }],
+    ];
+    for (const [name, outcome] of outcomes) {
+      const result = await inspectLingerEnabled({
+        platform: "linux",
+        uid: 1000,
+        runCommand: async () => outcome,
+      });
+      assert.equal(result, undefined, name);
+    }
+  });
+
+  it("returns undefined when the command throws", async () => {
+    const result = await inspectLingerEnabled({
+      platform: "linux",
+      uid: 1000,
+      runCommand: async () => {
+        throw new Error("spawn loginctl ENOENT");
+      },
+    });
+    assert.equal(result, undefined);
+  });
+});
+
+describe("real platform inspection", () => {
+  // The Windows registry script is the only embedded foreign-language code here
+  // and every other test injects a fake runCommand, so nothing else executes it.
+  // macOS/Linux return "off" before ever reaching launchctl/systemctl when no
+  // plist/unit exists, so a bare call there would smoke-test nothing (Linux CI
+  // also has no user D-Bus session, so `systemctl --user` fails and the test
+  // would go intermittently red).
+  it("reads a real autostart state through the Windows registry script", {
+    skip: process.platform !== "win32",
+  }, async () => {
+    const state = await inspectAutostartState();
+    assert.ok(["on", "off", "stale", "disabled"].includes(state));
+  });
+
+  // Optional: kept only while macos-latest runners expose the GUI domain to
+  // `launchctl print-disabled gui/<uid>`; drop this test if it fails there.
+  it("reads a real autostart state through a matching LaunchAgent plist", {
+    skip: process.platform !== "darwin",
+  }, async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-autostart-real-"));
+    const nodePath = "/opt/mock-node";
+    const cliPath = "/opt/mock-cli.js";
+    try {
+      const dir = path.join(home, "Library", "LaunchAgents");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "com.astralyn.minicpa.plist"),
+        launchAgentContents(nodePath, cliPath),
+      );
+      const state = await inspectAutostartState({ homedir: home, nodePath, cliPath });
+      assert.ok(["on", "disabled"].includes(state));
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 });
