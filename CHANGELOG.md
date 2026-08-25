@@ -2,7 +2,7 @@
 
 This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository versions were not published to npm and are not maintained here.
 
-## [Unreleased]
+## [0.3.1] - 2026-08-25
 
 ### Changed
 
