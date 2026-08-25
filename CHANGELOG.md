@@ -12,6 +12,7 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ### Fixed
 
+- Windows autostart now registers a hidden WScript launcher (`wscript.exe` plus a generated `.vbs` under `%LOCALAPPDATA%\MiniCPA`) instead of launching node.exe directly at logon, so a console window no longer flashes at login. Pre-existing direct-node registrations are detected as `stale` and repaired by an argument-free `cpa auto`; the launcher content (node and CLI paths) is part of `stale` detection, so a moved npm prefix is caught too.
 - Derived the macOS launchctl disabled-check pattern from the launch agent label constant, so renaming the label now fails tests instead of silently breaking `disabled` detection.
 - Extended `cpa doctor` with read-only autostart diagnostics (registration state plus Linux linger), so broken autostart entries surface without waiting for a reboot.
 

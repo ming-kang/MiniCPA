@@ -11,6 +11,7 @@ import {
   launchAgentContents,
   setAutostartEnabled,
   systemdUnitContents,
+  windowsVbsContents,
 } from "./autostart.js";
 
 const temps: string[] = [];
@@ -51,7 +52,9 @@ describe("Windows autostart", () => {
     const root = tempDir();
     const cliPath = createCli(root);
     const nodePath = createNode(root, path.join("Program Files", "nodejs", "node.exe"));
-    const expected = `"${nodePath}" "${cliPath}" start --no-wait`;
+    const wscriptPath = path.join(root, "Windows", "System32", "wscript.exe");
+    const vbsPath = path.join(root, "AppData", "Local", "MiniCPA", "minicpa-autostart.vbs");
+    const expected = `"${wscriptPath}" "${vbsPath}"`;
     let state: AutostartState = "off";
     const calls: CommandCall[] = [];
     const runCommand: CommandRunner = async (command, args, options) => {
@@ -65,6 +68,11 @@ describe("Windows autostart", () => {
       }
 
       assert.equal(options?.env?.MINICPA_AUTOSTART_EXPECTED, expected);
+      assert.equal(options?.env?.MINICPA_AUTOSTART_VBS_PATH, vbsPath);
+      assert.equal(
+        options?.env?.MINICPA_AUTOSTART_VBS_CONTENT,
+        windowsVbsContents(nodePath, cliPath),
+      );
       const result = {
         on: { code: 0, stdout: "on", stderr: "" },
         off: { code: 1, stdout: "off", stderr: "" },
@@ -75,6 +83,8 @@ describe("Windows autostart", () => {
     };
     const deps: AutostartDependencies = {
       platform: "win32",
+      homedir: root,
+      env: { SystemRoot: path.join(root, "Windows") },
       nodePath,
       cliPath,
       runCommand,
@@ -87,7 +97,20 @@ describe("Windows autostart", () => {
 
     await setAutostartEnabled(true, deps);
     assert.equal(await inspectAutostartState(deps), "on");
+
+    const vbs = fs.readFileSync(vbsPath);
+    assert.ok(
+      vbs.subarray(0, 2).equals(Buffer.from([0xff, 0xfe])),
+      "launcher must be UTF-16LE with a BOM so non-ANSI paths survive",
+    );
+    assert.equal(
+      vbs.subarray(2).toString("utf16le"),
+      windowsVbsContents(nodePath, cliPath),
+      "launcher content must match what inspection expects",
+    );
+
     await setAutostartEnabled(false, deps);
+    assert.equal(fs.existsSync(vbsPath), false, "disabling must remove the launcher");
     assert.equal(await inspectAutostartState(deps), "off");
 
     assert.ok(calls.every((call) => call.command === "powershell.exe"));
@@ -95,9 +118,16 @@ describe("Windows autostart", () => {
   });
 
   it("makes disabling idempotent and surfaces registry inspection failures", async () => {
+    const root = tempDir();
+    const deps: AutostartDependencies = {
+      platform: "win32",
+      homedir: root,
+      env: { SystemRoot: path.join(root, "Windows") },
+      runCommand: async () => ({ code: 0, stdout: "", stderr: "" }),
+    };
     let mode: string | undefined;
     await setAutostartEnabled(false, {
-      platform: "win32",
+      ...deps,
       runCommand: async (_command, _args, options) => {
         mode = options?.env?.MINICPA_AUTOSTART_MODE;
         return { code: 0, stdout: "", stderr: "" };
@@ -108,10 +138,46 @@ describe("Windows autostart", () => {
     await assert.rejects(
       () =>
         inspectAutostartState({
-          platform: "win32",
+          ...deps,
           runCommand: async () => ({ code: 3, stdout: "", stderr: "access denied" }),
         }),
       /Failed to inspect autostart: access denied/,
+    );
+  });
+
+  it("removes the launcher when the registry write fails", async () => {
+    const root = tempDir();
+    const cliPath = createCli(root);
+    const vbsPath = path.join(root, "AppData", "Local", "MiniCPA", "minicpa-autostart.vbs");
+    const deps: AutostartDependencies = {
+      platform: "win32",
+      homedir: root,
+      env: { SystemRoot: path.join(root, "Windows") },
+      cliPath,
+      runCommand: async () => ({ code: 3, stdout: "", stderr: "access denied" }),
+    };
+
+    await assert.rejects(
+      () => setAutostartEnabled(true, deps),
+      /Failed to enable autostart: access denied/,
+    );
+    assert.equal(fs.existsSync(vbsPath), false, "a failed enable must not leave a launcher behind");
+  });
+
+  it("escapes VBS string literals and rejects control characters", () => {
+    const contents = windowsVbsContents(
+      "C:\\Program Files\\nodejs\\node.exe",
+      "C:\\Users\\a b\\cli.js",
+    );
+    assert.ok(
+      contents.includes(
+        'shell.Run """C:\\Program Files\\nodejs\\node.exe"" ""C:\\Users\\a b\\cli.js"" start --no-wait", 0, False',
+      ),
+    );
+    assert.ok(contents.includes('Set shell = CreateObject("WScript.Shell")'));
+    assert.throws(
+      () => windowsVbsContents("/node", "/tmp/bad\npath/cli.js"),
+      /cannot contain control characters/,
     );
   });
 });
