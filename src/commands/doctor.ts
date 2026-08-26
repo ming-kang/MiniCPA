@@ -9,6 +9,7 @@ import {
 import { createContext, printHome } from "../context.js";
 import { writeFileAtomic } from "../fs-atomic.js";
 import { describeProxyEnv, hasProxyEnvConfigured } from "../http.js";
+import { readLastMiniCpaEvent, type MiniCpaEvent } from "../minicpa-log.js";
 import {
   activeExecutablePath,
   backupExecutablePath,
@@ -76,6 +77,8 @@ function reportHomeWritable(home: string): boolean {
 async function reportAutostart(
   inspect: () => Promise<AutostartState>,
   hint: () => Promise<string | undefined>,
+  lastStartEvent: () => MiniCpaEvent | undefined,
+  startLogFile: string,
 ): Promise<void> {
   let state: AutostartState;
   try {
@@ -102,12 +105,34 @@ async function reportAutostart(
   // The hint owns the Linux gating and resolves even when its probe fails.
   const line = await hint();
   if (line) console.log(`[info] ${line}`);
+  reportLastStartFailure(lastStartEvent, startLogFile);
+}
+
+/**
+ * Surface the most recent recorded start failure.
+ *
+ * Only reported next to a registration that is in force, because that is the
+ * case where nobody watched the output: a login launch discards it, so this
+ * record is the user's only evidence. A later success supersedes the failure, so
+ * this reads the newest record rather than hunting for any failure at all.
+ */
+function reportLastStartFailure(
+  lastStartEvent: () => MiniCpaEvent | undefined,
+  startLogFile: string,
+): void {
+  const event = lastStartEvent();
+  if (event?.level !== "error") return;
+  // Print the record verbatim: the writer phrases it for humans, and restating
+  // it here would be a second copy of a format doctor does not own.
+  console.log(`[warn] ${event.message} (${event.at})`);
+  console.log(`[info] MiniCPA start log ${startLogFile}`);
 }
 
 export type DoctorDeps = {
   checkGithubReachability?: () => Promise<GithubReachability>;
   inspectAutostartState?: () => Promise<AutostartState>;
   lingerHint?: typeof lingerHint;
+  lastStartEvent?: () => MiniCpaEvent | undefined;
 };
 
 export async function runDoctor(deps?: DoctorDeps): Promise<void> {
@@ -329,6 +354,8 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
   await reportAutostart(
     deps?.inspectAutostartState ?? inspectAutostartState,
     deps?.lingerHint ?? lingerHint,
+    deps?.lastStartEvent ?? (() => readLastMiniCpaEvent(ctx.home)),
+    ctx.layout.minicpaLogFile,
   );
 
   if (hasProxyEnvConfigured()) {

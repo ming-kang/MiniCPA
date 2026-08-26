@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { recordMiniCpaEvent } from "../minicpa-log.js";
 import {
   activeExecutablePath,
   backupExecutablePath,
@@ -396,5 +397,58 @@ describe("runDoctor", () => {
       lingerHint: async () => LINGER_HINT,
     });
     assert.equal(hasLine(off, "loginctl enable-linger"), false, off.join("\n"));
+  });
+
+  it("explains the last recorded start failure under an enabled registration", async () => {
+    useTempRoot();
+    const home = resolveCpaHome();
+    ensureDir(home);
+    fs.writeFileSync(cpaLayout(home).configFile, "port: 8317\n");
+    // A login launch discards its own output, so this record is the only place
+    // the reason survives.
+    recordMiniCpaEvent(
+      home,
+      "error",
+      "start failed: Missing config: config.yaml. Run: cpa init",
+      new Date("2026-08-26T03:04:05.000Z"),
+    );
+
+    const lines = await runDoctorCapturing({ inspectAutostartState: async () => "on" });
+
+    assert.ok(
+      hasLine(lines, "[warn] start failed: Missing config: config.yaml. Run: cpa init"),
+      lines.join("\n"),
+    );
+    assert.ok(hasLine(lines, "2026-08-26T03:04:05.000Z"), lines.join("\n"));
+    assert.ok(hasLine(lines, cpaLayout(home).minicpaLogFile), lines.join("\n"));
+  });
+
+  it("stays quiet when the last start succeeded, when nothing was recorded, and when autostart is off", async () => {
+    useTempRoot();
+    const home = resolveCpaHome();
+    ensureDir(home);
+    fs.writeFileSync(cpaLayout(home).configFile, "port: 8317\n");
+
+    const noRecord = await runDoctorCapturing({ inspectAutostartState: async () => "on" });
+    assert.equal(hasLine(noRecord, "MiniCPA start log"), false, noRecord.join("\n"));
+
+    // A later success supersedes an earlier failure; the warning must not stick.
+    recordMiniCpaEvent(home, "error", "start failed: boom", new Date(1000));
+    recordMiniCpaEvent(home, "info", "start ok pid=42", new Date(2000));
+    const recovered = await runDoctorCapturing({ inspectAutostartState: async () => "on" });
+    assert.equal(hasLine(recovered, "start failed"), false, recovered.join("\n"));
+
+    // Without a registration in force the user ran start themselves and already
+    // saw the error, so the log is not read at all.
+    let read = false;
+    const off = await runDoctorCapturing({
+      inspectAutostartState: async () => "off",
+      lastStartEvent: () => {
+        read = true;
+        return { at: "2026-08-26T03:04:05.000Z", level: "error", message: "start failed: boom" };
+      },
+    });
+    assert.equal(read, false, off.join("\n"));
+    assert.equal(hasLine(off, "start failed"), false, off.join("\n"));
   });
 });
