@@ -15,11 +15,7 @@ import {
   miniCpaTempRoot,
   unlockProbePath,
 } from "../paths.js";
-import {
-  inspectAutostartState,
-  inspectLingerEnabled,
-  type AutostartState,
-} from "../process/autostart.js";
+import { inspectAutostartState, lingerHint, type AutostartState } from "../process/autostart.js";
 import { readinessUrls, waitForAnyHttpOk } from "../process/health.js";
 import { inspectRunning } from "../process/lifecycle.js";
 import { inspectMiniCpaLock, listLockPreemptResidue } from "../process/lock.js";
@@ -77,11 +73,8 @@ function reportHomeWritable(home: string): boolean {
  * choice, and a broken registration is a warning a user can repair with
  * `cpa auto` — not something that should turn the diagnostics red.
  */
-async function reportAutostart(
-  inspect: () => Promise<AutostartState>,
-  inspectLinger: () => Promise<boolean | undefined>,
-  platform: NodeJS.Platform,
-): Promise<void> {
+async function reportAutostart(deps: DoctorDeps): Promise<void> {
+  const inspect = deps.inspectAutostartState ?? inspectAutostartState;
   let state: AutostartState;
   try {
     state = await inspect();
@@ -103,26 +96,16 @@ async function reportAutostart(
       console.log("[warn] autostart registration disabled by the OS — run: cpa auto");
       break;
   }
-  if (state === "on" && platform === "linux") {
-    let linger: boolean | undefined;
-    try {
-      linger = await inspectLinger();
-    } catch {
-      linger = undefined;
-    }
-    if (linger !== true) {
-      console.log(
-        "[info] systemd linger off — user units start at login only (loginctl enable-linger)",
-      );
-    }
-  }
+  if (state !== "on") return;
+  // lingerHint owns the Linux gating and resolves even when its probe fails.
+  const hint = await (deps.lingerHint ?? lingerHint)();
+  if (hint) console.log(`[info] ${hint}`);
 }
 
 export type DoctorDeps = {
   checkGithubReachability?: () => Promise<GithubReachability>;
   inspectAutostartState?: () => Promise<AutostartState>;
-  inspectLingerEnabled?: () => Promise<boolean | undefined>;
-  platform?: NodeJS.Platform;
+  lingerHint?: typeof lingerHint;
 };
 
 export async function runDoctor(deps?: DoctorDeps): Promise<void> {
@@ -341,11 +324,7 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
     console.log("[info] CLIProxyAPI is not running (cpa start)");
   }
 
-  await reportAutostart(
-    deps?.inspectAutostartState ?? inspectAutostartState,
-    deps?.inspectLingerEnabled ?? inspectLingerEnabled,
-    deps?.platform ?? process.platform,
-  );
+  await reportAutostart(deps ?? {});
 
   if (hasProxyEnvConfigured()) {
     console.log(`[info] proxy env ${describeProxyEnv()}`);

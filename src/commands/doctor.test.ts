@@ -71,7 +71,7 @@ async function runDoctorCapturing(deps: Partial<DoctorDeps> = {}): Promise<strin
     await runDoctor({
       checkGithubReachability: async () => ANONYMOUS_REACHABILITY,
       inspectAutostartState: async () => "off",
-      inspectLingerEnabled: async () => undefined,
+      lingerHint: async () => undefined,
       ...deps,
     });
   } finally {
@@ -371,31 +371,32 @@ describe("runDoctor", () => {
     assert.ok(hasLine(lines, "GitHub API"), lines.join("\n"));
   });
 
-  it("warns about systemd linger only on Linux with an enabled registration", async () => {
+  it("prints the shared linger hint only for an enabled registration", async () => {
     useTempRoot();
     const home = resolveCpaHome();
     ensureDir(home);
     fs.writeFileSync(cpaLayout(home).configFile, "port: 8317\n");
 
+    // The Linux gating lives inside lingerHint itself (see autostart.test.ts);
+    // doctor only decides whether an existing hint is shown.
     const on = await runDoctorCapturing({
-      platform: "linux",
       inspectAutostartState: async () => "on",
-      inspectLingerEnabled: async () => undefined,
+      lingerHint: async () =>
+        "systemd user units start at login only — run: loginctl enable-linger",
     });
-    assert.ok(hasLine(on, "[info] systemd linger off"), on.join("\n"));
+    assert.ok(hasLine(on, "[info] systemd user units start at login"), on.join("\n"));
 
-    const lingerOn = await runDoctorCapturing({
-      platform: "linux",
+    const noHint = await runDoctorCapturing({
       inspectAutostartState: async () => "on",
-      inspectLingerEnabled: async () => true,
+      lingerHint: async () => undefined,
     });
-    assert.equal(hasLine(lingerOn, "systemd linger off"), false, lingerOn.join("\n"));
+    assert.equal(hasLine(noHint, "loginctl enable-linger"), false, noHint.join("\n"));
 
-    const notLinux = await runDoctorCapturing({
-      platform: "win32",
-      inspectAutostartState: async () => "on",
-      inspectLingerEnabled: async () => undefined,
+    const off = await runDoctorCapturing({
+      inspectAutostartState: async () => "off",
+      lingerHint: async () =>
+        "systemd user units start at login only — run: loginctl enable-linger",
     });
-    assert.equal(hasLine(notLinux, "systemd linger off"), false, notLinux.join("\n"));
+    assert.equal(hasLine(off, "loginctl enable-linger"), false, off.join("\n"));
   });
 });
