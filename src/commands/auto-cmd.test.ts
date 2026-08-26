@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
+import { activeExecutablePath, cpaLayout, ensureDir, resolveCpaHome } from "../paths.js";
 import { LINGER_HINT, type AutostartState } from "../process/autostart.js";
 import { captureConsole } from "../test-fixtures/test-env.js";
-import { runAuto, type AutoCommandDependencies } from "./auto-cmd.js";
+import { runAuto, startPreconditionNotes, type AutoCommandDependencies } from "./auto-cmd.js";
 
 function supportedInstall(packageRoot: string) {
   return {
@@ -13,6 +17,13 @@ function supportedInstall(packageRoot: string) {
     npmCommand: "npm" as const,
   };
 }
+
+/**
+ * Keep these tests off the real instance home: the precondition probe reads
+ * `config.yaml` and the managed binary, so the default implementation would make
+ * stderr depend on whatever the developer's machine happens to have installed.
+ */
+const noPreconditionNotes = (): string[] => [];
 
 describe("runAuto", () => {
   it("toggles an absent registration on and an active registration off", async () => {
@@ -34,6 +45,7 @@ describe("runAuto", () => {
         return supportedInstall(packageRoot);
       },
       lingerHint: async () => LINGER_HINT,
+      preconditionNotes: noPreconditionNotes,
     };
 
     const options = { packageRoot: "/npm/lib/node_modules/@astralyn/minicpa" };
@@ -67,6 +79,7 @@ describe("runAuto", () => {
             return supportedInstall("/npm/lib/node_modules/@astralyn/minicpa");
           },
           lingerHint: async () => undefined,
+          preconditionNotes: noPreconditionNotes,
         },
       ),
     );
@@ -95,6 +108,7 @@ describe("runAuto", () => {
             return supportedInstall(packageRoot);
           },
           lingerHint: async () => undefined,
+          preconditionNotes: noPreconditionNotes,
         },
       ),
     );
@@ -114,6 +128,7 @@ describe("runAuto", () => {
       // The full policy (Linux gating included) lives in autostart.ts; the
       // command only decides whether to show the returned hint.
       lingerHint: async () => LINGER_HINT,
+      preconditionNotes: noPreconditionNotes,
     };
     const output = await captureConsole(() => runAuto({ packageRoot }, deps));
     assert.deepEqual(output.stdout, ["Autostart on"]);
@@ -134,6 +149,7 @@ describe("runAuto", () => {
           withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
           detectGlobalInstall: async () => supportedInstall(packageRoot),
           lingerHint: undefined,
+          preconditionNotes: noPreconditionNotes,
         },
       ),
     );
@@ -151,6 +167,7 @@ describe("runAuto", () => {
           withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
           detectGlobalInstall: async () => supportedInstall(packageRoot),
           lingerHint: async () => undefined,
+          preconditionNotes: noPreconditionNotes,
         },
       ),
     );
@@ -173,6 +190,7 @@ describe("runAuto", () => {
       withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
       detectGlobalInstall: async () => supportedInstall(packageRoot),
       lingerHint: async () => undefined,
+      preconditionNotes: noPreconditionNotes,
     };
 
     await captureConsole(() => runAuto({ packageRoot, mode: "on" }, deps));
@@ -204,5 +222,110 @@ describe("runAuto", () => {
       /Autostart requires a stable direct npm-global MiniCPA installation/,
     );
     assert.equal(setCalled, false);
+  });
+
+  it("notes the preconditions a login start would still be missing", async () => {
+    const packageRoot = "/npm/lib/node_modules/@astralyn/minicpa";
+    const base: AutoCommandDependencies = {
+      inspectState: async () => "off",
+      setEnabled: async () => {},
+      withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
+      detectGlobalInstall: async () => supportedInstall(packageRoot),
+      lingerHint: async () => undefined,
+    };
+
+    // Registering still succeeds: `cpa auto on` before `cpa init` is a legitimate
+    // order, and the note is what keeps the gap from surfacing only at next login.
+    const enabling = await captureConsole(() =>
+      runAuto(
+        { packageRoot },
+        { ...base, preconditionNotes: () => ["no config.yaml yet — run: cpa init"] },
+      ),
+    );
+    assert.deepEqual(enabling.stdout, ["Autostart on"]);
+    assert.deepEqual(enabling.stderr, ["Note: no config.yaml yet — run: cpa init"]);
+
+    // Preconditions come before the linger hint, which is the less urgent of the two.
+    const both = await captureConsole(() =>
+      runAuto(
+        { packageRoot },
+        {
+          ...base,
+          lingerHint: async () => LINGER_HINT,
+          preconditionNotes: () => ["no CLIProxyAPI binary yet — run: cpa update"],
+        },
+      ),
+    );
+    assert.deepEqual(both.stderr, [
+      "Note: no CLIProxyAPI binary yet — run: cpa update",
+      `Note: ${LINGER_HINT}`,
+    ]);
+  });
+
+  it("never probes preconditions while turning autostart off", async () => {
+    const packageRoot = "/npm/lib/node_modules/@astralyn/minicpa";
+    let probed = false;
+    const output = await captureConsole(() =>
+      runAuto(
+        { packageRoot, mode: "off" },
+        {
+          inspectState: async () => "on",
+          setEnabled: async () => {},
+          withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
+          detectGlobalInstall: async () => supportedInstall(packageRoot),
+          lingerHint: async () => LINGER_HINT,
+          preconditionNotes: () => {
+            probed = true;
+            return ["should never be reported"];
+          },
+        },
+      ),
+    );
+
+    assert.equal(probed, false);
+    assert.deepEqual(output.stdout, ["Autostart off"]);
+    assert.deepEqual(output.stderr, []);
+  });
+});
+
+describe("startPreconditionNotes", () => {
+  it("reports a missing config and a missing binary, then goes quiet once both exist", () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-auto-cmd-"));
+    const originalLocalAppData = process.env.LOCALAPPDATA;
+    const originalXdgDataHome = process.env.XDG_DATA_HOME;
+    const originalHome = process.env.HOME;
+    const originalCpaHome = process.env.CPA_HOME;
+    process.env.LOCALAPPDATA = base;
+    process.env.XDG_DATA_HOME = base;
+    process.env.HOME = base;
+    delete process.env.CPA_HOME;
+
+    try {
+      const home = resolveCpaHome();
+      ensureDir(home);
+
+      assert.deepEqual(startPreconditionNotes(), [
+        "no config.yaml yet, so a login start would fail — run: cpa init",
+        "no CLIProxyAPI binary yet, so a login start would fail — run: cpa update",
+      ]);
+
+      fs.writeFileSync(cpaLayout(home).configFile, "port: 8317\n");
+      assert.deepEqual(startPreconditionNotes(), [
+        "no CLIProxyAPI binary yet, so a login start would fail — run: cpa update",
+      ]);
+
+      fs.writeFileSync(activeExecutablePath(home), "binary");
+      assert.deepEqual(startPreconditionNotes(), []);
+    } finally {
+      if (originalLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = originalLocalAppData;
+      if (originalXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = originalXdgDataHome;
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalCpaHome === undefined) delete process.env.CPA_HOME;
+      else process.env.CPA_HOME = originalCpaHome;
+      fs.rmSync(base, { recursive: true, force: true });
+    }
   });
 });
