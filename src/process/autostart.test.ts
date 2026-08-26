@@ -5,9 +5,9 @@ import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import {
   type AutostartDependencies,
-  type AutostartState,
   inspectAutostartState,
   inspectLingerEnabled,
+  lingerHint,
   launchAgentContents,
   setAutostartEnabled,
   systemdUnitContents,
@@ -48,38 +48,66 @@ afterEach(() => {
 });
 
 describe("Windows autostart", () => {
+  // What the inspect script would report for a simulated registry/launcher
+  // state; the verdict itself is derived in TypeScript and covered on every
+  // platform below.
+  type WindowsScenario = {
+    runValue?: string;
+    approvalByte?: number;
+    vbsOnDisk?: string;
+  };
+
+  const base64 = (value: string): string => Buffer.from(value, "utf8").toString("base64");
+
+  function factsJson(scenario: WindowsScenario): string {
+    return JSON.stringify({
+      run: scenario.runValue === undefined ? null : base64(scenario.runValue),
+      approval:
+        scenario.approvalByte === undefined
+          ? null
+          : Buffer.from([scenario.approvalByte]).toString("base64"),
+      vbs: scenario.vbsOnDisk === undefined ? null : base64(scenario.vbsOnDisk),
+    });
+  }
+
   it("distinguishes off, on, stale, and OS-disabled registrations", async () => {
     const root = tempDir();
     const cliPath = createCli(root);
     const nodePath = createNode(root, path.join("Program Files", "nodejs", "node.exe"));
     const wscriptPath = path.join(root, "Windows", "System32", "wscript.exe");
     const vbsPath = path.join(root, "AppData", "Local", "MiniCPA", "minicpa-autostart.vbs");
-    const expected = `"${wscriptPath}" "${vbsPath}"`;
-    let state: AutostartState = "off";
+    const launcherCommand = `"${wscriptPath}" "${vbsPath}"`;
+    let scenario: WindowsScenario = {};
     const calls: CommandCall[] = [];
     const runCommand: CommandRunner = async (command, args, options) => {
       calls.push({ command, args });
       const mode = options?.env?.MINICPA_AUTOSTART_MODE;
       if (mode !== undefined) {
+        // The set script must clear StartupApproved in the same pass.
         assert.ok(args.at(-1)?.includes("StartupApproved"));
         assert.ok(args.at(-1)?.includes("DeleteValue"));
-        state = mode === "on" ? "on" : "off";
+        scenario =
+          mode === "on"
+            ? {
+                ...scenario,
+                runValue: options?.env?.MINICPA_AUTOSTART_EXPECTED,
+                approvalByte: undefined,
+                vbsOnDisk: windowsVbsContents(nodePath, cliPath),
+              }
+            : {
+                ...scenario,
+                runValue: undefined,
+                approvalByte: undefined,
+                vbsOnDisk: undefined,
+              };
         return { code: 0, stdout: "", stderr: "" };
       }
 
-      assert.equal(options?.env?.MINICPA_AUTOSTART_EXPECTED, expected);
+      // Inspection passes only the launcher path; verdicts happen in TypeScript.
       assert.equal(options?.env?.MINICPA_AUTOSTART_VBS_PATH, vbsPath);
-      assert.equal(
-        options?.env?.MINICPA_AUTOSTART_VBS_CONTENT,
-        windowsVbsContents(nodePath, cliPath),
-      );
-      const result = {
-        on: { code: 0, stdout: "on", stderr: "" },
-        off: { code: 1, stdout: "off", stderr: "" },
-        stale: { code: 2, stdout: "stale", stderr: "" },
-        disabled: { code: 4, stdout: "disabled", stderr: "" },
-      }[state];
-      return result;
+      assert.equal(options?.env?.MINICPA_AUTOSTART_EXPECTED, undefined);
+      assert.equal(options?.env?.MINICPA_AUTOSTART_VBS_CONTENT, undefined);
+      return { code: 0, stdout: factsJson(scenario), stderr: "" };
     };
     const deps: AutostartDependencies = {
       platform: "win32",
@@ -90,9 +118,19 @@ describe("Windows autostart", () => {
       runCommand,
     };
 
-    for (const expectedState of ["off", "stale", "disabled"] as const) {
-      state = expectedState;
-      assert.equal(await inspectAutostartState(deps), expectedState);
+    for (const [name, reported, expectedState] of [
+      ["no Run value", {}, "off"],
+      ["foreign Run value", { runValue: '"C:\\elsewhere\\wscript.exe" "C:\\x.vbs"' }, "stale"],
+      ["OS-disabled approval bit", { runValue: launcherCommand, approvalByte: 3 }, "disabled"],
+      ["missing launcher file", { runValue: launcherCommand }, "stale"],
+      [
+        "rewritten launcher file",
+        { runValue: launcherCommand, vbsOnDisk: "' tampered launcher" },
+        "stale",
+      ],
+    ] as const) {
+      scenario = reported as WindowsScenario;
+      assert.equal(await inspectAutostartState(deps), expectedState, name);
     }
 
     await setAutostartEnabled(true, deps);
@@ -502,6 +540,57 @@ describe("inspectLingerEnabled", () => {
       },
     });
     assert.equal(result, undefined);
+  });
+});
+
+describe("lingerHint", () => {
+  const linux = { platform: "linux" as const, uid: 1000 };
+
+  it("is silent outside Linux without probing anything", async () => {
+    let called = false;
+    const deps: AutostartDependencies = {
+      platform: "darwin",
+      uid: 1000,
+      runCommand: async () => {
+        called = true;
+        return { code: 0, stdout: "Linger=no\n", stderr: "" };
+      },
+    };
+    assert.equal(await lingerHint(deps), undefined);
+    assert.equal(called, false);
+  });
+
+  it("stays silent when linger is enabled", async () => {
+    const hint = await lingerHint({
+      ...linux,
+      runCommand: async () => ({ code: 0, stdout: "Linger=yes", stderr: "" }),
+    });
+    assert.equal(hint, undefined);
+  });
+
+  it("hints when linger is off or undeterminable", async () => {
+    const outcomes: Array<[string, Awaited<ReturnType<CommandRunner>>]> = [
+      ["linger off", { code: 0, stdout: "Linger=no\n", stderr: "" }],
+      ["nonzero exit", { code: 1, stdout: "", stderr: "No user 1000 known" }],
+      ["unexpected shape", { code: 0, stdout: "", stderr: "" }],
+    ];
+    for (const [name, outcome] of outcomes) {
+      const hint = await lingerHint({
+        ...linux,
+        runCommand: async () => outcome,
+      });
+      assert.match(hint ?? "", /loginctl enable-linger/, name);
+    }
+  });
+
+  it("hints when the probe throws", async () => {
+    const hint = await lingerHint({
+      ...linux,
+      runCommand: async () => {
+        throw new Error("spawn loginctl ENOENT");
+      },
+    });
+    assert.match(hint ?? "", /loginctl enable-linger/);
   });
 });
 

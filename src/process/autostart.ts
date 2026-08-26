@@ -12,7 +12,6 @@ const WINDOWS_EXPECTED_ENV = "MINICPA_AUTOSTART_EXPECTED";
 const WINDOWS_MODE_ENV = "MINICPA_AUTOSTART_MODE";
 const WINDOWS_VBS_FILENAME = "minicpa-autostart.vbs";
 const WINDOWS_VBS_PATH_ENV = "MINICPA_AUTOSTART_VBS_PATH";
-const WINDOWS_VBS_CONTENT_ENV = "MINICPA_AUTOSTART_VBS_CONTENT";
 const LAUNCH_AGENT_LABEL = "com.astralyn.minicpa";
 const LAUNCH_AGENT_NAME = `${LAUNCH_AGENT_LABEL}.plist`;
 const SYSTEMD_UNIT_NAME = "minicpa.service";
@@ -148,26 +147,6 @@ function writeWindowsLauncher(deps?: AutostartDependencies): string {
   return vbsPath;
 }
 
-const WINDOWS_INSPECT_SCRIPT = [
-  "$ErrorActionPreference = 'Stop';",
-  "try {",
-  `$runKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${WINDOWS_RUN_SUBKEY}');`,
-  "if ($null -eq $runKey) { [Console]::Out.Write('off'); exit 1 };",
-  `$value = $runKey.GetValue('${WINDOWS_VALUE_NAME}', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames);`,
-  "$runKey.Dispose();",
-  "if ($null -eq $value) { [Console]::Out.Write('off'); exit 1 };",
-  `if (-not [string]::Equals([string]$value, $env:${WINDOWS_EXPECTED_ENV}, [System.StringComparison]::OrdinalIgnoreCase)) { [Console]::Out.Write('stale'); exit 2 };`,
-  `$approvalKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${WINDOWS_APPROVAL_SUBKEY}');`,
-  "$approval = $null;",
-  `if ($null -ne $approvalKey) { $approval = $approvalKey.GetValue('${WINDOWS_VALUE_NAME}'); $approvalKey.Dispose() };`,
-  "if (($approval -is [byte[]]) -and $approval.Length -gt 0 -and (($approval[0] -band 1) -eq 1)) { [Console]::Out.Write('disabled'); exit 4 };",
-  `if (-not (Test-Path -LiteralPath $env:${WINDOWS_VBS_PATH_ENV})) { [Console]::Out.Write('stale'); exit 2 };`,
-  `$vbsContent = Get-Content -Raw -LiteralPath $env:${WINDOWS_VBS_PATH_ENV};`,
-  `if (-not [string]::Equals([string]$vbsContent, $env:${WINDOWS_VBS_CONTENT_ENV}, [System.StringComparison]::Ordinal)) { [Console]::Out.Write('stale'); exit 2 };`,
-  "[Console]::Out.Write('on'); exit 0;",
-  "} catch { [Console]::Error.Write($_.Exception.Message); exit 3 }",
-].join(" ");
-
 const WINDOWS_SET_SCRIPT = [
   "$ErrorActionPreference = 'Stop';",
   "try {",
@@ -185,6 +164,81 @@ const WINDOWS_SET_SCRIPT = [
   "exit 0;",
   "} catch { [Console]::Error.Write($_.Exception.Message); exit 3 }",
 ].join(" ");
+
+// The inspect script only reports facts (Run value, StartupApproved bytes,
+// launcher file contents) as UTF-8 base64 inside a compressed JSON object.
+// TypeScript owns every verdict, so the decision logic stays unit-testable
+// without spawning PowerShell and no OEM-codepage mangling can reach it.
+const WINDOWS_INSPECT_SCRIPT = [
+  "$ErrorActionPreference = 'Stop';",
+  "try {",
+  `$runKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${WINDOWS_RUN_SUBKEY}');`,
+  "$runValue = $null;",
+  "if ($null -ne $runKey) {",
+  `$runValue = $runKey.GetValue('${WINDOWS_VALUE_NAME}', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames);`,
+  "$runKey.Dispose();",
+  "};",
+  `$approvalKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${WINDOWS_APPROVAL_SUBKEY}');`,
+  "$approval = $null;",
+  "if ($null -ne $approvalKey) {",
+  `$approval = $approvalKey.GetValue('${WINDOWS_VALUE_NAME}');`,
+  "$approvalKey.Dispose();",
+  "};",
+  "$vbs = $null;",
+  `if (Test-Path -LiteralPath $env:${WINDOWS_VBS_PATH_ENV}) { $vbs = Get-Content -Raw -LiteralPath $env:${WINDOWS_VBS_PATH_ENV} };`,
+  "$runB64 = if ($null -eq $runValue) { $null } else { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$runValue)) };",
+  "$approvalB64 = if (($approval -is [byte[]]) -and $approval.Length -gt 0) { [Convert]::ToBase64String($approval) } else { $null };",
+  "$vbsB64 = if ($null -eq $vbs) { $null } else { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$vbs)) };",
+  `[Console]::Out.Write((ConvertTo-Json ([ordered]@{ run = $runB64; approval = $approvalB64; vbs = $vbsB64 }) -Compress)); exit 0`,
+  "} catch { [Console]::Error.Write($_.Exception.Message); exit 3 }",
+].join(" ");
+
+/** Facts reported by the Windows inspect script; string fields are UTF-8 base64. */
+type WindowsInspectFacts = {
+  run?: string | null;
+  approval?: string | null;
+  vbs?: string | null;
+};
+
+function decodeBase64Utf8(value: string | null | undefined): string | null {
+  return value ? Buffer.from(value, "base64").toString("utf8") : null;
+}
+
+function equalsIgnoringCase(left: string, right: string): boolean {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
+/**
+ * Derive the registration state from reported facts, mirroring how Windows
+ * starts the entry: an absent Run value is off; any divergence between the
+ * recorded command or launcher contents and what MiniCPA generates is stale;
+ * the OS StartupApproved bit outranks everything except staleness.
+ */
+function windowsStateFromFacts(
+  facts: WindowsInspectFacts,
+  deps?: AutostartDependencies,
+): AutostartState {
+  const runValue = decodeBase64Utf8(facts.run);
+  // No Run entry means nothing would start at login.
+  if (runValue === null) return "off";
+  // A different command points at another (or a moved) installation.
+  if (!equalsIgnoringCase(runValue, windowsLauncherCommand(deps))) return "stale";
+  const approvalBytes = facts.approval ? Buffer.from(facts.approval, "base64") : undefined;
+  // StartupApproved's first byte has bit 0 set when the user disabled the entry.
+  const approvalByte = approvalBytes?.[0] ?? 0;
+  if ((approvalByte & 1) === 1) {
+    return "disabled";
+  }
+  const vbsContents = decodeBase64Utf8(facts.vbs);
+  // A missing or rewritten launcher cannot be trusted to start MiniCPA.
+  if (
+    vbsContents === null ||
+    vbsContents !== windowsVbsContents(nodePathOf(deps), cliPathOf(deps))
+  ) {
+    return "stale";
+  }
+  return "on";
+}
 
 function readFileIfExists(file: string): string | undefined {
   try {
@@ -279,6 +333,31 @@ function commandFailure(action: string, result: Awaited<ReturnType<CommandRunner
   return new Error(`Failed to ${action} autostart: ${detail}`);
 }
 
+/**
+ * Write a registration file, then register it with the OS manager. Any
+ * failure removes the file again, so a failed enable never leaves behind a
+ * plist or unit that inspection would report as stale.
+ */
+async function writeFileAndRegister(
+  file: string,
+  contents: string,
+  action: string,
+  register: () => Promise<Awaited<ReturnType<CommandRunner>>>,
+): Promise<void> {
+  writeFileAtomic(file, contents, { hardenDirectory: false });
+  let result: Awaited<ReturnType<CommandRunner>>;
+  try {
+    result = await register();
+  } catch (err) {
+    fs.rmSync(file, { force: true });
+    throw err;
+  }
+  if (result.code !== 0) {
+    fs.rmSync(file, { force: true });
+    throw commandFailure(action, result);
+  }
+}
+
 function launchctlReportsDisabled(stdout: string): boolean {
   // Derive the pattern from the label constant: a hardcoded spelling would
   // silently stop matching if LAUNCH_AGENT_LABEL ever changed.
@@ -302,19 +381,19 @@ export async function inspectAutostartState(deps?: AutostartDependencies): Promi
       {
         env: {
           ...envOf(deps),
-          [WINDOWS_EXPECTED_ENV]: windowsLauncherCommand(deps),
           [WINDOWS_VBS_PATH_ENV]: windowsVbsPath(deps),
-          [WINDOWS_VBS_CONTENT_ENV]: windowsVbsContents(nodePathOf(deps), cliPathOf(deps)),
         },
         timeoutMs: 10_000,
       },
     );
-    const state = result.stdout.trim();
-    if (result.code === 0 && state === "on") return "on";
-    if (result.code === 1 && state === "off") return "off";
-    if (result.code === 2 && state === "stale") return "stale";
-    if (result.code === 4 && state === "disabled") return "disabled";
-    throw commandFailure("inspect", result);
+    if (result.code !== 0) throw commandFailure("inspect", result);
+    let facts: WindowsInspectFacts;
+    try {
+      facts = JSON.parse(result.stdout) as WindowsInspectFacts;
+    } catch {
+      throw commandFailure("inspect", result);
+    }
+    return windowsStateFromFacts(facts, deps);
   }
 
   if (platform === "darwin") {
@@ -348,6 +427,29 @@ export async function inspectAutostartState(deps?: AutostartDependencies): Promi
     return "disabled";
   }
   throw commandFailure("inspect", result);
+}
+
+const LINGER_HINT =
+  "systemd user units start at login only — for startup without a login, run: loginctl enable-linger";
+
+/**
+ * Hint when MiniCPA autostart is in force but systemd starts user units at
+ * login only, so a headless machine also needs `loginctl enable-linger`.
+ *
+ * This is the single owner of that policy: only Linux registrations get a
+ * hint, and an undeterminable probe (no loginctl, no user record, spawn
+ * failure) still hints because silence could hide a headless gap. Resolves,
+ * never rejects.
+ */
+export async function lingerHint(deps?: AutostartDependencies): Promise<string | undefined> {
+  if (platformOf(deps) !== "linux") return undefined;
+  let linger: boolean | undefined;
+  try {
+    linger = await inspectLingerEnabled(deps);
+  } catch {
+    linger = undefined;
+  }
+  return linger === true ? undefined : LINGER_HINT;
 }
 
 /**
@@ -419,23 +521,16 @@ async function setMacAutostart(enabled: boolean, deps?: AutostartDependencies): 
     return;
   }
 
-  writeFileAtomic(file, launchAgentContents(nodePathOf(deps), cliPathOf(deps)), {
-    hardenDirectory: false,
-  });
-  let result: Awaited<ReturnType<CommandRunner>>;
-  try {
-    result = await commandRunnerOf(deps)("launchctl", ["enable", launchAgentTarget(deps)], {
-      env: envOf(deps),
-      timeoutMs: 10_000,
-    });
-  } catch (err) {
-    fs.rmSync(file, { force: true });
-    throw err;
-  }
-  if (result.code !== 0) {
-    fs.rmSync(file, { force: true });
-    throw commandFailure("enable", result);
-  }
+  await writeFileAndRegister(
+    file,
+    launchAgentContents(nodePathOf(deps), cliPathOf(deps)),
+    "enable",
+    () =>
+      commandRunnerOf(deps)("launchctl", ["enable", launchAgentTarget(deps)], {
+        env: envOf(deps),
+        timeoutMs: 10_000,
+      }),
+  );
 }
 
 async function setLinuxAutostart(enabled: boolean, deps?: AutostartDependencies): Promise<void> {
@@ -458,21 +553,12 @@ async function setLinuxAutostart(enabled: boolean, deps?: AutostartDependencies)
     return;
   }
 
-  writeFileAtomic(file, expectedSystemdUnit(deps), { hardenDirectory: false });
-  let result: Awaited<ReturnType<CommandRunner>>;
-  try {
-    result = await commandRunnerOf(deps)("systemctl", ["--user", "enable", file], {
+  await writeFileAndRegister(file, expectedSystemdUnit(deps), "enable", () =>
+    commandRunnerOf(deps)("systemctl", ["--user", "enable", file], {
       env: envOf(deps),
       timeoutMs: 10_000,
-    });
-  } catch (err) {
-    fs.rmSync(file, { force: true });
-    throw err;
-  }
-  if (result.code !== 0) {
-    fs.rmSync(file, { force: true });
-    throw commandFailure("enable", result);
-  }
+    }),
+  );
 }
 
 /** Set the current user's MiniCPA autostart registration. */
