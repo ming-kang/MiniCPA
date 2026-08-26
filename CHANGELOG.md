@@ -2,6 +2,13 @@
 
 This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository versions were not published to npm and are not maintained here.
 
+## [Unreleased]
+
+### Changed
+
+- Unified the Linux linger hint wording shared by `cpa auto` and `cpa doctor`; both commands now print the same remediation line (only their prefixes differ).
+- Internal: Windows autostart inspection now reports raw registry and launcher facts (UTF-8 base64 JSON) and derives the `on`/`off`/`stale`/`disabled` verdict in TypeScript, so every detection branch is covered by tests on all platforms. Behavior is unchanged.
+
 ## [0.3.1] - 2026-08-25
 
 ### Changed
