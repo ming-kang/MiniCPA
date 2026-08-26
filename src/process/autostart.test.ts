@@ -118,6 +118,10 @@ describe("Windows autostart", () => {
       runCommand,
     };
 
+    // Verdict precedence is off -> stale -> disabled -> on: a registration that
+    // diverges from what MiniCPA generates would not start MiniCPA even if the
+    // user re-enabled it, so staleness outranks the OS disable bit. Both are
+    // repaired by the same `cpa auto`.
     for (const [name, reported, launcher, expectedState] of [
       ["no Run value", {}, undefined, "off"],
       [
@@ -127,9 +131,15 @@ describe("Windows autostart", () => {
         "stale",
       ],
       [
-        "OS-disabled approval bit",
+        "OS-disabled bit over a divergent registration",
         { runValue: launcherCommand, approvalByte: 3 },
         undefined,
+        "stale",
+      ],
+      [
+        "OS-disabled bit over an intact registration",
+        { runValue: launcherCommand, approvalByte: 3 },
+        windowsVbsContents(nodePath, cliPath),
         "disabled",
       ],
       ["missing launcher file", { runValue: launcherCommand }, undefined, "stale"],
@@ -271,6 +281,7 @@ describe("macOS autostart", () => {
     };
 
     assert.equal(await inspectAutostartState(deps), "off");
+    assert.deepEqual(calls, [], "an absent plist must not spawn launchctl");
     await setAutostartEnabled(true, deps);
     assert.equal(await inspectAutostartState(deps), "on");
 
@@ -360,6 +371,7 @@ describe("Linux autostart", () => {
     };
 
     assert.equal(await inspectAutostartState(deps), "off");
+    assert.deepEqual(calls, [], "an absent unit must not spawn systemctl --user");
     await setAutostartEnabled(true, deps);
     assert.equal(await inspectAutostartState(deps), "on");
 

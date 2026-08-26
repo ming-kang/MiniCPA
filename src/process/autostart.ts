@@ -219,36 +219,27 @@ function decodeBase64Utf8(value: string | null): string | null {
   return value ? Buffer.from(value, "base64").toString("utf8") : null;
 }
 
-function equalsIgnoringCase(left: string, right: string): boolean {
-  return left.toLowerCase() === right.toLowerCase();
-}
-
 /**
- * Derive the registration state from reported facts, mirroring how Windows
- * starts the entry: an absent Run value is off; any divergence between the
- * recorded command or launcher contents and what MiniCPA generates is stale;
- * the OS StartupApproved bit outranks everything except staleness.
+ * Derive a registration state the way the OS acts on it, in one place for all
+ * three platforms:
+ *
+ * - nothing recorded starts nothing, so that is `off`;
+ * - a registration that diverges from what MiniCPA generates cannot be trusted
+ *   to start the right thing, so that is `stale` regardless of any OS flag;
+ * - only an intact registration is then either OS-disabled or in force.
+ *
+ * `osDisabled` is a thunk because the answer costs a child process on macOS and
+ * Linux, and an absent or stale registration must not pay for it — `systemctl
+ * --user` has no session to talk to on a headless box.
  */
-function windowsStateFromFacts(
-  facts: WindowsRegistryFacts,
-  deps?: AutostartDependencies,
-): AutostartState {
-  const runValue = decodeBase64Utf8(facts.run);
-  // No Run entry means nothing would start at login.
-  if (runValue === null) return "off";
-  // A different command points at another (or a moved) installation.
-  if (!equalsIgnoringCase(runValue, windowsLauncherCommand(deps))) return "stale";
-  const approvalBytes = facts.approval ? Buffer.from(facts.approval, "base64") : undefined;
-  // StartupApproved's first byte has bit 0 set when the user disabled the entry.
-  const approvalByte = approvalBytes?.[0] ?? 0;
-  if ((approvalByte & 1) === 1) {
-    return "disabled";
-  }
-  // A missing or rewritten launcher cannot be trusted to start MiniCPA.
-  if (readWindowsLauncher(deps) !== windowsVbsContents(nodePathOf(deps), cliPathOf(deps))) {
-    return "stale";
-  }
-  return "on";
+async function autostartVerdict(registration: {
+  registered: boolean;
+  intact: boolean;
+  osDisabled: () => Promise<boolean>;
+}): Promise<AutostartState> {
+  if (!registration.registered) return "off";
+  if (!registration.intact) return "stale";
+  return (await registration.osDisabled()) ? "disabled" : "on";
 }
 
 function readFileBytesIfExists(file: string): Buffer | undefined {
@@ -437,35 +428,55 @@ export async function inspectAutostartState(deps?: AutostartDependencies): Promi
       throw commandFailure("inspect", result);
     }
     if (!isWindowsRegistryFacts(facts)) throw commandFailure("inspect", result);
-    return windowsStateFromFacts(facts, deps);
+    // Windows records the registration as two artifacts, so both have to match:
+    // the Run value (compared case-insensitively, as the shell resolves it) and
+    // the launcher it points at.
+    const runValue = decodeBase64Utf8(facts.run);
+    // StartupApproved's first byte has bit 0 set when the user disabled the entry.
+    const approvalByte = facts.approval ? (Buffer.from(facts.approval, "base64")[0] ?? 0) : 0;
+    return autostartVerdict({
+      registered: runValue !== null,
+      intact:
+        runValue !== null &&
+        runValue.toLowerCase() === windowsLauncherCommand(deps).toLowerCase() &&
+        readWindowsLauncher(deps) === windowsVbsContents(nodePathOf(deps), cliPathOf(deps)),
+      // Already answered by the call above, so this thunk costs nothing.
+      osDisabled: async () => (approvalByte & 1) === 1,
+    });
   }
 
   if (platform === "darwin") {
     const contents = readFileIfExists(launchAgentPath(deps));
-    if (contents === undefined) return "off";
-    if (contents !== launchAgentContents(nodePathOf(deps), cliPathOf(deps))) return "stale";
-    const result = await runAutostartCommand(deps, "launchctl", [
-      "print-disabled",
-      launchAgentDomain(deps),
-    ]);
-    if (result.code !== 0) throw commandFailure("inspect", result);
-    return launchctlReportsDisabled(result.stdout) ? "disabled" : "on";
+    return autostartVerdict({
+      registered: contents !== undefined,
+      intact: contents === launchAgentContents(nodePathOf(deps), cliPathOf(deps)),
+      osDisabled: async () => {
+        const result = await runAutostartCommand(deps, "launchctl", [
+          "print-disabled",
+          launchAgentDomain(deps),
+        ]);
+        if (result.code !== 0) throw commandFailure("inspect", result);
+        return launchctlReportsDisabled(result.stdout);
+      },
+    });
   }
 
   const contents = readFileIfExists(systemdUnitPath(deps));
-  if (contents === undefined) return "off";
-  if (contents !== expectedSystemdUnit(deps)) return "stale";
-  const result = await runAutostartCommand(deps, "systemctl", [
-    "--user",
-    "is-enabled",
-    SYSTEMD_UNIT_NAME,
-  ]);
-  const state = result.stdout.trim();
-  if (result.code === 0 && state === "enabled") return "on";
-  if (SYSTEMD_INACTIVE_STATES.test(state)) {
-    return "disabled";
-  }
-  throw commandFailure("inspect", result);
+  return autostartVerdict({
+    registered: contents !== undefined,
+    intact: contents === expectedSystemdUnit(deps),
+    osDisabled: async () => {
+      const result = await runAutostartCommand(deps, "systemctl", [
+        "--user",
+        "is-enabled",
+        SYSTEMD_UNIT_NAME,
+      ]);
+      const state = result.stdout.trim();
+      if (result.code === 0 && state === "enabled") return false;
+      if (SYSTEMD_INACTIVE_STATES.test(state)) return true;
+      throw commandFailure("inspect", result);
+    },
+  });
 }
 
 const LINGER_HINT =
