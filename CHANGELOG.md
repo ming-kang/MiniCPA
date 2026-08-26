@@ -6,8 +6,9 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ### Changed
 
+- Autostart inspection now reports `stale` instead of `disabled` when a registration is both diverging from what MiniCPA generates and disabled by the OS. A registration that does not match would not start MiniCPA even after being re-enabled, so repairing it is the more useful thing to report. `cpa auto` already repaired both states, so the only visible difference is the wording of one `cpa doctor` line.
 - Unified the Linux linger hint wording shared by `cpa auto` and `cpa doctor`; both commands now print the same remediation line (only their prefixes differ).
-- Internal: Windows autostart inspection now reports raw registry and launcher facts (UTF-8 base64 JSON) and derives the `on`/`off`/`stale`/`disabled` verdict in TypeScript, so every detection branch is covered by tests on all platforms. Behavior is unchanged.
+- Internal: Windows autostart inspection now reports only registry facts (the Run value and the raw StartupApproved bytes, as UTF-8 base64 JSON). The launcher file is read and compared in Node like the macOS plist and the systemd unit, and all three platforms derive `on`/`off`/`stale`/`disabled` through one shared verdict function, so every detection branch is covered by tests on all platforms.
 
 ## [0.3.1] - 2026-08-25
 
