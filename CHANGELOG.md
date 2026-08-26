@@ -4,8 +4,15 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+### Added
+
+- `cpa start` now records every outcome as one line in `<cpa home>/logs/minicpa.log` (`start ok pid=…` or `start failed: …`, rotated at 1 MiB). This closes a blind spot in autostart: the Windows login launcher discards the process's output, and the failures that matter most at login — a missing `config.yaml`, a missing managed binary, a held lock — all happen before the CLIProxyAPI child exists, so they reached neither the terminal nor `cpa.log` / `cpa.err.log`. Successes are recorded too, so an empty log now means the launcher never fired rather than that it fired and worked.
+- `cpa doctor` replays the last recorded start failure when autostart is in force, so a login that failed silently is diagnosable without waiting for another reboot.
+- `cpa auto on` now prints a `Note:` when `config.yaml` or the managed binary is still missing, naming `cpa init` or `cpa update`. Registration still succeeds — enabling autostart before initializing is a legitimate order for scripted setups — but the gap no longer surfaces only at the next login.
+
 ### Changed
 
+- macOS autostart inspection now fails closed: an entry present in `launchctl print-disabled` whose value MiniCPA does not recognize is reported as `disabled` instead of `on`. Both `true` and `disabled` count as disabled and both `false` and `enabled` as in force, so a rendering change in a future macOS release no longer silently reports a suppressed registration as working. An absent entry still means enabled, which is the normal state on a healthy Mac.
 - Autostart inspection now reports `stale` instead of `disabled` when a registration is both diverging from what MiniCPA generates and disabled by the OS. A registration that does not match would not start MiniCPA even after being re-enabled, so repairing it is the more useful thing to report. `cpa auto` already repaired both states, so the only visible difference is the wording of one `cpa doctor` line.
 - Unified the Linux linger hint wording shared by `cpa auto` and `cpa doctor`; both commands now print the same remediation line (only their prefixes differ).
 - Internal: Windows autostart inspection now reports only registry facts (the Run value and the raw StartupApproved bytes, as UTF-8 base64 JSON). The launcher file is read and compared in Node like the macOS plist and the systemd unit, and all three platforms derive `on`/`off`/`stale`/`disabled` through one shared verdict function, so every detection branch is covered by tests on all platforms.
