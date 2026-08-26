@@ -15,6 +15,15 @@ const WINDOWS_VBS_PATH_ENV = "MINICPA_AUTOSTART_VBS_PATH";
 const LAUNCH_AGENT_LABEL = "com.astralyn.minicpa";
 const LAUNCH_AGENT_NAME = `${LAUNCH_AGENT_LABEL}.plist`;
 const SYSTEMD_UNIT_NAME = "minicpa.service";
+const AUTOSTART_COMMAND_TIMEOUT_MS = 10_000;
+
+/**
+ * Every `systemctl --user is-enabled` answer other than `enabled` that still
+ * describes a real, known unit. Anything outside this set is an unexpected
+ * reply rather than a registration state.
+ */
+const SYSTEMD_INACTIVE_STATES =
+  /^(?:enabled-runtime|disabled|masked(?:-runtime)?|not-found|static|indirect|linked(?:-runtime)?|alias|generated|transient)$/;
 
 export type AutostartState = "on" | "off" | "stale" | "disabled";
 
@@ -334,6 +343,23 @@ function commandFailure(action: string, result: CommandResult): Error {
 }
 
 /**
+ * Run an OS autostart manager. Every command in this module talks to a local
+ * service manager or registry, so they all share one environment and one
+ * timeout; `extraEnv` carries the few values a script reads from its own env.
+ */
+function runAutostartCommand(
+  deps: AutostartDependencies | undefined,
+  command: string,
+  args: string[],
+  extraEnv?: NodeJS.ProcessEnv,
+): Promise<CommandResult> {
+  return commandRunnerOf(deps)(command, args, {
+    env: { ...envOf(deps), ...extraEnv },
+    timeoutMs: AUTOSTART_COMMAND_TIMEOUT_MS,
+  });
+}
+
+/**
  * Write a registration file, then register it with the OS manager. Any
  * failure removes the file again, so a failed enable never leaves behind a
  * plist or unit that inspection would report as stale.
@@ -375,16 +401,11 @@ export async function inspectAutostartState(deps?: AutostartDependencies): Promi
   assertSupportedPlatform(platform);
 
   if (platform === "win32") {
-    const result = await commandRunnerOf(deps)(
+    const result = await runAutostartCommand(
+      deps,
       "powershell.exe",
       ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_INSPECT_SCRIPT],
-      {
-        env: {
-          ...envOf(deps),
-          [WINDOWS_VBS_PATH_ENV]: windowsVbsPath(deps),
-        },
-        timeoutMs: 10_000,
-      },
+      { [WINDOWS_VBS_PATH_ENV]: windowsVbsPath(deps) },
     );
     if (result.code !== 0) throw commandFailure("inspect", result);
     let facts: WindowsInspectFacts;
@@ -400,11 +421,10 @@ export async function inspectAutostartState(deps?: AutostartDependencies): Promi
     const contents = readFileIfExists(launchAgentPath(deps));
     if (contents === undefined) return "off";
     if (contents !== launchAgentContents(nodePathOf(deps), cliPathOf(deps))) return "stale";
-    const result = await commandRunnerOf(deps)(
-      "launchctl",
-      ["print-disabled", launchAgentDomain(deps)],
-      { env: envOf(deps), timeoutMs: 10_000 },
-    );
+    const result = await runAutostartCommand(deps, "launchctl", [
+      "print-disabled",
+      launchAgentDomain(deps),
+    ]);
     if (result.code !== 0) throw commandFailure("inspect", result);
     return launchctlReportsDisabled(result.stdout) ? "disabled" : "on";
   }
@@ -412,18 +432,14 @@ export async function inspectAutostartState(deps?: AutostartDependencies): Promi
   const contents = readFileIfExists(systemdUnitPath(deps));
   if (contents === undefined) return "off";
   if (contents !== expectedSystemdUnit(deps)) return "stale";
-  const result = await commandRunnerOf(deps)(
-    "systemctl",
-    ["--user", "is-enabled", SYSTEMD_UNIT_NAME],
-    { env: envOf(deps), timeoutMs: 10_000 },
-  );
+  const result = await runAutostartCommand(deps, "systemctl", [
+    "--user",
+    "is-enabled",
+    SYSTEMD_UNIT_NAME,
+  ]);
   const state = result.stdout.trim();
   if (result.code === 0 && state === "enabled") return "on";
-  if (
-    /^(?:enabled-runtime|disabled|masked(?:-runtime)?|not-found|static|indirect|linked(?:-runtime)?|alias|generated|transient)$/.test(
-      state,
-    )
-  ) {
+  if (SYSTEMD_INACTIVE_STATES.test(state)) {
     return "disabled";
   }
   throw commandFailure("inspect", result);
@@ -464,11 +480,11 @@ export async function inspectLingerEnabled(
 ): Promise<boolean | undefined> {
   if (platformOf(deps) !== "linux") return undefined;
   try {
-    const result = await commandRunnerOf(deps)(
-      "loginctl",
-      ["show-user", String(uidOf(deps)), "--property=Linger"],
-      { env: envOf(deps), timeoutMs: 10_000 },
-    );
+    const result = await runAutostartCommand(deps, "loginctl", [
+      "show-user",
+      String(uidOf(deps)),
+      "--property=Linger",
+    ]);
     if (result.code !== 0) return undefined;
     const match = /^Linger=(yes|no)$/m.exec(result.stdout.trim());
     return match ? match[1] === "yes" : undefined;
@@ -482,16 +498,13 @@ async function setWindowsAutostart(enabled: boolean, deps?: AutostartDependencie
   // Write the launcher before the Run value: a crash in between leaves an inert
   // orphan file, never a Run value pointing at a missing launcher.
   if (enabled) writeWindowsLauncher(deps);
-  const result = await commandRunnerOf(deps)(
+  const result = await runAutostartCommand(
+    deps,
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_SET_SCRIPT],
     {
-      env: {
-        ...envOf(deps),
-        [WINDOWS_MODE_ENV]: enabled ? "on" : "off",
-        ...(enabled ? { [WINDOWS_EXPECTED_ENV]: windowsLauncherCommand(deps) } : {}),
-      },
-      timeoutMs: 10_000,
+      [WINDOWS_MODE_ENV]: enabled ? "on" : "off",
+      ...(enabled ? { [WINDOWS_EXPECTED_ENV]: windowsLauncherCommand(deps) } : {}),
     },
   );
   if (result.code !== 0) {
@@ -525,11 +538,7 @@ async function setMacAutostart(enabled: boolean, deps?: AutostartDependencies): 
     file,
     launchAgentContents(nodePathOf(deps), cliPathOf(deps)),
     "enable",
-    () =>
-      commandRunnerOf(deps)("launchctl", ["enable", launchAgentTarget(deps)], {
-        env: envOf(deps),
-        timeoutMs: 10_000,
-      }),
+    () => runAutostartCommand(deps, "launchctl", ["enable", launchAgentTarget(deps)]),
   );
 }
 
@@ -539,11 +548,11 @@ async function setLinuxAutostart(enabled: boolean, deps?: AutostartDependencies)
     if (readFileIfExists(file) === undefined) return;
     let failure: unknown;
     try {
-      const result = await commandRunnerOf(deps)(
-        "systemctl",
-        ["--user", "disable", SYSTEMD_UNIT_NAME],
-        { env: envOf(deps), timeoutMs: 10_000 },
-      );
+      const result = await runAutostartCommand(deps, "systemctl", [
+        "--user",
+        "disable",
+        SYSTEMD_UNIT_NAME,
+      ]);
       if (result.code !== 0) failure = commandFailure("disable", result);
     } catch (err) {
       failure = err;
@@ -554,10 +563,7 @@ async function setLinuxAutostart(enabled: boolean, deps?: AutostartDependencies)
   }
 
   await writeFileAndRegister(file, expectedSystemdUnit(deps), "enable", () =>
-    commandRunnerOf(deps)("systemctl", ["--user", "enable", file], {
-      env: envOf(deps),
-      timeoutMs: 10_000,
-    }),
+    runAutostartCommand(deps, "systemctl", ["--user", "enable", file]),
   );
 }
 
