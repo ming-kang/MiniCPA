@@ -13,6 +13,7 @@ import {
   systemdUnitContents,
   windowsVbsContents,
 } from "./autostart.js";
+import type { CommandResult } from "./runtime.js";
 
 const temps: string[] = [];
 
@@ -516,7 +517,7 @@ describe("inspectLingerEnabled", () => {
   });
 
   it("treats failures and unknown output as indeterminate", async () => {
-    const outcomes: Array<[string, Awaited<ReturnType<CommandRunner>>]> = [
+    const outcomes: Array<[string, CommandResult]> = [
       ["nonzero exit", { code: 1, stdout: "", stderr: "No user 1000 known" }],
       ["empty output", { code: 0, stdout: "", stderr: "" }],
       ["unexpected shape", { code: 0, stdout: "Linger=maybe", stderr: "" }],
@@ -569,7 +570,7 @@ describe("lingerHint", () => {
   });
 
   it("hints when linger is off or undeterminable", async () => {
-    const outcomes: Array<[string, Awaited<ReturnType<CommandRunner>>]> = [
+    const outcomes: Array<[string, CommandResult]> = [
       ["linger off", { code: 0, stdout: "Linger=no\n", stderr: "" }],
       ["nonzero exit", { code: 1, stdout: "", stderr: "No user 1000 known" }],
       ["unexpected shape", { code: 0, stdout: "", stderr: "" }],

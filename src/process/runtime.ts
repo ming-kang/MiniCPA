@@ -10,6 +10,9 @@ import {
 } from "../paths.js";
 import { buildCredentialSafeChildEnv } from "./child-env.js";
 
+/** Outcome of a finished child process: exit code plus its captured streams. */
+export type CommandResult = { code: number; stdout: string; stderr: string };
+
 /** MiniCPA tokens are always stripped from the child environment (see AGENTS.md). */
 export async function runCommand(
   command: string,
@@ -19,7 +22,7 @@ export async function runCommand(
     env?: NodeJS.ProcessEnv;
     timeoutMs?: number;
   },
-): Promise<{ code: number; stdout: string; stderr: string }> {
+): Promise<CommandResult> {
   const timeoutMs = options?.timeoutMs ?? 30_000;
   const env = buildCredentialSafeChildEnv({ ...process.env, ...options?.env });
   return new Promise((resolve, reject) => {

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeFileAtomic } from "../fs-atomic.js";
-import { runCommand } from "./runtime.js";
+import { type CommandResult, runCommand } from "./runtime.js";
 
 const WINDOWS_RUN_SUBKEY = String.raw`Software\Microsoft\Windows\CurrentVersion\Run`;
 const WINDOWS_APPROVAL_SUBKEY = String.raw`Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`;
@@ -328,7 +328,7 @@ function assertCliPath(deps?: AutostartDependencies): void {
   }
 }
 
-function commandFailure(action: string, result: Awaited<ReturnType<CommandRunner>>): Error {
+function commandFailure(action: string, result: CommandResult): Error {
   const detail = result.stderr.trim() || result.stdout.trim() || `exit code ${result.code}`;
   return new Error(`Failed to ${action} autostart: ${detail}`);
 }
@@ -342,10 +342,10 @@ async function writeFileAndRegister(
   file: string,
   contents: string,
   action: string,
-  register: () => Promise<Awaited<ReturnType<CommandRunner>>>,
+  register: () => Promise<CommandResult>,
 ): Promise<void> {
   writeFileAtomic(file, contents, { hardenDirectory: false });
-  let result: Awaited<ReturnType<CommandRunner>>;
+  let result: CommandResult;
   try {
     result = await register();
   } catch (err) {
