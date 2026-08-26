@@ -220,6 +220,22 @@ function decodeBase64Utf8(value: string | null): string | null {
 }
 
 /**
+ * Parse the inspect script's payload, reporting anything unusable as an inspect
+ * failure. Without the shape check a stray non-string would surface as a raw
+ * decoding TypeError from inside the verdict instead.
+ */
+function parseWindowsRegistryFacts(result: CommandResult): WindowsRegistryFacts {
+  let facts: unknown;
+  try {
+    facts = JSON.parse(result.stdout);
+  } catch {
+    throw commandFailure("inspect", result);
+  }
+  if (!isWindowsRegistryFacts(facts)) throw commandFailure("inspect", result);
+  return facts;
+}
+
+/**
  * Derive a registration state the way the OS acts on it, in one place for all
  * three platforms:
  *
@@ -421,21 +437,15 @@ export async function inspectAutostartState(deps?: AutostartDependencies): Promi
       WINDOWS_INSPECT_SCRIPT,
     ]);
     if (result.code !== 0) throw commandFailure("inspect", result);
-    let facts: unknown;
-    try {
-      facts = JSON.parse(result.stdout);
-    } catch {
-      throw commandFailure("inspect", result);
-    }
-    if (!isWindowsRegistryFacts(facts)) throw commandFailure("inspect", result);
-    // Windows records the registration as two artifacts, so both have to match:
-    // the Run value (compared case-insensitively, as the shell resolves it) and
-    // the launcher it points at.
+    const facts = parseWindowsRegistryFacts(result);
     const runValue = decodeBase64Utf8(facts.run);
     // StartupApproved's first byte has bit 0 set when the user disabled the entry.
     const approvalByte = facts.approval ? (Buffer.from(facts.approval, "base64")[0] ?? 0) : 0;
     return autostartVerdict({
       registered: runValue !== null,
+      // Windows records the registration as two artifacts, so both have to
+      // match: the Run value (compared case-insensitively, as the shell
+      // resolves it) and the launcher it points at.
       intact:
         runValue !== null &&
         runValue.toLowerCase() === windowsLauncherCommand(deps).toLowerCase() &&
