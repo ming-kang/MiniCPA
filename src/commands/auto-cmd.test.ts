@@ -33,13 +33,15 @@ describe("runAuto", () => {
         assert.equal(options?.requireWritable, false);
         return supportedInstall(packageRoot);
       },
-      inspectLinger: async () => true,
+      lingerHint: async () =>
+        "systemd user units start at login only — run: loginctl enable-linger",
     };
 
     const options = { packageRoot: "/npm/lib/node_modules/@astralyn/minicpa" };
     const first = await captureConsole(() => runAuto(options, deps));
     assert.equal(state, "on");
     assert.deepEqual(first.stdout, ["Autostart on"]);
+    assert.ok(first.stderr.some((line) => line.includes("loginctl enable-linger")));
 
     const second = await captureConsole(() => runAuto(options, deps));
     assert.equal(state, "off");
@@ -65,7 +67,7 @@ describe("runAuto", () => {
             detectionCalled = true;
             return supportedInstall("/npm/lib/node_modules/@astralyn/minicpa");
           },
-          inspectLinger: async () => true,
+          lingerHint: async () => undefined,
         },
       ),
     );
@@ -93,7 +95,7 @@ describe("runAuto", () => {
             detectionCalled = true;
             return supportedInstall(packageRoot);
           },
-          inspectLinger: async () => true,
+          lingerHint: async () => undefined,
         },
       ),
     );
@@ -103,17 +105,17 @@ describe("runAuto", () => {
     assert.deepEqual(output.stdout, ["Autostart on"]);
   });
 
-  it("notes missing linger after enabling on Linux", async () => {
+  it("prints the shared linger hint after enabling", async () => {
     const packageRoot = "/npm/lib/node_modules/@astralyn/minicpa";
     const deps: AutoCommandDependencies = {
       inspectState: async () => "off",
       setEnabled: async () => {},
       withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
       detectGlobalInstall: async () => supportedInstall(packageRoot),
-      platform: "linux",
-      // An indeterminate probe (no loginctl / no user record) is treated as
-      // "not enabled": the note is safer than silence on a likely headless box.
-      inspectLinger: async () => undefined,
+      // The full policy (Linux gating included) lives in autostart.ts; the
+      // command only decides whether to show the returned hint.
+      lingerHint: async () =>
+        "systemd user units start at login only — for startup without a login, run: loginctl enable-linger",
     };
     const output = await captureConsole(() => runAuto({ packageRoot }, deps));
     assert.deepEqual(output.stdout, ["Autostart on"]);
@@ -127,23 +129,22 @@ describe("runAuto", () => {
     );
   });
 
-  it("stays quiet when linger is enabled or the platform is not Linux", async () => {
+  it("stays quiet when no hint applies", async () => {
     const packageRoot = "/npm/lib/node_modules/@astralyn/minicpa";
-    const base: AutoCommandDependencies = {
-      inspectState: async () => "off",
-      setEnabled: async () => {},
-      withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
-      detectGlobalInstall: async () => supportedInstall(packageRoot),
-    };
-    const lingerOn = await captureConsole(() =>
-      runAuto({ packageRoot }, { ...base, platform: "linux", inspectLinger: async () => true }),
+    const output = await captureConsole(() =>
+      runAuto(
+        { packageRoot },
+        {
+          inspectState: async () => "off",
+          setEnabled: async () => {},
+          withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
+          detectGlobalInstall: async () => supportedInstall(packageRoot),
+          lingerHint: async () => undefined,
+        },
+      ),
     );
-    assert.deepEqual(lingerOn.stderr, []);
-
-    const notLinux = await captureConsole(() =>
-      runAuto({ packageRoot }, { ...base, platform: "win32", inspectLinger: async () => false }),
-    );
-    assert.deepEqual(notLinux.stderr, []);
+    assert.deepEqual(output.stdout, ["Autostart on"]);
+    assert.deepEqual(output.stderr, []);
   });
 
   it("supports deterministic explicit on/off without requiring inspection", async () => {
@@ -160,7 +161,7 @@ describe("runAuto", () => {
       },
       withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
       detectGlobalInstall: async () => supportedInstall(packageRoot),
-      inspectLinger: async () => true,
+      lingerHint: async () => undefined,
     };
 
     await captureConsole(() => runAuto({ packageRoot, mode: "on" }, deps));

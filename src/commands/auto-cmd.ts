@@ -1,6 +1,6 @@
 import {
   inspectAutostartState,
-  inspectLingerEnabled,
+  lingerHint,
   type AutostartState,
   setAutostartEnabled,
 } from "../process/autostart.js";
@@ -10,12 +10,20 @@ import { detectNpmGlobalInstall } from "../update/self-upgrade.js";
 export type AutoMode = "on" | "off";
 
 export type AutoCommandDependencies = {
-  inspectState?: () => Promise<AutostartState>;
-  setEnabled?: (enabled: boolean) => Promise<void>;
+  inspectState?: typeof inspectAutostartState;
+  setEnabled?: typeof setAutostartEnabled;
   withLock?: typeof withMiniCpaLock;
   detectGlobalInstall?: typeof detectNpmGlobalInstall;
-  platform?: NodeJS.Platform;
-  inspectLinger?: () => Promise<boolean | undefined>;
+  /** Full linger-hint policy, including its Linux gating. */
+  lingerHint?: typeof lingerHint;
+};
+
+const realAutoDeps: Required<AutoCommandDependencies> = {
+  inspectState: inspectAutostartState,
+  setEnabled: setAutostartEnabled,
+  withLock: withMiniCpaLock,
+  detectGlobalInstall: detectNpmGlobalInstall,
+  lingerHint,
 };
 
 function nextAutostartEnabled(current: AutostartState): boolean {
@@ -30,17 +38,15 @@ export async function runAuto(
   options: { packageRoot: string; mode?: AutoMode },
   deps?: AutoCommandDependencies,
 ): Promise<void> {
-  const inspect = deps?.inspectState ?? inspectAutostartState;
-  const set = deps?.setEnabled ?? setAutostartEnabled;
-  const withLock = deps?.withLock ?? withMiniCpaLock;
-  const detectGlobalInstall = deps?.detectGlobalInstall ?? detectNpmGlobalInstall;
-
-  const enabled = await withLock("auto", async () => {
+  const d = { ...realAutoDeps, ...deps };
+  const enabled = await d.withLock("auto", async () => {
     const next =
-      options.mode === undefined ? nextAutostartEnabled(await inspect()) : options.mode === "on";
+      options.mode === undefined
+        ? nextAutostartEnabled(await d.inspectState())
+        : options.mode === "on";
 
     if (next) {
-      const installation = await detectGlobalInstall(
+      const installation = await d.detectGlobalInstall(
         options.packageRoot,
         {},
         { requireWritable: false },
@@ -56,17 +62,11 @@ export async function runAuto(
         );
       }
     }
-    await set(next);
+    await d.setEnabled(next);
     return next;
   });
   console.log(`Autostart ${enabled ? "on" : "off"}`);
-  if (
-    enabled &&
-    (deps?.platform ?? process.platform) === "linux" &&
-    (await (deps?.inspectLinger ?? (() => inspectLingerEnabled(deps)))()) !== true
-  ) {
-    console.error(
-      "Note: systemd user units start at login. For startup without a login, run: loginctl enable-linger",
-    );
-  }
+  if (!enabled) return;
+  const hint = await d.lingerHint();
+  if (hint) console.error(`Note: ${hint}`);
 }
