@@ -107,6 +107,8 @@ Upgrading MiniCPA does not stop, restart, or modify the managed CLIProxyAPI proc
 
 `cpa status` reports `Autostart  on`, `off`, `stale`, or `disabled`. `stale` means an OS registration exists but targets a different launcher; an argument-free `cpa auto` repairs it. `disabled` means the registration is present but disabled by the OS; an argument-free `cpa auto` re-enables it. Inspection failures are reported as `unknown` without hiding runtime status.
 
+`cpa auto on` only schedules `cpa start --no-wait`; it installs nothing. Enabling it before `cpa init` or `cpa update` still succeeds, but prints a `Note:` naming the missing config or binary — otherwise that start would fail at every login without anyone seeing it. Every `cpa start` records its outcome in `<cpa home>/logs/minicpa.log`, since a login launch discards its own output and pre-spawn failures never reach CLIProxyAPI's logs; `cpa doctor` replays the last record when it was a failure.
+
 `cpa logs` prints the last `-n, --lines <n>` lines from stdout and stderr logs (default `80`; positive whole numbers only). `--err` selects the error log, while `-f`/`--follow` streams new output and ignores `--lines`.
 
 Errors print a short message. Set `DEBUG=1` to include stack traces.
@@ -140,6 +142,8 @@ npm uninstall -g @astralyn/minicpa
 ```
 
 If MiniCPA was removed first, use the PID in `<cpa home>/state/cpa.pid` with `taskkill /PID <pid> /F` on Windows or `kill <pid>` elsewhere. Uninstalling MiniCPA never deletes `config.yaml`, API keys, provider OAuth tokens under `auths/`, logs, or other instance data. Remove `cpa root` manually only after CLIProxyAPI has stopped.
+
+Uninstalling also leaves any autostart registration in place, and it keeps firing at every login against a CLI that no longer exists — silently on Windows. If you skipped `cpa auto off` above, remove it by hand: the `MiniCPA` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` plus `%LOCALAPPDATA%\MiniCPA\minicpa-autostart.vbs` on Windows, `~/Library/LaunchAgents/com.astralyn.minicpa.plist` on macOS, or `systemctl --user disable minicpa.service` and `~/.config/systemd/user/minicpa.service` on Linux.
 
 See [docs/cpa-reference.md](docs/cpa-reference.md) for detailed lifecycle, locking, update, and troubleshooting behavior. Release notes are in [CHANGELOG.md](CHANGELOG.md).
 
