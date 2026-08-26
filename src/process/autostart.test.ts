@@ -6,7 +6,7 @@ import { afterEach, describe, it } from "node:test";
 import {
   type AutostartDependencies,
   inspectAutostartState,
-  inspectLingerEnabled,
+  LINGER_HINT,
   lingerHint,
   launchAgentContents,
   setAutostartEnabled,
@@ -511,71 +511,6 @@ describe("unsupported platform", () => {
   });
 });
 
-describe("inspectLingerEnabled", () => {
-  it("returns undefined without running anything outside Linux", async () => {
-    let called = false;
-    const runCommand: CommandRunner = async () => {
-      called = true;
-      return { code: 0, stdout: "Linger=yes", stderr: "" };
-    };
-    const result = await inspectLingerEnabled({ platform: "win32", runCommand });
-    assert.equal(result, undefined);
-    assert.equal(called, false);
-  });
-
-  it("reads the linger flag for the current user on Linux", async () => {
-    const calls: CommandCall[] = [];
-    const result = await inspectLingerEnabled({
-      platform: "linux",
-      uid: 1000,
-      runCommand: async (command, args) => {
-        calls.push({ command, args });
-        return { code: 0, stdout: "Linger=no\n", stderr: "" };
-      },
-    });
-    assert.equal(result, false);
-    assert.deepEqual(calls, [
-      { command: "loginctl", args: ["show-user", "1000", "--property=Linger"] },
-    ]);
-  });
-
-  it("reports enabled linger as true", async () => {
-    const result = await inspectLingerEnabled({
-      platform: "linux",
-      uid: 1000,
-      runCommand: async () => ({ code: 0, stdout: "Linger=yes", stderr: "" }),
-    });
-    assert.equal(result, true);
-  });
-
-  it("treats failures and unknown output as indeterminate", async () => {
-    const outcomes: Array<[string, CommandResult]> = [
-      ["nonzero exit", { code: 1, stdout: "", stderr: "No user 1000 known" }],
-      ["empty output", { code: 0, stdout: "", stderr: "" }],
-      ["unexpected shape", { code: 0, stdout: "Linger=maybe", stderr: "" }],
-    ];
-    for (const [name, outcome] of outcomes) {
-      const result = await inspectLingerEnabled({
-        platform: "linux",
-        uid: 1000,
-        runCommand: async () => outcome,
-      });
-      assert.equal(result, undefined, name);
-    }
-  });
-
-  it("returns undefined when the command throws", async () => {
-    const result = await inspectLingerEnabled({
-      platform: "linux",
-      uid: 1000,
-      runCommand: async () => {
-        throw new Error("spawn loginctl ENOENT");
-      },
-    });
-    assert.equal(result, undefined);
-  });
-});
-
 describe("lingerHint", () => {
   const linux = { platform: "linux" as const, uid: 1000 };
 
@@ -593,7 +528,7 @@ describe("lingerHint", () => {
     assert.equal(called, false);
   });
 
-  it("stays silent when linger is enabled", async () => {
+  it("stays silent when linger is confirmed enabled", async () => {
     const hint = await lingerHint({
       ...linux,
       runCommand: async () => ({ code: 0, stdout: "Linger=yes", stderr: "" }),
@@ -601,18 +536,35 @@ describe("lingerHint", () => {
     assert.equal(hint, undefined);
   });
 
+  it("probes linger for the current user", async () => {
+    const calls: CommandCall[] = [];
+    await lingerHint({
+      ...linux,
+      runCommand: async (command, args) => {
+        calls.push({ command, args });
+        return { code: 0, stdout: "Linger=yes", stderr: "" };
+      },
+    });
+    assert.deepEqual(calls, [
+      { command: "loginctl", args: ["show-user", "1000", "--property=Linger"] },
+    ]);
+  });
+
   it("hints when linger is off or undeterminable", async () => {
+    // Anything short of a confirmed Linger=yes hints: on a headless box silence
+    // would hide the gap this note exists to surface.
     const outcomes: Array<[string, CommandResult]> = [
       ["linger off", { code: 0, stdout: "Linger=no\n", stderr: "" }],
       ["nonzero exit", { code: 1, stdout: "", stderr: "No user 1000 known" }],
-      ["unexpected shape", { code: 0, stdout: "", stderr: "" }],
+      ["empty output", { code: 0, stdout: "", stderr: "" }],
+      ["unexpected shape", { code: 0, stdout: "Linger=maybe", stderr: "" }],
     ];
     for (const [name, outcome] of outcomes) {
       const hint = await lingerHint({
         ...linux,
         runCommand: async () => outcome,
       });
-      assert.match(hint ?? "", /loginctl enable-linger/, name);
+      assert.equal(hint, LINGER_HINT, name);
     }
   });
 
@@ -623,7 +575,7 @@ describe("lingerHint", () => {
         throw new Error("spawn loginctl ENOENT");
       },
     });
-    assert.match(hint ?? "", /loginctl enable-linger/);
+    assert.equal(hint, LINGER_HINT);
   });
 });
 

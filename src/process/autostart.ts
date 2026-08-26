@@ -479,39 +479,18 @@ export async function inspectAutostartState(deps?: AutostartDependencies): Promi
   });
 }
 
-const LINGER_HINT =
+export const LINGER_HINT =
   "systemd user units start at login only — for startup without a login, run: loginctl enable-linger";
-
-/**
- * Hint when MiniCPA autostart is in force but systemd starts user units at
- * login only, so a headless machine also needs `loginctl enable-linger`.
- *
- * This is the single owner of that policy: only Linux registrations get a
- * hint, and an undeterminable probe (no loginctl, no user record, spawn
- * failure) still hints because silence could hide a headless gap. Resolves,
- * never rejects.
- */
-export async function lingerHint(deps?: AutostartDependencies): Promise<string | undefined> {
-  if (platformOf(deps) !== "linux") return undefined;
-  let linger: boolean | undefined;
-  try {
-    linger = await inspectLingerEnabled(deps);
-  } catch {
-    linger = undefined;
-  }
-  return linger === true ? undefined : LINGER_HINT;
-}
 
 /**
  * Whether the current user's systemd units also start without a login.
  *
  * A `WantedBy=default.target` user unit runs at login, so a headless machine
  * needs `loginctl enable-linger`. Returns undefined when the answer cannot be
- * determined — non-Linux, no loginctl, or a user with no session record.
+ * determined — non-Linux, no loginctl, or a user with no session record — and
+ * never rejects: every failure mode is folded into that undefined.
  */
-export async function inspectLingerEnabled(
-  deps?: AutostartDependencies,
-): Promise<boolean | undefined> {
+async function inspectLingerEnabled(deps?: AutostartDependencies): Promise<boolean | undefined> {
   if (platformOf(deps) !== "linux") return undefined;
   try {
     const result = await runAutostartCommand(deps, "loginctl", [
@@ -525,6 +504,20 @@ export async function inspectLingerEnabled(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Hint when MiniCPA autostart is in force but systemd starts user units at
+ * login only, so a headless machine also needs `loginctl enable-linger`.
+ *
+ * This is the single owner of that policy: only Linux registrations get a hint,
+ * and anything short of a confirmed `Linger=yes` hints — an undeterminable
+ * probe could be hiding a headless gap, and silence there is the worse
+ * failure. Resolves, never rejects.
+ */
+export async function lingerHint(deps?: AutostartDependencies): Promise<string | undefined> {
+  if (platformOf(deps) !== "linux") return undefined;
+  return (await inspectLingerEnabled(deps)) === true ? undefined : LINGER_HINT;
 }
 
 async function setWindowsAutostart(enabled: boolean, deps?: AutostartDependencies): Promise<void> {
