@@ -14,6 +14,7 @@ import {
   windowsVbsContents,
 } from "./autostart.js";
 import type { CommandResult } from "./runtime.js";
+import { runCommand } from "./runtime.js";
 
 const temps: string[] = [];
 
@@ -591,6 +592,36 @@ describe("real platform inspection", () => {
   }, async () => {
     const state = await inspectAutostartState();
     assert.ok(["on", "off", "stale", "disabled"].includes(state));
+  });
+
+  // Pins the contract between the embedded script and the TypeScript that reads
+  // it. isWindowsRegistryFacts already rejects a renamed field (an absent `run`
+  // is neither null nor a string), so this covers the drift a shape guard cannot
+  // see: an extra field, or a value the script stopped base64-encoding. Reads
+  // only; never writes the registry.
+  it("reports exactly the registry fields TypeScript reads", {
+    skip: process.platform !== "win32",
+  }, async () => {
+    let payload: string | undefined;
+    await inspectAutostartState({
+      runCommand: async (command, args, options) => {
+        const result = await runCommand(command, args, options);
+        payload = result.stdout;
+        return result;
+      },
+    });
+
+    const facts: unknown = JSON.parse(payload ?? "");
+    assert.ok(facts !== null && typeof facts === "object" && !Array.isArray(facts));
+    const entries = facts as Record<string, unknown>;
+    assert.deepEqual(Object.keys(entries).sort(), ["approval", "run"]);
+    for (const [field, value] of Object.entries(entries)) {
+      assert.ok(value === null || typeof value === "string", `${field} must be null or base64`);
+      if (typeof value === "string") {
+        // Round-trips as base64, so the script encoded it the way TS decodes it.
+        assert.equal(Buffer.from(value, "base64").toString("base64"), value, field);
+      }
+    }
   });
 
   // Optional: kept only while macos-latest runners expose the GUI domain to
