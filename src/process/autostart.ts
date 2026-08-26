@@ -413,11 +413,30 @@ async function registerWithRollback(
   }
 }
 
+/** Values `launchctl print-disabled` is known to use for an enabled service. */
+const LAUNCHCTL_ENABLED_VALUES = new Set(["false", "enabled"]);
+
+/**
+ * Whether `launchctl print-disabled` reports the MiniCPA agent as disabled.
+ *
+ * An absent entry means no override is recorded, which is the normal enabled
+ * state, so that has to read as "not disabled" — otherwise every healthy Mac
+ * would report `disabled`. A *present* entry whose value is not a spelling
+ * launchctl is known to use fails closed instead, because the two ways of being
+ * wrong are not symmetric: reporting `disabled` costs one `cpa auto`, the same
+ * repair a `stale` verdict asks for, while reporting `on` hides a registration
+ * that starts nothing.
+ */
 function launchctlReportsDisabled(stdout: string): boolean {
   // Derive the pattern from the label constant: a hardcoded spelling would
   // silently stop matching if LAUNCH_AGENT_LABEL ever changed.
   const label = LAUNCH_AGENT_LABEL.replaceAll(".", String.raw`\.`);
-  return new RegExp(String.raw`"${label}"\s*=>\s*true\b`).test(stdout);
+  const entry = new RegExp(String.raw`"${label}"\s*=>\s*(\S+)`).exec(stdout);
+  if (entry === null) return false;
+  // Tolerate a trailing separator so a rendering like `=> false;` still reads as
+  // the enabled value it is rather than as an unknown one.
+  const value = (entry[1] ?? "").toLowerCase().replace(/[^a-z]+$/, "");
+  return !LAUNCHCTL_ENABLED_VALUES.has(value);
 }
 
 function expectedSystemdUnit(deps?: AutostartDependencies): string {

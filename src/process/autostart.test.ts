@@ -143,6 +143,22 @@ describe("Windows autostart", () => {
         windowsVbsContents(nodePath, cliPath),
         "disabled",
       ],
+      // Explorer and Task Manager write 02 00 00 00 ... for an entry the user
+      // enabled, so a present approval value with bit 0 clear must stay `on`.
+      [
+        "approval recorded as enabled",
+        { runValue: launcherCommand, approvalByte: 2 },
+        windowsVbsContents(nodePath, cliPath),
+        "on",
+      ],
+      // The Run value is compared the way the shell resolves it, so a differently
+      // cased command written by an older MiniCPA is the same registration.
+      [
+        "Run value differing only in case",
+        { runValue: launcherCommand.toUpperCase() },
+        windowsVbsContents(nodePath, cliPath),
+        "on",
+      ],
       ["missing launcher file", { runValue: launcherCommand }, undefined, "stale"],
       ["rewritten launcher file", { runValue: launcherCommand }, "' tampered launcher", "stale"],
     ] as const) {
@@ -308,6 +324,45 @@ describe("macOS autostart", () => {
 
     await setAutostartEnabled(false, deps);
     assert.equal(await inspectAutostartState(deps), "off");
+  });
+
+  it("reads launchctl's disabled override, failing closed on an unknown value", async () => {
+    const home = tempDir();
+    const cliPath = createCli(home);
+    const nodePath = createNode(home, "node");
+    fs.mkdirSync(path.join(home, "Library", "LaunchAgents"), { recursive: true });
+    fs.writeFileSync(
+      path.join(home, "Library", "LaunchAgents", "com.astralyn.minicpa.plist"),
+      launchAgentContents(nodePath, cliPath),
+    );
+
+    // An intact plist, so every verdict below comes from the launchctl output.
+    for (const [name, value, expected] of [
+      ["legacy true", '"com.astralyn.minicpa" => true', "disabled"],
+      ["spelled disabled", '"com.astralyn.minicpa" => disabled', "disabled"],
+      ["legacy false", '"com.astralyn.minicpa" => false', "on"],
+      ["spelled enabled", '"com.astralyn.minicpa" => enabled', "on"],
+      ["trailing separator", '"com.astralyn.minicpa" => false;', "on"],
+      // No override recorded for this label is the normal enabled state; reading
+      // it as disabled would report every healthy Mac as disabled.
+      ["only other services", '"com.apple.something" => true', "on"],
+      // Fail closed: an unrecognized value must not be mistaken for enabled.
+      ["unknown rendering", '"com.astralyn.minicpa" => suppressed', "disabled"],
+    ] as const) {
+      const state = await inspectAutostartState({
+        platform: "darwin",
+        homedir: home,
+        uid: 501,
+        nodePath,
+        cliPath,
+        runCommand: async () => ({
+          code: 0,
+          stdout: `disabled services = {\n\t${value}\n}`,
+          stderr: "",
+        }),
+      });
+      assert.equal(state, expected, name);
+    }
   });
 
   it("escapes XML path characters and rejects control characters", () => {
