@@ -73,8 +73,10 @@ function reportHomeWritable(home: string): boolean {
  * choice, and a broken registration is a warning a user can repair with
  * `cpa auto` — not something that should turn the diagnostics red.
  */
-async function reportAutostart(deps: DoctorDeps): Promise<void> {
-  const inspect = deps.inspectAutostartState ?? inspectAutostartState;
+async function reportAutostart(
+  inspect: () => Promise<AutostartState>,
+  hint: () => Promise<string | undefined>,
+): Promise<void> {
   let state: AutostartState;
   try {
     state = await inspect();
@@ -97,9 +99,9 @@ async function reportAutostart(deps: DoctorDeps): Promise<void> {
       break;
   }
   if (state !== "on") return;
-  // lingerHint owns the Linux gating and resolves even when its probe fails.
-  const hint = await (deps.lingerHint ?? lingerHint)();
-  if (hint) console.log(`[info] ${hint}`);
+  // The hint owns the Linux gating and resolves even when its probe fails.
+  const line = await hint();
+  if (line) console.log(`[info] ${line}`);
 }
 
 export type DoctorDeps = {
@@ -324,7 +326,10 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
     console.log("[info] CLIProxyAPI is not running (cpa start)");
   }
 
-  await reportAutostart(deps ?? {});
+  await reportAutostart(
+    deps?.inspectAutostartState ?? inspectAutostartState,
+    deps?.lingerHint ?? lingerHint,
+  );
 
   if (hasProxyEnvConfigured()) {
     console.log(`[info] proxy env ${describeProxyEnv()}`);

@@ -15,7 +15,7 @@ import { writeInstallState, writePidRecord } from "../state.js";
 import { withHttpsFixture } from "../test-fixtures/http-server.js";
 import type { GithubReachability } from "../update/github-client.js";
 import { DEFAULT_LOG_ROTATE_BYTES } from "../util.js";
-import type { AutostartState } from "../process/autostart.js";
+import { LINGER_HINT, type AutostartState } from "../process/autostart.js";
 import { runDoctor, type DoctorDeps } from "./doctor.js";
 
 const originalLocalAppData = process.env.LOCALAPPDATA;
@@ -381,10 +381,9 @@ describe("runDoctor", () => {
     // doctor only decides whether an existing hint is shown.
     const on = await runDoctorCapturing({
       inspectAutostartState: async () => "on",
-      lingerHint: async () =>
-        "systemd user units start at login only — run: loginctl enable-linger",
+      lingerHint: async () => LINGER_HINT,
     });
-    assert.ok(hasLine(on, "[info] systemd user units start at login"), on.join("\n"));
+    assert.ok(hasLine(on, `[info] ${LINGER_HINT}`), on.join("\n"));
 
     const noHint = await runDoctorCapturing({
       inspectAutostartState: async () => "on",
@@ -394,8 +393,7 @@ describe("runDoctor", () => {
 
     const off = await runDoctorCapturing({
       inspectAutostartState: async () => "off",
-      lingerHint: async () =>
-        "systemd user units start at login only — run: loginctl enable-linger",
+      lingerHint: async () => LINGER_HINT,
     });
     assert.equal(hasLine(off, "loginctl enable-linger"), false, off.join("\n"));
   });
