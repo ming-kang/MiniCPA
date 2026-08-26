@@ -5,11 +5,11 @@ import { writeFileAtomic } from "../fs-atomic.js";
 import { cpaLayout, ensureDir, miniCpaTempDownloadDir } from "../paths.js";
 import { readInstallState, type InstallState, patchInstallState } from "../state.js";
 import { removeDirBestEffort, sha256File } from "../util.js";
+import { downloadToFile } from "./download.js";
+import { parseGithubDigest } from "./checksum.js";
 import {
-  downloadToFile,
   fetchLatestRelease,
   normalizeTagVersion,
-  parseGithubDigest,
   releaseAssetDownloadUrl,
   repoFromPanelUrl,
   type GhAsset,

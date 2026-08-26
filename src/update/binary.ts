@@ -32,13 +32,9 @@ import {
   listReleaseAssetCandidates,
   type PickedReleaseAsset,
 } from "./cpa-release.js";
-import {
-  downloadToFile,
-  fetchChecksums,
-  fetchLatestRelease,
-  normalizeTagVersion,
-  type GhRelease,
-} from "./github-client.js";
+import { downloadToFile } from "./download.js";
+import { fetchChecksums } from "./checksum.js";
+import { fetchLatestRelease, normalizeTagVersion, type GhRelease } from "./github-client.js";
 import { silentUpdateReporter, type UpdateReporter } from "./reporter.js";
 
 const MAX_BINARY_ARCHIVE_BYTES = 512 * 1024 * 1024;

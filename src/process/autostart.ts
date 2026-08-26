@@ -5,24 +5,14 @@ import { fileURLToPath } from "node:url";
 import { writeFileAtomic } from "../fs-atomic.js";
 import { type CommandResult, runCommand } from "./runtime.js";
 
-const WINDOWS_RUN_SUBKEY = String.raw`Software\Microsoft\Windows\CurrentVersion\Run`;
-const WINDOWS_APPROVAL_SUBKEY = String.raw`Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`;
-const WINDOWS_VALUE_NAME = "MiniCPA";
-const WINDOWS_EXPECTED_ENV = "MINICPA_AUTOSTART_EXPECTED";
-const WINDOWS_MODE_ENV = "MINICPA_AUTOSTART_MODE";
-const WINDOWS_VBS_FILENAME = "minicpa-autostart.vbs";
-const LAUNCH_AGENT_LABEL = "com.astralyn.minicpa";
-const LAUNCH_AGENT_NAME = `${LAUNCH_AGENT_LABEL}.plist`;
-const SYSTEMD_UNIT_NAME = "minicpa.service";
-const AUTOSTART_COMMAND_TIMEOUT_MS = 10_000;
+// Re-export platform-specific serialization helpers for tests.
+export { windowsVbsContents } from "./autostart-windows.js";
+export { launchAgentContents } from "./autostart-macos.js";
+export { systemdUnitContents } from "./autostart-linux.js";
+// Re-export linger hint from Linux backend for callers.
+export { LINGER_HINT, lingerHint } from "./autostart-linux.js";
 
-/**
- * Every `systemctl --user is-enabled` answer other than `enabled` that still
- * describes a real, known unit. Anything outside this set is an unexpected
- * reply rather than a registration state.
- */
-const SYSTEMD_INACTIVE_STATES =
-  /^(?:enabled-runtime|disabled|masked(?:-runtime)?|not-found|static|indirect|linked(?:-runtime)?|alias|generated|transient)$/;
+const AUTOSTART_COMMAND_TIMEOUT_MS = 10_000;
 
 export type AutostartState = "on" | "off" | "stale" | "disabled";
 
@@ -38,23 +28,25 @@ export type AutostartDependencies = {
   runCommand?: CommandRunner;
 };
 
-function platformOf(deps?: AutostartDependencies): NodeJS.Platform {
+// --- Shared helpers exported for platform backends ---
+
+export function platformOf(deps?: AutostartDependencies): NodeJS.Platform {
   return deps?.platform ?? process.platform;
 }
 
-function homeOf(deps?: AutostartDependencies): string {
+export function homeOf(deps?: AutostartDependencies): string {
   return deps?.homedir ?? os.homedir();
 }
 
-function envOf(deps?: AutostartDependencies): NodeJS.ProcessEnv {
+export function envOf(deps?: AutostartDependencies): NodeJS.ProcessEnv {
   return deps?.env ?? process.env;
 }
 
-function nodePathOf(deps?: AutostartDependencies): string {
+export function nodePathOf(deps?: AutostartDependencies): string {
   return deps?.nodePath ?? process.execPath;
 }
 
-function cliPathOf(deps?: AutostartDependencies): string {
+export function cliPathOf(deps?: AutostartDependencies): string {
   if (deps?.cliPath) return deps.cliPath;
   const moduleDir = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(moduleDir, "..", "..", "dist", "cli.js");
@@ -64,40 +56,7 @@ function commandRunnerOf(deps?: AutostartDependencies): CommandRunner {
   return deps?.runCommand ?? runCommand;
 }
 
-function uidOf(deps?: AutostartDependencies): number {
-  const uid = deps?.uid ?? process.getuid?.();
-  if (uid === undefined) throw new Error("Could not determine the current user ID for autostart");
-  return uid;
-}
-
-function launchAgentPath(deps?: AutostartDependencies): string {
-  return path.join(homeOf(deps), "Library", "LaunchAgents", LAUNCH_AGENT_NAME);
-}
-
-function launchAgentDomain(deps?: AutostartDependencies): string {
-  return `gui/${uidOf(deps)}`;
-}
-
-function launchAgentTarget(deps?: AutostartDependencies): string {
-  return `${launchAgentDomain(deps)}/${LAUNCH_AGENT_LABEL}`;
-}
-
-function absoluteEnvPath(value: string | undefined, fallback: string): string {
-  const configured = value?.trim();
-  return configured && path.isAbsolute(configured) ? configured : fallback;
-}
-
-function linuxDataHome(deps?: AutostartDependencies): string {
-  return absoluteEnvPath(envOf(deps).XDG_DATA_HOME, path.join(homeOf(deps), ".local", "share"));
-}
-
-function systemdUnitPath(deps?: AutostartDependencies): string {
-  // Keep the managed source at one stable path. `systemctl enable <absolute path>`
-  // links it into a user manager that uses a different XDG_CONFIG_HOME.
-  return path.join(homeOf(deps), ".config", "systemd", "user", SYSTEMD_UNIT_NAME);
-}
-
-function assertSafeLauncherValue(value: string): void {
+export function assertSafeLauncherValue(value: string): void {
   for (const character of value) {
     const codePoint = character.codePointAt(0) ?? 0;
     if (codePoint <= 0x1f || codePoint === 0x7f) {
@@ -106,276 +65,15 @@ function assertSafeLauncherValue(value: string): void {
   }
 }
 
-function windowsWscriptPath(deps?: AutostartDependencies): string {
-  // Run-key values are parsed as a command line by the shell, so a fully
-  // qualified wscript.exe is unambiguous regardless of PATH order.
-  const systemRoot = envOf(deps).SystemRoot?.trim();
-  const base = systemRoot && path.isAbsolute(systemRoot) ? systemRoot : "C:\\Windows";
-  return path.join(base, "System32", "wscript.exe");
-}
-
-function windowsVbsPath(deps?: AutostartDependencies): string {
-  const localAppData = envOf(deps).LOCALAPPDATA?.trim();
-  const base =
-    localAppData && path.isAbsolute(localAppData)
-      ? localAppData
-      : path.join(homeOf(deps), "AppData", "Local");
-  return path.join(base, "MiniCPA", WINDOWS_VBS_FILENAME);
-}
-
-function windowsLauncherCommand(deps?: AutostartDependencies): string {
-  const wscript = windowsWscriptPath(deps);
-  const vbsPath = windowsVbsPath(deps);
-  assertSafeLauncherValue(wscript);
-  assertSafeLauncherValue(vbsPath);
-  return `"${wscript}" "${vbsPath}"`;
-}
-
-/** @internal exported for focused serialization tests. */
-export function windowsVbsContents(nodePath: string, cliPath: string): string {
-  assertSafeLauncherValue(nodePath);
-  assertSafeLauncherValue(cliPath);
-  // VBScript string literals escape `"` by doubling it. wscript.exe parses a
-  // .vbs as the ANSI codepage unless it is UTF-16 with a BOM, so the file is
-  // written as UTF-16LE + BOM to keep non-ANSI paths (e.g. non-ASCII user
-  // names) intact.
-  const command = `"${nodePath}" "${cliPath}" start --no-wait`;
-  return [
-    "' MiniCPA login autostart launcher (generated by cpa auto; do not edit)",
-    'Set shell = CreateObject("WScript.Shell")',
-    `shell.Run "${command.replaceAll('"', '""')}", 0, False`,
-    "",
-  ].join("\r\n");
-}
-
-function writeWindowsLauncher(deps?: AutostartDependencies): string {
-  const vbsPath = windowsVbsPath(deps);
-  const contents = `\uFEFF${windowsVbsContents(nodePathOf(deps), cliPathOf(deps))}`;
-  writeFileAtomic(vbsPath, Buffer.from(contents, "utf16le"));
-  return vbsPath;
-}
-
-const WINDOWS_SET_SCRIPT = [
-  "$ErrorActionPreference = 'Stop';",
-  "try {",
-  `$mode = $env:${WINDOWS_MODE_ENV};`,
-  "if ($mode -eq 'on') {",
-  `$runKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${WINDOWS_RUN_SUBKEY}');`,
-  `$runKey.SetValue('${WINDOWS_VALUE_NAME}', $env:${WINDOWS_EXPECTED_ENV}, [Microsoft.Win32.RegistryValueKind]::String);`,
-  "$runKey.Dispose();",
-  "} elseif ($mode -eq 'off') {",
-  `$runKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${WINDOWS_RUN_SUBKEY}', $true);`,
-  `if ($null -ne $runKey) { $runKey.DeleteValue('${WINDOWS_VALUE_NAME}', $false); $runKey.Dispose() };`,
-  "} else { throw 'Invalid autostart mode' };",
-  `$approvalKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${WINDOWS_APPROVAL_SUBKEY}', $true);`,
-  `if ($null -ne $approvalKey) { $approvalKey.DeleteValue('${WINDOWS_VALUE_NAME}', $false); $approvalKey.Dispose() };`,
-  "exit 0;",
-  "} catch { [Console]::Error.Write($_.Exception.Message); exit 3 }",
-].join(" ");
-
-// The inspect script only reports registry facts (the Run value and the raw
-// StartupApproved bytes) as UTF-8 base64 inside a compressed JSON object. The
-// launcher is an ordinary local file, so Node reads and compares it directly —
-// exactly like the macOS plist and the systemd unit. TypeScript owns every
-// verdict, so the decision logic stays unit-testable without spawning
-// PowerShell and no OEM-codepage mangling can reach it.
-const WINDOWS_INSPECT_SCRIPT = [
-  "$ErrorActionPreference = 'Stop';",
-  "try {",
-  `$runKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${WINDOWS_RUN_SUBKEY}');`,
-  "$runValue = $null;",
-  "if ($null -ne $runKey) {",
-  `$runValue = $runKey.GetValue('${WINDOWS_VALUE_NAME}', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames);`,
-  "$runKey.Dispose();",
-  "};",
-  `$approvalKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${WINDOWS_APPROVAL_SUBKEY}');`,
-  "$approval = $null;",
-  "if ($null -ne $approvalKey) {",
-  `$approval = $approvalKey.GetValue('${WINDOWS_VALUE_NAME}');`,
-  "$approvalKey.Dispose();",
-  "};",
-  "$runB64 = if ($null -eq $runValue) { $null } else { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$runValue)) };",
-  "$approvalB64 = if (($approval -is [byte[]]) -and $approval.Length -gt 0) { [Convert]::ToBase64String($approval) } else { $null };",
-  `[Console]::Out.Write((ConvertTo-Json ([ordered]@{ run = $runB64; approval = $approvalB64 }) -Compress)); exit 0`,
-  "} catch { [Console]::Error.Write($_.Exception.Message); exit 3 }",
-].join(" ");
-
-/**
- * Registry facts reported by the Windows inspect script. Both fields are base64
- * and always present — `ConvertTo-Json` emits explicit nulls — so absence is
- * spelled `null` rather than a missing key.
- */
-type WindowsRegistryFacts = { run: string | null; approval: string | null };
-
-function isWindowsRegistryFacts(value: unknown): value is WindowsRegistryFacts {
-  if (typeof value !== "object" || value === null) return false;
-  const { run, approval } = value as Record<string, unknown>;
-  return (
-    (run === null || typeof run === "string") && (approval === null || typeof approval === "string")
-  );
-}
-
-function decodeBase64Utf8(value: string | null): string | null {
-  return value ? Buffer.from(value, "base64").toString("utf8") : null;
-}
-
-/**
- * Parse the inspect script's payload, reporting anything unusable as an inspect
- * failure. Without the shape check a stray non-string would surface as a raw
- * decoding TypeError from inside the verdict instead.
- */
-function parseWindowsRegistryFacts(result: CommandResult): WindowsRegistryFacts {
-  let facts: unknown;
-  try {
-    facts = JSON.parse(result.stdout);
-  } catch {
-    throw commandFailure("inspect", result);
-  }
-  if (!isWindowsRegistryFacts(facts)) throw commandFailure("inspect", result);
-  return facts;
-}
-
-/**
- * Derive a registration state the way the OS acts on it, in one place for all
- * three platforms:
- *
- * - nothing recorded starts nothing, so that is `off`;
- * - a registration that diverges from what MiniCPA generates cannot be trusted
- *   to start the right thing, so that is `stale` regardless of any OS flag;
- * - only an intact registration is then either OS-disabled or in force.
- *
- * `osDisabled` is a thunk because the answer costs a child process on macOS and
- * Linux, and an absent or stale registration must not pay for it — `systemctl
- * --user` has no session to talk to on a headless box.
- */
-async function autostartVerdict(registration: {
-  registered: boolean;
-  intact: boolean;
-  osDisabled: () => Promise<boolean>;
-}): Promise<AutostartState> {
-  if (!registration.registered) return "off";
-  if (!registration.intact) return "stale";
-  return (await registration.osDisabled()) ? "disabled" : "on";
-}
-
-function readFileBytesIfExists(file: string): Buffer | undefined {
-  try {
-    return fs.readFileSync(file);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw err;
-  }
-}
-
-function readFileIfExists(file: string): string | undefined {
-  return readFileBytesIfExists(file)?.toString("utf8");
-}
-
-/**
- * Read the generated Windows launcher back as comparable text.
- *
- * writeWindowsLauncher writes UTF-16LE with a leading BOM, so decode the same
- * way and drop the BOM to compare against windowsVbsContents() directly. A
- * launcher in any other encoding decodes to something that cannot match, which
- * is the right answer: it is not a launcher MiniCPA generated.
- */
-function readWindowsLauncher(deps?: AutostartDependencies): string | undefined {
-  const raw = readFileBytesIfExists(windowsVbsPath(deps));
-  if (raw === undefined) return undefined;
-  const text = raw.toString("utf16le");
-  return text.startsWith("\uFEFF") ? text.slice(1) : text;
-}
-
-function escapeXml(value: string): string {
-  assertSafeLauncherValue(value);
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-}
-
-/** @internal exported for focused serialization tests. */
-export function launchAgentContents(nodePath: string, cliPath: string): string {
-  return [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
-    '<plist version="1.0">',
-    "<dict>",
-    "  <key>Label</key>",
-    `  <string>${LAUNCH_AGENT_LABEL}</string>`,
-    "  <key>ProgramArguments</key>",
-    "  <array>",
-    `    <string>${escapeXml(nodePath)}</string>`,
-    `    <string>${escapeXml(cliPath)}</string>`,
-    "    <string>start</string>",
-    "    <string>--no-wait</string>",
-    "  </array>",
-    "  <key>RunAtLoad</key>",
-    "  <true/>",
-    "  <key>KeepAlive</key>",
-    "  <false/>",
-    "</dict>",
-    "</plist>",
-    "",
-  ].join("\n");
-}
-
-function quoteSystemdValue(value: string, escapeDollar: boolean): string {
-  assertSafeLauncherValue(value);
-  let escaped = value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%");
-  if (escapeDollar) escaped = escaped.replaceAll("$", () => "$$");
-  return `"${escaped}"`;
-}
-
-function quoteSystemdArgument(value: string): string {
-  return quoteSystemdValue(value, true);
-}
-
-function quoteSystemdEnvironment(name: string, value: string): string {
-  return quoteSystemdValue(`${name}=${value}`, false);
-}
-
-/** @internal exported for focused serialization tests. */
-export function systemdUnitContents(nodePath: string, cliPath: string, dataHome: string): string {
-  return [
-    "[Unit]",
-    "Description=Start CLIProxyAPI through MiniCPA",
-    "",
-    "[Service]",
-    "Type=oneshot",
-    "RemainAfterExit=yes",
-    `Environment=${quoteSystemdEnvironment("XDG_DATA_HOME", dataHome)}`,
-    `ExecStart=${quoteSystemdArgument(nodePath)} ${quoteSystemdArgument(cliPath)} start --no-wait`,
-    "",
-    "[Install]",
-    "WantedBy=default.target",
-    "",
-  ].join("\n");
-}
-
-function assertSupportedPlatform(
-  platform: NodeJS.Platform,
-): asserts platform is "win32" | "darwin" | "linux" {
-  if (platform !== "win32" && platform !== "darwin" && platform !== "linux") {
-    throw new Error(`Autostart is not supported on ${platform}`);
-  }
-}
-
-function assertCliPath(deps?: AutostartDependencies): void {
-  const cliPath = cliPathOf(deps);
-  if (!fs.existsSync(cliPath)) {
-    throw new Error(`MiniCPA CLI entry not found: ${cliPath}. Run npm run build and retry.`);
-  }
-}
-
-function commandFailure(action: string, result: CommandResult): Error {
+export function commandFailure(action: string, result: CommandResult): Error {
   const detail = result.stderr.trim() || result.stdout.trim() || `exit code ${result.code}`;
   return new Error(`Failed to ${action} autostart: ${detail}`);
 }
 
 /**
- * Run an OS autostart manager. Every command in this module talks to a local
- * service manager or registry, so they all share one environment and one
- * timeout; `extraEnv` carries the few values a script reads from its own env.
+ * Run an OS autostart manager command with shared environment and timeout.
  */
-function runAutostartCommand(
+export function runAutostartCommand(
   deps: AutostartDependencies | undefined,
   command: string,
   args: string[],
@@ -388,11 +86,32 @@ function runAutostartCommand(
 }
 
 /**
- * Write a registration file, then register it with the OS manager. Any
- * failure removes the file again, so a failed enable never leaves behind a
- * plist or unit that inspection would report as stale.
+ * Derive a registration state from platform-specific signals.
  */
-async function registerWithRollback(
+export async function autostartVerdict(registration: {
+  registered: boolean;
+  intact: boolean;
+  osDisabled: () => Promise<boolean>;
+}): Promise<AutostartState> {
+  if (!registration.registered) return "off";
+  if (!registration.intact) return "stale";
+  return (await registration.osDisabled()) ? "disabled" : "on";
+}
+
+export function readFileIfExists(file: string): string | undefined {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw err;
+  }
+}
+
+/**
+ * Write a registration file, then register it with the OS manager. Any
+ * failure removes the file again.
+ */
+export async function registerWithRollback(
   file: string,
   contents: string,
   command: string,
@@ -413,34 +132,21 @@ async function registerWithRollback(
   }
 }
 
-/** Values `launchctl print-disabled` is known to use for an enabled service. */
-const LAUNCHCTL_ENABLED_VALUES = new Set(["false", "enabled"]);
+// --- Platform dispatch ---
 
-/**
- * Whether `launchctl print-disabled` reports the MiniCPA agent as disabled.
- *
- * An absent entry means no override is recorded, which is the normal enabled
- * state, so that has to read as "not disabled" — otherwise every healthy Mac
- * would report `disabled`. A *present* entry whose value is not a spelling
- * launchctl is known to use fails closed instead, because the two ways of being
- * wrong are not symmetric: reporting `disabled` costs one `cpa auto`, the same
- * repair a `stale` verdict asks for, while reporting `on` hides a registration
- * that starts nothing.
- */
-function launchctlReportsDisabled(stdout: string): boolean {
-  // Derive the pattern from the label constant: a hardcoded spelling would
-  // silently stop matching if LAUNCH_AGENT_LABEL ever changed.
-  const label = LAUNCH_AGENT_LABEL.replaceAll(".", String.raw`\.`);
-  const entry = new RegExp(String.raw`"${label}"\s*=>\s*(\S+)`).exec(stdout);
-  if (entry === null) return false;
-  // Tolerate a trailing separator so a rendering like `=> false;` still reads as
-  // the enabled value it is rather than as an unknown one.
-  const value = (entry[1] ?? "").toLowerCase().replace(/[^a-z]+$/, "");
-  return !LAUNCHCTL_ENABLED_VALUES.has(value);
+function assertSupportedPlatform(
+  platform: NodeJS.Platform,
+): asserts platform is "win32" | "darwin" | "linux" {
+  if (platform !== "win32" && platform !== "darwin" && platform !== "linux") {
+    throw new Error(`Autostart is not supported on ${platform}`);
+  }
 }
 
-function expectedSystemdUnit(deps?: AutostartDependencies): string {
-  return systemdUnitContents(nodePathOf(deps), cliPathOf(deps), linuxDataHome(deps));
+function assertCliPath(deps?: AutostartDependencies): void {
+  const cliPath = cliPathOf(deps);
+  if (!fs.existsSync(cliPath)) {
+    throw new Error(`MiniCPA CLI entry not found: ${cliPath}. Run npm run build and retry.`);
+  }
 }
 
 /** Read the current user's effective MiniCPA autostart registration state. */
@@ -449,188 +155,15 @@ export async function inspectAutostartState(deps?: AutostartDependencies): Promi
   assertSupportedPlatform(platform);
 
   if (platform === "win32") {
-    const result = await runAutostartCommand(deps, "powershell.exe", [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      WINDOWS_INSPECT_SCRIPT,
-    ]);
-    if (result.code !== 0) throw commandFailure("inspect", result);
-    const facts = parseWindowsRegistryFacts(result);
-    const runValue = decodeBase64Utf8(facts.run);
-    // StartupApproved's first byte has bit 0 set when the user disabled the entry.
-    const approvalByte = facts.approval ? (Buffer.from(facts.approval, "base64")[0] ?? 0) : 0;
-    return autostartVerdict({
-      registered: runValue !== null,
-      // Windows records the registration as two artifacts, so both have to
-      // match: the Run value (compared case-insensitively, as the shell
-      // resolves it) and the launcher it points at.
-      intact:
-        runValue !== null &&
-        runValue.toLowerCase() === windowsLauncherCommand(deps).toLowerCase() &&
-        readWindowsLauncher(deps) === windowsVbsContents(nodePathOf(deps), cliPathOf(deps)),
-      // Already answered by the call above, so this thunk costs nothing.
-      osDisabled: async () => (approvalByte & 1) === 1,
-    });
+    const { inspectWindowsAutostart } = await import("./autostart-windows.js");
+    return inspectWindowsAutostart(deps);
   }
-
   if (platform === "darwin") {
-    const contents = readFileIfExists(launchAgentPath(deps));
-    return autostartVerdict({
-      registered: contents !== undefined,
-      intact: contents === launchAgentContents(nodePathOf(deps), cliPathOf(deps)),
-      osDisabled: async () => {
-        const result = await runAutostartCommand(deps, "launchctl", [
-          "print-disabled",
-          launchAgentDomain(deps),
-        ]);
-        if (result.code !== 0) throw commandFailure("inspect", result);
-        return launchctlReportsDisabled(result.stdout);
-      },
-    });
+    const { inspectMacAutostart } = await import("./autostart-macos.js");
+    return inspectMacAutostart(deps);
   }
-
-  const contents = readFileIfExists(systemdUnitPath(deps));
-  return autostartVerdict({
-    registered: contents !== undefined,
-    intact: contents === expectedSystemdUnit(deps),
-    osDisabled: async () => {
-      const result = await runAutostartCommand(deps, "systemctl", [
-        "--user",
-        "is-enabled",
-        SYSTEMD_UNIT_NAME,
-      ]);
-      const state = result.stdout.trim();
-      if (result.code === 0 && state === "enabled") return false;
-      if (SYSTEMD_INACTIVE_STATES.test(state)) return true;
-      throw commandFailure("inspect", result);
-    },
-  });
-}
-
-export const LINGER_HINT =
-  "systemd user units start at login only — for startup without a login, run: loginctl enable-linger";
-
-/**
- * Whether the current user's systemd units also start without a login.
- *
- * A `WantedBy=default.target` user unit runs at login, so a headless machine
- * needs `loginctl enable-linger`. Returns undefined when the answer cannot be
- * determined — non-Linux, no loginctl, or a user with no session record — and
- * never rejects: every failure mode is folded into that undefined.
- */
-async function inspectLingerEnabled(deps?: AutostartDependencies): Promise<boolean | undefined> {
-  if (platformOf(deps) !== "linux") return undefined;
-  try {
-    const result = await runAutostartCommand(deps, "loginctl", [
-      "show-user",
-      String(uidOf(deps)),
-      "--property=Linger",
-    ]);
-    if (result.code !== 0) return undefined;
-    const match = /^Linger=(yes|no)$/m.exec(result.stdout.trim());
-    return match ? match[1] === "yes" : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Hint when MiniCPA autostart is in force but systemd starts user units at
- * login only, so a headless machine also needs `loginctl enable-linger`.
- *
- * This is the single owner of that policy: only Linux registrations get a hint,
- * and anything short of a confirmed `Linger=yes` hints — an undeterminable
- * probe could be hiding a headless gap, and silence there is the worse
- * failure. Resolves, never rejects.
- */
-export async function lingerHint(deps?: AutostartDependencies): Promise<string | undefined> {
-  if (platformOf(deps) !== "linux") return undefined;
-  return (await inspectLingerEnabled(deps)) === true ? undefined : LINGER_HINT;
-}
-
-async function setWindowsAutostart(enabled: boolean, deps?: AutostartDependencies): Promise<void> {
-  const vbsPath = windowsVbsPath(deps);
-  // Windows cannot use registerWithRollback: the registration is two separate
-  // artifacts (the launcher file and the Run value) rather than one file that
-  // the manager is then pointed at, and the disable path has to remove the
-  // launcher too. So the rollback is spelled out here instead.
-  //
-  // Write the launcher before the Run value: a crash in between leaves an inert
-  // orphan file, never a Run value pointing at a missing launcher.
-  if (enabled) writeWindowsLauncher(deps);
-  const result = await runAutostartCommand(
-    deps,
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_SET_SCRIPT],
-    {
-      [WINDOWS_MODE_ENV]: enabled ? "on" : "off",
-      ...(enabled ? { [WINDOWS_EXPECTED_ENV]: windowsLauncherCommand(deps) } : {}),
-    },
-  );
-  if (result.code !== 0) {
-    if (enabled) {
-      // Best-effort rollback, mirroring the LaunchAgent/systemd cleanup.
-      try {
-        fs.rmSync(vbsPath, { force: true });
-      } catch {
-        /* leftover launcher is inert without the Run value */
-      }
-    }
-    throw commandFailure(enabled ? "enable" : "disable", result);
-  }
-  if (!enabled) {
-    try {
-      fs.rmSync(vbsPath, { force: true });
-    } catch {
-      /* the Run value is already gone; a leftover launcher cannot start again */
-    }
-  }
-}
-
-async function setMacAutostart(enabled: boolean, deps?: AutostartDependencies): Promise<void> {
-  const file = launchAgentPath(deps);
-  if (!enabled) {
-    fs.rmSync(file, { force: true });
-    return;
-  }
-
-  await registerWithRollback(
-    file,
-    launchAgentContents(nodePathOf(deps), cliPathOf(deps)),
-    "launchctl",
-    ["enable", launchAgentTarget(deps)],
-    deps,
-  );
-}
-
-async function setLinuxAutostart(enabled: boolean, deps?: AutostartDependencies): Promise<void> {
-  const file = systemdUnitPath(deps);
-  if (!enabled) {
-    if (readFileIfExists(file) === undefined) return;
-    let failure: unknown;
-    try {
-      const result = await runAutostartCommand(deps, "systemctl", [
-        "--user",
-        "disable",
-        SYSTEMD_UNIT_NAME,
-      ]);
-      if (result.code !== 0) failure = commandFailure("disable", result);
-    } catch (err) {
-      failure = err;
-    }
-    fs.rmSync(file, { force: true });
-    if (failure !== undefined) throw failure;
-    return;
-  }
-
-  await registerWithRollback(
-    file,
-    expectedSystemdUnit(deps),
-    "systemctl",
-    ["--user", "enable", file],
-    deps,
-  );
+  const { inspectLinuxAutostart } = await import("./autostart-linux.js");
+  return inspectLinuxAutostart(deps);
 }
 
 /** Set the current user's MiniCPA autostart registration. */
@@ -643,12 +176,15 @@ export async function setAutostartEnabled(
   if (enabled) assertCliPath(deps);
 
   if (platform === "win32") {
+    const { setWindowsAutostart } = await import("./autostart-windows.js");
     await setWindowsAutostart(enabled, deps);
     return;
   }
   if (platform === "darwin") {
+    const { setMacAutostart } = await import("./autostart-macos.js");
     await setMacAutostart(enabled, deps);
     return;
   }
+  const { setLinuxAutostart } = await import("./autostart-linux.js");
   await setLinuxAutostart(enabled, deps);
 }

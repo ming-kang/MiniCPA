@@ -4,11 +4,8 @@ import {
   fetchLatestMinicpaVersion,
   type MinicpaVersionStatus,
 } from "../update/minicpa-release.js";
-import {
-  detectNpmGlobalInstall,
-  installMinicpaVersion,
-  updateMinicpaVersion,
-} from "../update/self-upgrade.js";
+import { detectNpmGlobalInstall } from "../update/npm-global-detection.js";
+import { installMinicpaVersion, updateMinicpaVersion } from "../update/self-upgrade.js";
 
 export type UpgradeCheckDeps = {
   fetchLatestMinicpaVersion: typeof fetchLatestMinicpaVersion;

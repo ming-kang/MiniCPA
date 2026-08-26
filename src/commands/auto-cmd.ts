@@ -8,7 +8,7 @@ import {
 } from "../process/autostart.js";
 import { withMiniCpaLock } from "../process/lock.js";
 import { inspectRunnableExecutable } from "../process/runtime.js";
-import { detectNpmGlobalInstall } from "../update/self-upgrade.js";
+import { detectNpmGlobalInstall } from "../update/npm-global-detection.js";
 
 export type AutoMode = "on" | "off";
 
