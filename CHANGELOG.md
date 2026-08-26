@@ -4,6 +4,8 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-26
+
 ### Added
 
 - `cpa start` now records every outcome as one line in `<cpa home>/logs/minicpa.log` (`start ok pid=…` or `start failed: …`, rotated at 1 MiB). This closes a blind spot in autostart: the Windows login launcher discards the process's output, and the failures that matter most at login — a missing `config.yaml`, a missing managed binary, a held lock — all happen before the CLIProxyAPI child exists, so they reached neither the terminal nor `cpa.log` / `cpa.err.log`. Successes are recorded too, so an empty log now means the launcher never fired rather than that it fired and worked.
