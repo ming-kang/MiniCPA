@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { readLastMiniCpaEvent } from "../minicpa-log.js";
 import {
   activeExecutablePath,
   backupExecutablePath,
@@ -20,6 +21,7 @@ import {
   readLogChunk,
   runLogs,
   runOpen,
+  runStart,
   runStatus,
   runTui,
   tailFollowMany,
@@ -99,6 +101,54 @@ describe("parseLogLineCount", () => {
     for (const value of ["0", "-1", "12.5", "12logs", "", "999999999999999999999"]) {
       assert.throws(() => parseLogLineCount(value), /positive whole number/);
     }
+  });
+});
+
+describe("runStart", () => {
+  it("records the failure an autostart launch would otherwise swallow", async () => {
+    useTempRoot();
+    const home = resolveCpaHome();
+    ensureDir(home);
+    // No config.yaml: startDaemon throws before the CPA child exists, so at login
+    // this reason reaches neither the discarded terminal output nor cpa.err.log.
+    await assert.rejects(() => runStart({ noWait: true }), /Missing config/);
+
+    const recorded = readLastMiniCpaEvent(home);
+    assert.equal(recorded?.level, "error");
+    assert.match(recorded?.message ?? "", /^start failed: Missing config/);
+  });
+
+  it("records a successful start so an empty log means the launcher never fired", async () => {
+    useTempRoot();
+    let closedBase = "";
+    await withHttpFixture({}, async (baseUrl) => {
+      closedBase = baseUrl;
+    });
+    const home = writeHomeForBase(closedBase);
+    // A record for this live process makes startDaemon adopt it as the running
+    // instance, so --no-wait returns without spawning anything.
+    writePidRecord(home, {
+      pid: process.pid,
+      exe: process.execPath,
+      startedAt: new Date().toISOString(),
+    });
+
+    await captureConsole(() => runStart({ noWait: true }));
+
+    const recorded = readLastMiniCpaEvent(home);
+    assert.equal(recorded?.level, "info");
+    assert.equal(recorded?.message, `start ok pid=${process.pid}`);
+  });
+
+  it("keeps the original failure when the log itself cannot be written", async () => {
+    useTempRoot();
+    const home = resolveCpaHome();
+    ensureDir(home);
+    // A directory where the log belongs makes every append fail; the command must
+    // still report the reason it was actually failing for.
+    fs.mkdirSync(cpaLayout(home).minicpaLogFile, { recursive: true });
+
+    await assert.rejects(() => runStart({ noWait: true }), /Missing config/);
   });
 });
 

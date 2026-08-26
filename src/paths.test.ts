@@ -116,6 +116,8 @@ describe("cpaLayout", () => {
     assert.equal(layout.configFile, path.join(home, "config.yaml"));
     assert.equal(layout.managementHtml, path.join(home, "static", "management.html"));
     assert.equal(layout.pidFile, path.join(home, "state", "cpa.pid"));
+    assert.equal(layout.minicpaLogFile, path.join(home, "logs", "minicpa.log"));
+    assert.notEqual(layout.minicpaLogFile, layout.errLogFile);
     assert.ok(!("runtimeDir" in layout));
   });
 });

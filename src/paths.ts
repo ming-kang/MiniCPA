@@ -77,6 +77,8 @@ export type CpaLayout = {
   installStateFile: string;
   logFile: string;
   errLogFile: string;
+  /** MiniCPA's own event log, distinct from the CPA child's stdout/stderr logs. */
+  minicpaLogFile: string;
   managementHtml: string;
 };
 
@@ -93,6 +95,7 @@ export function cpaLayout(home: string): CpaLayout {
     installStateFile: path.join(home, "state", "install.json"),
     logFile: path.join(home, "logs", "cpa.log"),
     errLogFile: path.join(home, "logs", "cpa.err.log"),
+    minicpaLogFile: path.join(home, "logs", "minicpa.log"),
     managementHtml: path.join(home, "static", "management.html"),
   };
 }

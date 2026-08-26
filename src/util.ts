@@ -43,6 +43,15 @@ export const DEFAULT_LOG_ROTATE_BYTES = 50 * 1024 * 1024;
 /** Keep this many rotated siblings (file.1 .. file.N). */
 export const DEFAULT_LOG_ROTATE_KEEP = 2;
 
+/**
+ * Rotate threshold for MiniCPA's own event log (1 MiB).
+ *
+ * Deliberately far below DEFAULT_LOG_ROTATE_BYTES: that budget is sized for the
+ * CPA child's request logging, while this file holds one condensed line per
+ * MiniCPA event and must stay small enough to read in full.
+ */
+export const MINICPA_LOG_ROTATE_BYTES = 1024 * 1024;
+
 /** Matches exact semver versions (major.minor.patch[-prerelease][+build]) without ranges or prefixes. */
 const EXACT_SEMVER_REGEX =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
@@ -88,6 +97,43 @@ export function rotateFileIfLarge(
   }
   try {
     fs.renameSync(file, `${file}.1`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Append one already-single-line record to a private (0600) log file.
+ *
+ * Best-effort by contract: it creates the parent directory, rotates the file
+ * once it outgrows `maxBytes`, and reports failure by returning false instead of
+ * throwing. Callers write here to explain a failure they are already handling,
+ * so a logging problem must never replace the error the user needs to see.
+ *
+ * `line` is appended verbatim plus one newline. Keeping it to a single line is
+ * the caller's job: only the caller knows how to condense its own payload.
+ */
+export function appendPrivateLogLine(
+  file: string,
+  line: string,
+  options?: { maxBytes?: number; keep?: number },
+): boolean {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    rotateFileIfLarge(file, {
+      maxBytes: options?.maxBytes ?? MINICPA_LOG_ROTATE_BYTES,
+      keep: options?.keep ?? 1,
+    });
+    const fd = fs.openSync(file, "a", 0o600);
+    try {
+      fs.writeFileSync(fd, `${line}\n`);
+    } finally {
+      fs.closeSync(fd);
+    }
+    // The mode above only applies when the file is created, so an older log
+    // keeps whatever mode it had; tighten it on every append.
+    if (process.platform !== "win32") fs.chmodSync(file, 0o600);
     return true;
   } catch {
     return false;

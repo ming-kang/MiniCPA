@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { openInBrowser } from "../browser.js";
 import { readCpaConfigWithWarnings } from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
+import { recordMiniCpaEvent } from "../minicpa-log.js";
 import { inspectAutostartState, type AutostartState } from "../process/autostart.js";
 import {
   apiBaseUrl,
@@ -10,7 +11,7 @@ import {
   waitForAnyHttpOk,
   waitForHttpOk,
 } from "../process/health.js";
-import { inspectRunning, startDaemon, stopDaemon } from "../process/lifecycle.js";
+import { inspectRunning, startDaemon, stopDaemon, type RunningInfo } from "../process/lifecycle.js";
 import { withMiniCpaLock } from "../process/lock.js";
 import {
   inspectRunnableExecutable,
@@ -37,12 +38,31 @@ function printRunningSummary(ctx: ReturnType<typeof createContext>, pid: number)
   console.log(`Web        ${managementUrl(ctx.home)}`);
 }
 
+/**
+ * Start CLIProxyAPI, recording the outcome in MiniCPA's own event log.
+ *
+ * The record is here for the autostart path: at login the launcher discards this
+ * process's output, and the failures that matter most there (missing config,
+ * missing binary, a held lock) all happen before the CPA child exists, so they
+ * reach neither the terminal nor `cpa.err.log`. Successes are recorded too —
+ * that is what makes an empty log meaningful, because it then means the launcher
+ * never fired rather than "it fired and worked".
+ */
 export async function runStart(opts: { noWait?: boolean }): Promise<void> {
   const ctx = createContext();
   printConfigWarnings(ctx.layout.configFile);
-  const running = await withMiniCpaLock("start", () =>
-    startDaemon(ctx.home, { noWait: opts.noWait }),
-  );
+  let running: RunningInfo;
+  try {
+    running = await withMiniCpaLock("start", () => startDaemon(ctx.home, { noWait: opts.noWait }));
+  } catch (err) {
+    recordMiniCpaEvent(
+      ctx.home,
+      "error",
+      `start failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    throw err;
+  }
+  recordMiniCpaEvent(ctx.home, "info", `start ok pid=${running.pid}`);
   printRunningSummary(ctx, running.pid);
 }
 
