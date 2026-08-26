@@ -11,7 +11,6 @@ const WINDOWS_VALUE_NAME = "MiniCPA";
 const WINDOWS_EXPECTED_ENV = "MINICPA_AUTOSTART_EXPECTED";
 const WINDOWS_MODE_ENV = "MINICPA_AUTOSTART_MODE";
 const WINDOWS_VBS_FILENAME = "minicpa-autostart.vbs";
-const WINDOWS_VBS_PATH_ENV = "MINICPA_AUTOSTART_VBS_PATH";
 const LAUNCH_AGENT_LABEL = "com.astralyn.minicpa";
 const LAUNCH_AGENT_NAME = `${LAUNCH_AGENT_LABEL}.plist`;
 const SYSTEMD_UNIT_NAME = "minicpa.service";
@@ -174,10 +173,12 @@ const WINDOWS_SET_SCRIPT = [
   "} catch { [Console]::Error.Write($_.Exception.Message); exit 3 }",
 ].join(" ");
 
-// The inspect script only reports facts (Run value, StartupApproved bytes,
-// launcher file contents) as UTF-8 base64 inside a compressed JSON object.
-// TypeScript owns every verdict, so the decision logic stays unit-testable
-// without spawning PowerShell and no OEM-codepage mangling can reach it.
+// The inspect script only reports registry facts (the Run value and the raw
+// StartupApproved bytes) as UTF-8 base64 inside a compressed JSON object. The
+// launcher is an ordinary local file, so Node reads and compares it directly —
+// exactly like the macOS plist and the systemd unit. TypeScript owns every
+// verdict, so the decision logic stays unit-testable without spawning
+// PowerShell and no OEM-codepage mangling can reach it.
 const WINDOWS_INSPECT_SCRIPT = [
   "$ErrorActionPreference = 'Stop';",
   "try {",
@@ -193,23 +194,28 @@ const WINDOWS_INSPECT_SCRIPT = [
   `$approval = $approvalKey.GetValue('${WINDOWS_VALUE_NAME}');`,
   "$approvalKey.Dispose();",
   "};",
-  "$vbs = $null;",
-  `if (Test-Path -LiteralPath $env:${WINDOWS_VBS_PATH_ENV}) { $vbs = Get-Content -Raw -LiteralPath $env:${WINDOWS_VBS_PATH_ENV} };`,
   "$runB64 = if ($null -eq $runValue) { $null } else { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$runValue)) };",
   "$approvalB64 = if (($approval -is [byte[]]) -and $approval.Length -gt 0) { [Convert]::ToBase64String($approval) } else { $null };",
-  "$vbsB64 = if ($null -eq $vbs) { $null } else { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$vbs)) };",
-  `[Console]::Out.Write((ConvertTo-Json ([ordered]@{ run = $runB64; approval = $approvalB64; vbs = $vbsB64 }) -Compress)); exit 0`,
+  `[Console]::Out.Write((ConvertTo-Json ([ordered]@{ run = $runB64; approval = $approvalB64 }) -Compress)); exit 0`,
   "} catch { [Console]::Error.Write($_.Exception.Message); exit 3 }",
 ].join(" ");
 
-/** Facts reported by the Windows inspect script; string fields are UTF-8 base64. */
-type WindowsInspectFacts = {
-  run?: string | null;
-  approval?: string | null;
-  vbs?: string | null;
-};
+/**
+ * Registry facts reported by the Windows inspect script. Both fields are base64
+ * and always present — `ConvertTo-Json` emits explicit nulls — so absence is
+ * spelled `null` rather than a missing key.
+ */
+type WindowsRegistryFacts = { run: string | null; approval: string | null };
 
-function decodeBase64Utf8(value: string | null | undefined): string | null {
+function isWindowsRegistryFacts(value: unknown): value is WindowsRegistryFacts {
+  if (typeof value !== "object" || value === null) return false;
+  const { run, approval } = value as Record<string, unknown>;
+  return (
+    (run === null || typeof run === "string") && (approval === null || typeof approval === "string")
+  );
+}
+
+function decodeBase64Utf8(value: string | null): string | null {
   return value ? Buffer.from(value, "base64").toString("utf8") : null;
 }
 
@@ -224,7 +230,7 @@ function equalsIgnoringCase(left: string, right: string): boolean {
  * the OS StartupApproved bit outranks everything except staleness.
  */
 function windowsStateFromFacts(
-  facts: WindowsInspectFacts,
+  facts: WindowsRegistryFacts,
   deps?: AutostartDependencies,
 ): AutostartState {
   const runValue = decodeBase64Utf8(facts.run);
@@ -238,24 +244,39 @@ function windowsStateFromFacts(
   if ((approvalByte & 1) === 1) {
     return "disabled";
   }
-  const vbsContents = decodeBase64Utf8(facts.vbs);
   // A missing or rewritten launcher cannot be trusted to start MiniCPA.
-  if (
-    vbsContents === null ||
-    vbsContents !== windowsVbsContents(nodePathOf(deps), cliPathOf(deps))
-  ) {
+  if (readWindowsLauncher(deps) !== windowsVbsContents(nodePathOf(deps), cliPathOf(deps))) {
     return "stale";
   }
   return "on";
 }
 
-function readFileIfExists(file: string): string | undefined {
+function readFileBytesIfExists(file: string): Buffer | undefined {
   try {
-    return fs.readFileSync(file, "utf8");
+    return fs.readFileSync(file);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw err;
   }
+}
+
+function readFileIfExists(file: string): string | undefined {
+  return readFileBytesIfExists(file)?.toString("utf8");
+}
+
+/**
+ * Read the generated Windows launcher back as comparable text.
+ *
+ * writeWindowsLauncher writes UTF-16LE with a leading BOM, so decode the same
+ * way and drop the BOM to compare against windowsVbsContents() directly. A
+ * launcher in any other encoding decodes to something that cannot match, which
+ * is the right answer: it is not a launcher MiniCPA generated.
+ */
+function readWindowsLauncher(deps?: AutostartDependencies): string | undefined {
+  const raw = readFileBytesIfExists(windowsVbsPath(deps));
+  if (raw === undefined) return undefined;
+  const text = raw.toString("utf16le");
+  return text.startsWith("\uFEFF") ? text.slice(1) : text;
 }
 
 function escapeXml(value: string): string {
@@ -402,19 +423,20 @@ export async function inspectAutostartState(deps?: AutostartDependencies): Promi
   assertSupportedPlatform(platform);
 
   if (platform === "win32") {
-    const result = await runAutostartCommand(
-      deps,
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_INSPECT_SCRIPT],
-      { [WINDOWS_VBS_PATH_ENV]: windowsVbsPath(deps) },
-    );
+    const result = await runAutostartCommand(deps, "powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      WINDOWS_INSPECT_SCRIPT,
+    ]);
     if (result.code !== 0) throw commandFailure("inspect", result);
-    let facts: WindowsInspectFacts;
+    let facts: unknown;
     try {
-      facts = JSON.parse(result.stdout) as WindowsInspectFacts;
+      facts = JSON.parse(result.stdout);
     } catch {
       throw commandFailure("inspect", result);
     }
+    if (!isWindowsRegistryFacts(facts)) throw commandFailure("inspect", result);
     return windowsStateFromFacts(facts, deps);
   }
 

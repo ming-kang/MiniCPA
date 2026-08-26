@@ -49,13 +49,12 @@ afterEach(() => {
 });
 
 describe("Windows autostart", () => {
-  // What the inspect script would report for a simulated registry/launcher
-  // state; the verdict itself is derived in TypeScript and covered on every
-  // platform below.
+  // Registry facts the inspect script would report. The launcher is a real file
+  // on disk (Node reads it directly), so it is not simulated here; the verdict
+  // is derived in TypeScript and covered on every platform.
   type WindowsScenario = {
     runValue?: string;
     approvalByte?: number;
-    vbsOnDisk?: string;
   };
 
   const base64 = (value: string): string => Buffer.from(value, "utf8").toString("base64");
@@ -67,7 +66,6 @@ describe("Windows autostart", () => {
         scenario.approvalByte === undefined
           ? null
           : Buffer.from([scenario.approvalByte]).toString("base64"),
-      vbs: scenario.vbsOnDisk === undefined ? null : base64(scenario.vbsOnDisk),
     });
   }
 
@@ -78,6 +76,17 @@ describe("Windows autostart", () => {
     const wscriptPath = path.join(root, "Windows", "System32", "wscript.exe");
     const vbsPath = path.join(root, "AppData", "Local", "MiniCPA", "minicpa-autostart.vbs");
     const launcherCommand = `"${wscriptPath}" "${vbsPath}"`;
+
+    /** Put the launcher on disk exactly as writeWindowsLauncher would, or remove it. */
+    function putLauncher(contents: string | undefined): void {
+      if (contents === undefined) {
+        fs.rmSync(vbsPath, { force: true });
+        return;
+      }
+      fs.mkdirSync(path.dirname(vbsPath), { recursive: true });
+      fs.writeFileSync(vbsPath, Buffer.from(`\uFEFF${contents}`, "utf16le"));
+    }
+
     let scenario: WindowsScenario = {};
     const calls: CommandCall[] = [];
     const runCommand: CommandRunner = async (command, args, options) => {
@@ -87,27 +96,17 @@ describe("Windows autostart", () => {
         // The set script must clear StartupApproved in the same pass.
         assert.ok(args.at(-1)?.includes("StartupApproved"));
         assert.ok(args.at(-1)?.includes("DeleteValue"));
-        scenario =
-          mode === "on"
-            ? {
-                ...scenario,
-                runValue: options?.env?.MINICPA_AUTOSTART_EXPECTED,
-                approvalByte: undefined,
-                vbsOnDisk: windowsVbsContents(nodePath, cliPath),
-              }
-            : {
-                ...scenario,
-                runValue: undefined,
-                approvalByte: undefined,
-                vbsOnDisk: undefined,
-              };
+        // Only the registry is simulated: setWindowsAutostart writes and
+        // removes the real launcher file itself.
+        scenario = {
+          runValue: mode === "on" ? options?.env?.MINICPA_AUTOSTART_EXPECTED : undefined,
+          approvalByte: undefined,
+        };
         return { code: 0, stdout: "", stderr: "" };
       }
 
-      // Inspection passes only the launcher path; verdicts happen in TypeScript.
-      assert.equal(options?.env?.MINICPA_AUTOSTART_VBS_PATH, vbsPath);
+      // Inspection reads the registry only; it passes no launcher details.
       assert.equal(options?.env?.MINICPA_AUTOSTART_EXPECTED, undefined);
-      assert.equal(options?.env?.MINICPA_AUTOSTART_VBS_CONTENT, undefined);
       return { code: 0, stdout: factsJson(scenario), stderr: "" };
     };
     const deps: AutostartDependencies = {
@@ -119,18 +118,25 @@ describe("Windows autostart", () => {
       runCommand,
     };
 
-    for (const [name, reported, expectedState] of [
-      ["no Run value", {}, "off"],
-      ["foreign Run value", { runValue: '"C:\\elsewhere\\wscript.exe" "C:\\x.vbs"' }, "stale"],
-      ["OS-disabled approval bit", { runValue: launcherCommand, approvalByte: 3 }, "disabled"],
-      ["missing launcher file", { runValue: launcherCommand }, "stale"],
+    for (const [name, reported, launcher, expectedState] of [
+      ["no Run value", {}, undefined, "off"],
       [
-        "rewritten launcher file",
-        { runValue: launcherCommand, vbsOnDisk: "' tampered launcher" },
+        "foreign Run value",
+        { runValue: '"C:\\elsewhere\\wscript.exe" "C:\\x.vbs"' },
+        undefined,
         "stale",
       ],
+      [
+        "OS-disabled approval bit",
+        { runValue: launcherCommand, approvalByte: 3 },
+        undefined,
+        "disabled",
+      ],
+      ["missing launcher file", { runValue: launcherCommand }, undefined, "stale"],
+      ["rewritten launcher file", { runValue: launcherCommand }, "' tampered launcher", "stale"],
     ] as const) {
       scenario = reported as WindowsScenario;
+      putLauncher(launcher);
       assert.equal(await inspectAutostartState(deps), expectedState, name);
     }
 
@@ -182,6 +188,20 @@ describe("Windows autostart", () => {
         }),
       /Failed to inspect autostart: access denied/,
     );
+
+    // A zero exit with an unusable payload must surface as an inspect failure
+    // rather than a raw decoding TypeError from deep inside the verdict.
+    for (const stdout of ['{"run":123}', '{"run":"eA==","approval":{}}', "not json", "[]"]) {
+      await assert.rejects(
+        () =>
+          inspectAutostartState({
+            ...deps,
+            runCommand: async () => ({ code: 0, stdout, stderr: "" }),
+          }),
+        /Failed to inspect autostart/,
+        stdout,
+      );
+    }
   });
 
   it("removes the launcher when the registry write fails", async () => {
