@@ -364,23 +364,24 @@ function runAutostartCommand(
  * failure removes the file again, so a failed enable never leaves behind a
  * plist or unit that inspection would report as stale.
  */
-async function writeFileAndRegister(
+async function registerWithRollback(
   file: string,
   contents: string,
-  action: string,
-  register: () => Promise<CommandResult>,
+  command: string,
+  args: string[],
+  deps?: AutostartDependencies,
 ): Promise<void> {
   writeFileAtomic(file, contents, { hardenDirectory: false });
   let result: CommandResult;
   try {
-    result = await register();
+    result = await runAutostartCommand(deps, command, args);
   } catch (err) {
     fs.rmSync(file, { force: true });
     throw err;
   }
   if (result.code !== 0) {
     fs.rmSync(file, { force: true });
-    throw commandFailure(action, result);
+    throw commandFailure("enable", result);
   }
 }
 
@@ -495,6 +496,11 @@ export async function inspectLingerEnabled(
 
 async function setWindowsAutostart(enabled: boolean, deps?: AutostartDependencies): Promise<void> {
   const vbsPath = windowsVbsPath(deps);
+  // Windows cannot use registerWithRollback: the registration is two separate
+  // artifacts (the launcher file and the Run value) rather than one file that
+  // the manager is then pointed at, and the disable path has to remove the
+  // launcher too. So the rollback is spelled out here instead.
+  //
   // Write the launcher before the Run value: a crash in between leaves an inert
   // orphan file, never a Run value pointing at a missing launcher.
   if (enabled) writeWindowsLauncher(deps);
@@ -534,11 +540,12 @@ async function setMacAutostart(enabled: boolean, deps?: AutostartDependencies): 
     return;
   }
 
-  await writeFileAndRegister(
+  await registerWithRollback(
     file,
     launchAgentContents(nodePathOf(deps), cliPathOf(deps)),
-    "enable",
-    () => runAutostartCommand(deps, "launchctl", ["enable", launchAgentTarget(deps)]),
+    "launchctl",
+    ["enable", launchAgentTarget(deps)],
+    deps,
   );
 }
 
@@ -562,8 +569,12 @@ async function setLinuxAutostart(enabled: boolean, deps?: AutostartDependencies)
     return;
   }
 
-  await writeFileAndRegister(file, expectedSystemdUnit(deps), "enable", () =>
-    runAutostartCommand(deps, "systemctl", ["--user", "enable", file]),
+  await registerWithRollback(
+    file,
+    expectedSystemdUnit(deps),
+    "systemctl",
+    ["--user", "enable", file],
+    deps,
   );
 }
 
