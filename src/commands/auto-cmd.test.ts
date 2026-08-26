@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { AutostartState } from "../process/autostart.js";
+import { LINGER_HINT, type AutostartState } from "../process/autostart.js";
 import { captureConsole } from "../test-fixtures/test-env.js";
 import { runAuto, type AutoCommandDependencies } from "./auto-cmd.js";
 
@@ -33,15 +33,14 @@ describe("runAuto", () => {
         assert.equal(options?.requireWritable, false);
         return supportedInstall(packageRoot);
       },
-      lingerHint: async () =>
-        "systemd user units start at login only — run: loginctl enable-linger",
+      lingerHint: async () => LINGER_HINT,
     };
 
     const options = { packageRoot: "/npm/lib/node_modules/@astralyn/minicpa" };
     const first = await captureConsole(() => runAuto(options, deps));
     assert.equal(state, "on");
     assert.deepEqual(first.stdout, ["Autostart on"]);
-    assert.ok(first.stderr.some((line) => line.includes("loginctl enable-linger")));
+    assert.deepEqual(first.stderr, [`Note: ${LINGER_HINT}`]);
 
     const second = await captureConsole(() => runAuto(options, deps));
     assert.equal(state, "off");
@@ -114,19 +113,31 @@ describe("runAuto", () => {
       detectGlobalInstall: async () => supportedInstall(packageRoot),
       // The full policy (Linux gating included) lives in autostart.ts; the
       // command only decides whether to show the returned hint.
-      lingerHint: async () =>
-        "systemd user units start at login only — for startup without a login, run: loginctl enable-linger",
+      lingerHint: async () => LINGER_HINT,
     };
     const output = await captureConsole(() => runAuto({ packageRoot }, deps));
     assert.deepEqual(output.stdout, ["Autostart on"]);
-    assert.ok(
-      output.stderr.some((line) => line.includes("systemd user units start at login")),
-      output.stderr.join("\n"),
+    assert.deepEqual(output.stderr, [`Note: ${LINGER_HINT}`]);
+  });
+
+  it("falls back to the real linger policy when a dependency is explicitly undefined", async () => {
+    // `deps` is spread from partial objects at call sites, so an explicitly
+    // undefined entry must resolve to the real implementation rather than
+    // being called as a function.
+    const packageRoot = "/npm/lib/node_modules/@astralyn/minicpa";
+    const output = await captureConsole(() =>
+      runAuto(
+        { packageRoot },
+        {
+          inspectState: async () => "off",
+          setEnabled: async () => {},
+          withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
+          detectGlobalInstall: async () => supportedInstall(packageRoot),
+          lingerHint: undefined,
+        },
+      ),
     );
-    assert.ok(
-      output.stderr.some((line) => line.includes("loginctl enable-linger")),
-      output.stderr.join("\n"),
-    );
+    assert.deepEqual(output.stdout, ["Autostart on"]);
   });
 
   it("stays quiet when no hint applies", async () => {

@@ -18,14 +18,6 @@ export type AutoCommandDependencies = {
   lingerHint?: typeof lingerHint;
 };
 
-const realAutoDeps: Required<AutoCommandDependencies> = {
-  inspectState: inspectAutostartState,
-  setEnabled: setAutostartEnabled,
-  withLock: withMiniCpaLock,
-  detectGlobalInstall: detectNpmGlobalInstall,
-  lingerHint,
-};
-
 function nextAutostartEnabled(current: AutostartState): boolean {
   // Only a registration that is actually in force gets turned off. "stale" and
   // "disabled" entries start nothing, so a toggle repairs them: enabling
@@ -38,15 +30,18 @@ export async function runAuto(
   options: { packageRoot: string; mode?: AutoMode },
   deps?: AutoCommandDependencies,
 ): Promise<void> {
-  const d = { ...realAutoDeps, ...deps };
-  const enabled = await d.withLock("auto", async () => {
+  const inspect = deps?.inspectState ?? inspectAutostartState;
+  const set = deps?.setEnabled ?? setAutostartEnabled;
+  const withLock = deps?.withLock ?? withMiniCpaLock;
+  const detectGlobalInstall = deps?.detectGlobalInstall ?? detectNpmGlobalInstall;
+  const hintLinger = deps?.lingerHint ?? lingerHint;
+
+  const enabled = await withLock("auto", async () => {
     const next =
-      options.mode === undefined
-        ? nextAutostartEnabled(await d.inspectState())
-        : options.mode === "on";
+      options.mode === undefined ? nextAutostartEnabled(await inspect()) : options.mode === "on";
 
     if (next) {
-      const installation = await d.detectGlobalInstall(
+      const installation = await detectGlobalInstall(
         options.packageRoot,
         {},
         { requireWritable: false },
@@ -62,11 +57,11 @@ export async function runAuto(
         );
       }
     }
-    await d.setEnabled(next);
+    await set(next);
     return next;
   });
   console.log(`Autostart ${enabled ? "on" : "off"}`);
   if (!enabled) return;
-  const hint = await d.lingerHint();
+  const hint = await hintLinger();
   if (hint) console.error(`Note: ${hint}`);
 }
