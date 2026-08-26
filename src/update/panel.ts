@@ -109,7 +109,11 @@ export type ResolvedPanelAsset = {
    * GitHub SHA-256 asset digest when available (only REST API fallback payloads
    * carry one). Verified when present; the default browser-discovery path
    * synthesizes download URLs without touching the API, so no digest exists
-   * there by design.
+   * there by design. That fail-open posture is a deliberate trade-off: GitHub
+   * publishes no checksum asset for management.html today, so installs rely on
+   * the sanity checks below plus the install-time SHA-256 recorded in
+   * `install.json`. If upstream ever ships a checksum source for the panel,
+   * restore mandatory digest verification here.
    */
   expectedDigest?: string;
 };
