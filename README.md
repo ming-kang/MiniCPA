@@ -156,6 +156,7 @@ npm install
 npm run lint
 npm test
 npm run build
+npm run verify:package
 npm link   # optional: expose the local build as cpa
 ```
 

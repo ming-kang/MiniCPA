@@ -21,6 +21,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "verify:package-install": "node scripts/verify-package-install.mjs",
+    "verify:package": "node scripts/verify-package.mjs",
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
     "test": "tsc --noEmit && node scripts/run-tests.mjs",
     "prepublishOnly": "npm run audit:prod && npm test && npm run build"
