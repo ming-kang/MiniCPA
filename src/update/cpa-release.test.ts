@@ -34,6 +34,20 @@ describe("cpaReleaseAssetNames / candidates", () => {
     assert.ok(names.includes("checksums.txt"));
   });
 
+  it("derives the complete release list from the target candidates", () => {
+    const expected = [
+      ...cpaAssetNameCandidates("7.0.0", "win32", "x64"),
+      ...cpaAssetNameCandidates("7.0.0", "win32", "arm64"),
+      ...cpaAssetNameCandidates("7.0.0", "darwin", "x64"),
+      ...cpaAssetNameCandidates("7.0.0", "darwin", "arm64"),
+      ...cpaAssetNameCandidates("7.0.0", "linux", "x64"),
+      ...cpaAssetNameCandidates("7.0.0", "linux", "arm64"),
+      "checksums.txt",
+    ];
+
+    assert.deepEqual(cpaReleaseAssetNames("v7.0.0"), expected);
+  });
+
   it("rejects unsupported architectures rather than downloading amd64", () => {
     assert.throws(
       () => cpaAssetNameCandidates("7.0.0", "linux", "arm"),

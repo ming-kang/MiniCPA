@@ -286,6 +286,32 @@ describe("runUpdate leg reporting", () => {
 });
 
 describe("runUpdateCheck leg reporting", () => {
+  it("starts the independent component checks concurrently", async () => {
+    isolateMiniCpaRoot();
+    let panelStarted = false;
+    let binaryObservedPanel = false;
+    const deps: UpdateCheckDeps = {
+      checkBinaryUpdate: async () => {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        binaryObservedPanel = panelStarted;
+        return { current: "7.2.92", latest: "7.2.92", upToDate: true };
+      },
+      checkPanelUpdate: async () => {
+        panelStarted = true;
+        return {
+          current: "9.9.9",
+          latest: "9.9.9",
+          upToDate: true,
+          autoUpdateDisabled: false,
+        };
+      },
+    };
+
+    await captureOutput(() => runUpdateCheck(deps));
+
+    assert.equal(binaryObservedPanel, true);
+  });
+
   it("reports a failed binary check inline and still prints the panel verdict", async () => {
     isolateMiniCpaRoot();
     const deps: UpdateCheckDeps = {

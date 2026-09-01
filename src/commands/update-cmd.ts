@@ -68,16 +68,17 @@ export async function runUpdateCheck(deps: UpdateCheckDeps = realUpdateCheckDeps
   const ctx = createContext();
   printHome(ctx);
 
-  // A failed check is reported inline (like the panel leg below) instead of
-  // aborting the command: `cpa update check` is a scripted health gate, and one
-  // unreachable leg must not hide the verdict for the other.
-  let binaryUpToDate = true;
-  let binaryError = false;
-  let updateAvailable = false;
-  try {
-    const binary = await deps.checkBinaryUpdate(ctx.home);
-    binaryUpToDate = binary.upToDate;
-    updateAvailable = !binary.upToDate;
+  // Both checks are independent and can each spend time in network retry paths.
+  // Resolve them concurrently, then render in stable component order.
+  const [binaryResult, panelResult] = await Promise.allSettled([
+    deps.checkBinaryUpdate(ctx.home),
+    deps.checkPanelUpdate(ctx.home),
+  ]);
+
+  const binaryError = binaryResult.status === "rejected";
+  const binaryUpToDate = binaryResult.status === "fulfilled" && binaryResult.value.upToDate;
+  if (binaryResult.status === "fulfilled") {
+    const binary = binaryResult.value;
     console.log(
       checkRow(
         "CLIProxyAPI",
@@ -86,30 +87,33 @@ export async function runUpdateCheck(deps: UpdateCheckDeps = realUpdateCheckDeps
         binary.upToDate ? "up to date" : "update available",
       ),
     );
-  } catch (err) {
-    binaryError = true;
-    console.log(`${checkLabel("CLIProxyAPI")}check failed: ${formatCliError(err)}`);
+  } else {
+    console.log(`${checkLabel("CLIProxyAPI")}check failed: ${formatCliError(binaryResult.reason)}`);
   }
 
-  let panelUpToDate = true;
-  let panelError = false;
-  try {
-    const panel = await deps.checkPanelUpdate(ctx.home);
+  const panelError = panelResult.status === "rejected";
+  const panelUpToDate =
+    panelResult.status === "fulfilled" &&
+    (panelResult.value.autoUpdateDisabled || panelResult.value.upToDate);
+  if (panelResult.status === "fulfilled") {
+    const panel = panelResult.value;
     // A configured opt-out is intentionally ignored by the health gate, but it
     // must not be presented as if the installed panel were current.
-    panelUpToDate = panel.autoUpdateDisabled || panel.upToDate;
-    if (!panel.autoUpdateDisabled && !panel.upToDate) updateAvailable = true;
     const status = panel.autoUpdateDisabled
       ? "ignored (automatic updates disabled in config.yaml)"
       : panel.upToDate
         ? "up to date"
         : "update available";
     console.log(checkRow("Web panel", panel.current, panel.latest, status));
-  } catch (err) {
-    panelError = true;
-    console.log(`${checkLabel("Web panel")}check failed: ${formatCliError(err)}`);
+  } else {
+    console.log(`${checkLabel("Web panel")}check failed: ${formatCliError(panelResult.reason)}`);
   }
 
+  const updateAvailable =
+    (binaryResult.status === "fulfilled" && !binaryResult.value.upToDate) ||
+    (panelResult.status === "fulfilled" &&
+      !panelResult.value.autoUpdateDisabled &&
+      !panelResult.value.upToDate);
   if (updateAvailable) {
     console.log("");
     console.log("Run: cpa update");
