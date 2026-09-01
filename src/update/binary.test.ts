@@ -248,6 +248,30 @@ describe("installBinaryPhase", () => {
     assert.equal(readInstallState(home).runtimeVersion, "7.2.65");
   });
 
+  it("preserves the recorded version when probing fails but rollback keeps the binary", async () => {
+    const home = tempHome();
+    fs.writeFileSync(activeExecutablePath(home), "old-binary");
+    writeInstallState(home, { runtimeVersion: "7.2.65" });
+    const deps = fakeDeps();
+
+    await assert.rejects(() =>
+      installBinaryPhase(
+        home,
+        {
+          version: "7.2.66",
+          extractedExe: path.join(home, "missing-staged-executable"),
+          wasRunning: false,
+          currentVersion: undefined,
+        },
+        deps,
+        silentUpdateReporter,
+      ),
+    );
+
+    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "old-binary");
+    assert.equal(readInstallState(home).runtimeVersion, "7.2.65");
+  });
+
   it("reports a missing backup when a pre-replace failure finds no binary at all", async () => {
     const home = tempHome();
     // No binary on disk and no .bak: nothing to restart, message must say so.

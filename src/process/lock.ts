@@ -16,9 +16,12 @@ export type MiniCpaLockRecord = {
 /** Per-process re-entrancy depth for the one global MiniCPA lock. */
 const lockDepth = new Map<string, number>();
 
-const ACQUIRE_ATTEMPTS = 5;
 /** A freshly created lock may still be between open("wx") and write. */
 const EMPTY_LOCK_GRACE_MS = 2_000;
+/** Total acquisition budget, including the full empty-lock grace period. */
+const ACQUIRE_TIMEOUT_MS = EMPTY_LOCK_GRACE_MS + 1_000;
+const ACQUIRE_RETRY_MIN_MS = 50;
+const ACQUIRE_RETRY_JITTER_MS = 100;
 
 function resolveLockPath(): string {
   return path.join(miniCpaRoot(), "state", "cpa.lock");
@@ -157,10 +160,17 @@ async function tryAcquireLock(command: string): Promise<void> {
   };
   const payload = `${JSON.stringify(record)}\n`;
 
-  for (let attempt = 0; attempt < ACQUIRE_ATTEMPTS; attempt++) {
-    if (attempt > 0) {
-      await sleep(50 + Math.floor(Math.random() * 100));
+  const deadline = Date.now() + ACQUIRE_TIMEOUT_MS;
+  let firstAttempt = true;
+
+  while (firstAttempt || Date.now() < deadline) {
+    if (!firstAttempt) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      const delay = ACQUIRE_RETRY_MIN_MS + Math.floor(Math.random() * ACQUIRE_RETRY_JITTER_MS);
+      await sleep(Math.min(delay, remaining));
     }
+    firstAttempt = false;
 
     try {
       const fd = fs.openSync(lockPath, "wx", 0o600);
@@ -192,7 +202,9 @@ async function tryAcquireLock(command: string): Promise<void> {
     if (existing.kind === "unreadable") {
       const age = existing.mtimeMs !== undefined ? Date.now() - existing.mtimeMs : Infinity;
       if (age < EMPTY_LOCK_GRACE_MS) {
-        // Probably a concurrent acquirer between open("wx") and write — wait.
+        // Probably a concurrent acquirer between open("wx") and write. The
+        // acquisition deadline includes this entire grace period, so keep
+        // observing instead of exhausting an unrelated fixed attempt count.
         continue;
       }
       preemptLock(lockPath, existing);
@@ -227,7 +239,7 @@ async function tryAcquireLock(command: string): Promise<void> {
     preemptLock(lockPath, existing);
   }
 
-  throw new Error(`Failed to acquire MiniCPA lock after ${ACQUIRE_ATTEMPTS} attempts. Retry.`);
+  throw new Error(`Failed to acquire MiniCPA lock within ${ACQUIRE_TIMEOUT_MS}ms. Retry.`);
 }
 
 function releaseLock(): void {

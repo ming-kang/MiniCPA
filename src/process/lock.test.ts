@@ -242,17 +242,18 @@ describe("withMiniCpaLock", () => {
     assert.equal(ran, true);
   });
 
-  it("waits out a fresh empty lock instead of deleting it", async () => {
+  it("waits out and recovers a fresh empty lock", async () => {
     configureIsolatedAppRoot();
     fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
     fs.writeFileSync(lockPath(), "");
 
-    await assert.rejects(
-      () => withMiniCpaLock("update", async () => undefined),
-      /after 5 attempts/,
-    );
-    // The in-progress lock was never unlinked.
-    assert.ok(fs.existsSync(lockPath()));
+    let ran = false;
+    await withMiniCpaLock("update", async () => {
+      ran = true;
+    });
+
+    assert.equal(ran, true);
+    assert.equal(fs.existsSync(lockPath()), false);
   });
 
   it("preempts a stale corrupt lock after the grace period", async () => {

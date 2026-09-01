@@ -22,7 +22,7 @@ import {
   readCurrentRuntimeVersion,
   restoreRuntimeBinaryFromBackup,
 } from "../process/runtime.js";
-import { patchInstallState } from "../state.js";
+import { patchInstallState, readInstallState } from "../state.js";
 import { removeDirBestEffort, sha256File } from "../util.js";
 import {
   CPA_REPO,
@@ -285,6 +285,10 @@ export async function installBinaryPhase(
   reporter: UpdateReporter = silentUpdateReporter,
 ): Promise<{ restarted: boolean }> {
   const { version, extractedExe, wasRunning, currentVersion } = args;
+  // The executable probe can be temporarily unavailable even when the previous
+  // binary and its last verified install record are both intact. Preserve that
+  // record for rollback; only a missing rollback binary justifies clearing it.
+  const recordedCurrentVersion = readInstallState(home).runtimeVersion;
 
   if (wasRunning) {
     reporter.info("Stopping CLIProxyAPI to install the update…");
@@ -340,9 +344,11 @@ export async function installBinaryPhase(
     const binaryPresent =
       restored || (hadPreviousBinary && fs.existsSync(activeExecutablePath(home)));
 
-    // Never record a version when no binary is on disk to back it.
+    // Never record a version when no binary is on disk to back it. A failed
+    // executable probe is not evidence that the previous version record was
+    // wrong, so preserve it when rollback leaves the previous binary in place.
     patchInstallState(home, {
-      runtimeVersion: binaryPresent ? currentVersion : undefined,
+      runtimeVersion: binaryPresent ? (currentVersion ?? recordedCurrentVersion) : undefined,
       lastUpdateCheck: new Date().toISOString(),
     });
 
