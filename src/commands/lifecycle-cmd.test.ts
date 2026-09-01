@@ -18,13 +18,11 @@ import { withHttpFixture, withHttpsFixture } from "../test-fixtures/http-server.
 import { captureConsole } from "../test-fixtures/test-env.js";
 import {
   parseLogLineCount,
-  readLogChunk,
   runLogs,
   runOpen,
   runStart,
   runStatus,
   runTui,
-  tailFollowMany,
 } from "./lifecycle-cmd.js";
 
 const originalLocalAppData = process.env.LOCALAPPDATA;
@@ -495,69 +493,6 @@ describe("runTui", () => {
       /cpa update/,
     );
     assert.equal(launched, false);
-  });
-});
-
-describe("readLogChunk", () => {
-  it("returns only the bytes actually read and advances the cursor by that much", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-tail-"));
-    temps.push(dir);
-    const file = path.join(dir, "cpa.log");
-    fs.writeFileSync(file, "hello");
-
-    // A rotation between stat() and read() makes the file shorter than asked for.
-    const chunk = readLogChunk(file, 0, 4096);
-    assert.equal(chunk.text, "hello");
-    assert.equal(chunk.next, 5);
-  });
-
-  it("rewinds to the start when the file no longer has bytes at the cursor", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-tail-"));
-    temps.push(dir);
-    const file = path.join(dir, "cpa.log");
-    fs.writeFileSync(file, "hello");
-
-    const chunk = readLogChunk(file, 5, 4096);
-    assert.equal(chunk.text, "");
-    assert.equal(chunk.next, 0);
-  });
-});
-
-describe("tailFollowMany", () => {
-  it("returns on SIGINT with exit code 130 instead of killing the process", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-tail-follow-"));
-    temps.push(dir);
-    const file = path.join(dir, "cpa.log");
-    fs.writeFileSync(file, "line\n");
-    const listenersBefore = process.listenerCount("SIGINT");
-
-    const originalLog = console.log;
-    const originalExit = process.exit;
-    // process.exit() truncates queued stdout (a piped stdout is asynchronous on
-    // Windows), so the follower must never call it.
-    let exited = false;
-    console.log = (): void => {};
-    process.exit = ((code?: number): never => {
-      exited = true;
-      throw new Error(`process.exit(${code}) called`);
-    }) as typeof process.exit;
-    let followed: Promise<void>;
-    try {
-      followed = tailFollowMany([file]);
-      try {
-        process.emit("SIGINT", "SIGINT");
-      } catch {
-        /* recorded in `exited` and asserted below */
-      }
-      assert.equal(exited, false, "SIGINT must not terminate the process");
-      await followed;
-    } finally {
-      console.log = originalLog;
-      process.exit = originalExit;
-    }
-
-    assert.equal(process.exitCode, 130);
-    assert.equal(process.listenerCount("SIGINT"), listenersBefore);
   });
 });
 

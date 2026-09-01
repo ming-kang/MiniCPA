@@ -122,4 +122,4 @@ cpa doctor        # layout + binary + autostart + HTTP/HTTPS + GitHub probe
 cpa logs -f       # follow stdout + stderr
 ```
 
-`cpa logs` prints the last `-n, --lines <n>` lines of each log file (default `80`; must be a positive whole number). `--err` limits it to `cpa.err.log`. `-f`/`--follow` streams new output instead and ignores `--lines`.
+`cpa logs` prints the last `-n, --lines <n>` lines of each log file (default `80`; must be a positive whole number). `--err` limits it to `cpa.err.log`. `-f`/`--follow` streams new output instead and ignores `--lines`; when following stdout and stderr together, prefixes are added only after a complete line arrives, so partial writes and split UTF-8 characters remain intact.

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { openInBrowser } from "../browser.js";
 import { readCpaConfigWithWarnings } from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
+import { tailFollowMany } from "./log-follow.js";
 import { recordMiniCpaEvent } from "../minicpa-log.js";
 import { inspectAutostartState, type AutostartState } from "../process/autostart.js";
 import {
@@ -227,82 +228,6 @@ export async function runLogs(opts: {
 
 function printTail(file: string, n: number): void {
   console.log(tailFile(file, n));
-}
-
-/**
- * Read at most `maxBytes` from `pos`, reporting how far the cursor really moved.
- *
- * A log rotated between stat() and read() returns fewer bytes than requested, so
- * the cursor must advance by the bytes actually read (advancing by the requested
- * length skips real log content) and the buffer must be zero-filled and sliced
- * (an unread tail of an 8 MiB `allocUnsafe` buffer is raw heap memory).
- *
- * @internal exported for tests only
- */
-export function readLogChunk(
-  file: string,
-  pos: number,
-  maxBytes: number,
-): { text: string; next: number } {
-  const len = Math.max(0, maxBytes);
-  if (len === 0) return { text: "", next: pos };
-  const buf = Buffer.alloc(len);
-  const fd = fs.openSync(file, "r");
-  let read: number;
-  try {
-    read = fs.readSync(fd, buf, 0, len, pos);
-  } finally {
-    fs.closeSync(fd);
-  }
-  // Nothing there any more: the file was rotated/truncated under us, so restart
-  // from the top instead of stranding the cursor past the new end.
-  if (read === 0) return { text: "", next: 0 };
-  return { text: buf.subarray(0, read).toString(), next: pos + read };
-}
-
-/** @internal exported for tests only */
-export async function tailFollowMany(files: string[]): Promise<void> {
-  const state = new Map(files.map((f) => [f, fs.existsSync(f) ? fs.statSync(f).size : 0]));
-  console.log(`Following ${files.join(" + ")} (Ctrl+C to exit)`);
-
-  const interval = setInterval(() => {
-    for (const file of files) {
-      if (!fs.existsSync(file)) continue;
-      const stat = fs.statSync(file);
-      let pos = state.get(file) ?? 0;
-      if (stat.size < pos) pos = 0;
-      if (stat.size > pos) {
-        const { text, next } = readLogChunk(file, pos, Math.min(stat.size - pos, 8 * 1024 * 1024));
-        state.set(file, next);
-        if (!text) continue;
-        const prefix = files.length > 1 ? `[${file.endsWith(".err.log") ? "err" : "out"}] ` : "";
-        if (prefix) {
-          for (const line of text.split(/\r?\n/)) {
-            if (line.length) process.stdout.write(`${prefix + line}\n`);
-          }
-        } else {
-          process.stdout.write(text);
-        }
-      }
-    }
-  }, 500);
-
-  let onSigint: (() => void) | undefined;
-  try {
-    await new Promise<void>((resolve) => {
-      // process.exit() here would discard queued stdout writes (a piped stdout is
-      // asynchronous on Windows); resolving lets Node drain and exit on its own.
-      onSigint = (): void => {
-        clearInterval(interval);
-        process.exitCode = 130;
-        resolve();
-      };
-      process.once("SIGINT", onSigint);
-    });
-  } finally {
-    clearInterval(interval);
-    if (onSigint) process.removeListener("SIGINT", onSigint);
-  }
 }
 
 export type TuiDeps = {
