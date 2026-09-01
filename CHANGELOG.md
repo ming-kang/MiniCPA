@@ -4,6 +4,18 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+### Changed
+
+- Read-only runtime reporting (`status`, `version`, `doctor`, and `update check`) now uses the last health-verified install metadata instead of executing the active CLIProxyAPI binary, so it cannot hold a Windows image lock against an in-progress update.
+- Binary and Web panel update checks now run concurrently while preserving stable output order, and CLIProxyAPI release asset names are generated from one typed platform/architecture table.
+- Pull-request CI now packs and installs the publishable tarball on Linux, macOS, and Windows, with the production dependency audit running once on Linux.
+
+### Fixed
+
+- Preserved the recorded CLIProxyAPI version when an update rolls back to an intact previous binary after a temporary version-probe failure.
+- Replaced the lock acquisition attempt count with a deadline that includes the full fresh-empty-lock grace period, allowing abandoned partial lock files to recover automatically.
+- Preserved partial log lines and split UTF-8 characters while following stdout and stderr together.
+
 ## [0.3.2] - 2026-08-26
 
 ### Added
