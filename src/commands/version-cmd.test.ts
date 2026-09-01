@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { resolveCpaHome } from "../paths.js";
+import { activeExecutablePath, resolveCpaHome } from "../paths.js";
 import { writeInstallState } from "../state.js";
 import { captureConsole, createIsolatedTestEnv } from "../test-fixtures/test-env.js";
 import { runVersion } from "./version-cmd.js";
@@ -43,18 +44,16 @@ describe("runVersion", () => {
     assert.equal(stdout[3], `Home         ${home}`);
   });
 
-  it("reports installed runtime and panel versions on successful probe", async () => {
+  it("reports the recorded runtime version without executing the binary", async () => {
     const home = resolveCpaHome();
     writeInstallState(home, {
       runtimeVersion: "7.0.0",
       panelVersion: "1.2.0",
     });
+    // Deliberately not executable: read-only version reporting must not spawn it.
+    fs.writeFileSync(activeExecutablePath(home), "not a real binary");
 
-    const { stdout } = await captureConsole(() =>
-      runVersion("0.2.0", {
-        readCurrentRuntimeVersion: async () => "7.0.0",
-      }),
-    );
+    const { stdout } = await captureConsole(() => runVersion("0.2.0"));
 
     assert.equal(stdout.length, 4);
     assert.equal(stdout[0], "MiniCPA      0.2.0");

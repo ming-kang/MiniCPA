@@ -20,8 +20,7 @@ import { inspectAutostartState, lingerHint, type AutostartState } from "../proce
 import { readinessUrls, waitForAnyHttpOk } from "../process/health.js";
 import { inspectRunning } from "../process/lifecycle.js";
 import { inspectMiniCpaLock, listLockPreemptResidue } from "../process/lock.js";
-import { findRunnableExecutable, readCurrentRuntimeVersion } from "../process/runtime.js";
-import { readInstallState } from "../state.js";
+import { inspectRuntimeInstallation } from "../process/runtime.js";
 import { checkGithubReachability, type GithubReachability } from "../update/github-client.js";
 import { DEFAULT_LOG_ROTATE_BYTES, directorySizeBytes, formatBytes } from "../util.js";
 
@@ -173,9 +172,10 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
     }
   }
 
-  // Read-only lookup: diagnosing the home must never repair it, or doctor would
-  // report on residue it created itself two lines earlier.
-  const exe = findRunnableExecutable(ctx.home);
+  // Read-only lookup: diagnosing the home must never repair or execute it, or
+  // doctor could race a lock-holding update over the binary being replaced.
+  const installed = inspectRuntimeInstallation(ctx.home);
+  const exe = installed.executable?.path;
   const activeExe = activeExecutablePath(ctx.home);
   if (exe === undefined) {
     console.log("[fail] CLIProxyAPI binary missing — run: cpa update");
@@ -188,20 +188,15 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
     );
   }
 
-  const version = await readCurrentRuntimeVersion(ctx.home);
-  const state = readInstallState(ctx.home);
-  console.log(
-    `[info] CLIProxyAPI version ${version ?? "-"} (state=${state.runtimeVersion ?? "-"})`,
-  );
-  if (exe === activeExe && !version) {
+  const state = installed.state;
+  console.log(`[info] CLIProxyAPI recorded version ${state.runtimeVersion ?? "-"}`);
+  if (exe === activeExe && !state.runtimeVersion) {
     console.log(
-      "[warn] CLIProxyAPI binary is present but not runnable (version probe failed) — run: cpa update --force",
+      "[warn] CLIProxyAPI binary is present but its version is not recorded — run: cpa update --force",
     );
   }
-  if (state.runtimeVersion && !version) {
-    console.log("[warn] install state has runtimeVersion but binary is missing/unprobeable");
-  } else if (state.runtimeVersion && state.runtimeVersion !== version) {
-    console.log("[warn] runtime version differs from install state — run: cpa update --force");
+  if (state.runtimeVersion && exe === undefined) {
+    console.log("[warn] install state has runtimeVersion but binary is missing");
   }
   console.log(`[info] Web panel ${state.panelVersion ?? "(not installed)"}`);
 

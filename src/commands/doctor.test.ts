@@ -178,22 +178,19 @@ describe("runDoctor", () => {
     }
   });
 
-  it("warns when the installed binary cannot be probed for its version", async () => {
+  it("reports an unrecorded binary without executing it", async () => {
     useTempRoot();
     const home = resolveCpaHome();
     ensureDir(home);
     fs.writeFileSync(cpaLayout(home).configFile, "port: 8317\n");
-    // Present under the active name but not a runnable image (wrong arch / EACCES).
+    // Deliberately not executable: doctor must inspect metadata without spawning it.
     fs.writeFileSync(activeExecutablePath(home), "not a real binary");
 
     const lines = await runDoctorCapturing();
 
     assert.ok(hasLine(lines, "[ ok ] CLIProxyAPI binary "), lines.join("\n"));
     assert.ok(
-      hasLine(
-        lines,
-        "[warn] CLIProxyAPI binary is present but not runnable (version probe failed)",
-      ),
+      hasLine(lines, "[warn] CLIProxyAPI binary is present but its version is not recorded"),
       lines.join("\n"),
     );
   });
@@ -208,7 +205,7 @@ describe("runDoctor", () => {
     const lines = await runDoctorCapturing();
 
     assert.ok(
-      hasLine(lines, "install state has runtimeVersion but binary is missing/unprobeable"),
+      hasLine(lines, "install state has runtimeVersion but binary is missing"),
       lines.join("\n"),
     );
   });

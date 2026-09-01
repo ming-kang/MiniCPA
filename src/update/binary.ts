@@ -18,6 +18,7 @@ import {
 } from "../process/lifecycle.js";
 import {
   clearRuntimeBinaryBackup,
+  inspectRuntimeInstallation,
   installRuntimeBinary,
   readCurrentRuntimeVersion,
   restoreRuntimeBinaryFromBackup,
@@ -210,13 +211,24 @@ export type BinaryUpdateResult = {
   restarted: boolean;
 };
 
-export async function checkBinaryUpdate(home: string): Promise<{
+export type BinaryCheckDeps = {
+  fetchLatestRelease: typeof fetchLatestRelease;
+};
+
+const realBinaryCheckDeps: BinaryCheckDeps = { fetchLatestRelease };
+
+export async function checkBinaryUpdate(
+  home: string,
+  deps: BinaryCheckDeps = realBinaryCheckDeps,
+): Promise<{
   current?: string;
   latest: string;
   upToDate: boolean;
 }> {
-  const current = await readCurrentRuntimeVersion(home);
-  const release = await fetchLatestRelease(CPA_REPO, cpaReleaseAssetNames);
+  const installed = inspectRuntimeInstallation(home);
+  const current =
+    installed.executable?.kind === "active" ? installed.state.runtimeVersion : undefined;
+  const release = await deps.fetchLatestRelease(CPA_REPO, cpaReleaseAssetNames);
   const latest = normalizeTagVersion(release.tag_name);
   return {
     current,

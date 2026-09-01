@@ -8,6 +8,7 @@ import {
   ensureDir,
   unlockProbePath,
 } from "../paths.js";
+import { readInstallState, type InstallState } from "../state.js";
 import { buildCredentialSafeChildEnv } from "./child-env.js";
 
 /** Outcome of a finished child process: exit code plus its captured streams. */
@@ -80,13 +81,12 @@ export async function readInstalledRuntimeVersion(exePath: string): Promise<stri
 }
 
 /**
- * Probe the installed binary for its version. Install state is only a record,
- * not proof that the binary still exists or is runnable.
+ * Probe the installed binary for its version by executing it.
  *
- * This EXECUTES the managed binary, and a running Windows image holds a section
- * lock on its own file. Callers that run outside `withMiniCpaLock` (`cpa status`,
- * `cpa version`, `cpa doctor`) can therefore stall a concurrent `cpa update`
- * inside `waitForBinaryUnlocked` for the length of this probe.
+ * A running Windows image holds a section lock on its own file, so this must only
+ * be called by a command that owns the MiniCPA lock. Unlocked read commands use
+ * inspectRuntimeInstallation instead and report the last health-verified version
+ * recorded by the update path.
  */
 export async function readCurrentRuntimeVersion(home: string): Promise<string | undefined> {
   return readInstalledRuntimeVersion(activeExecutablePath(home));
@@ -252,6 +252,21 @@ export function inspectRunnableExecutable(home: string): RunnableExecutableLocat
   const backup = backupExecutablePath(home);
   if (fs.existsSync(backup)) return { path: backup, kind: "backup" };
   return undefined;
+}
+
+export type RuntimeInstallationInspection = {
+  executable?: RunnableExecutableLocation;
+  /** Install metadata last written after a healthy update; reading never probes the executable. */
+  state: InstallState;
+};
+
+/** Read-only installation view that never executes, repairs, or locks the binary. */
+export function inspectRuntimeInstallation(home: string): RuntimeInstallationInspection {
+  const executable = inspectRunnableExecutable(home);
+  return {
+    ...(executable ? { executable } : {}),
+    state: readInstallState(home),
+  };
 }
 
 /**

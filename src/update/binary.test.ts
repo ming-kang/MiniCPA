@@ -6,7 +6,12 @@ import { afterEach, describe, it } from "node:test";
 import { activeExecutablePath, backupExecutablePath } from "../paths.js";
 import { readInstallState, writeInstallState } from "../state.js";
 import { silentUpdateReporter } from "./reporter.js";
-import { BinaryUpdateError, installBinaryPhase, type BinaryUpdateDeps } from "./binary.js";
+import {
+  BinaryUpdateError,
+  checkBinaryUpdate,
+  installBinaryPhase,
+  type BinaryUpdateDeps,
+} from "./binary.js";
 
 const temps: string[] = [];
 
@@ -59,6 +64,25 @@ function fakeDeps(overrides?: DepsOverrides): BinaryUpdateDeps & { calls: string
     },
   };
 }
+
+describe("checkBinaryUpdate", () => {
+  it("uses health-verified install metadata without executing the active binary", async () => {
+    const home = tempHome();
+    fs.writeFileSync(activeExecutablePath(home), "not a real binary");
+    writeInstallState(home, { runtimeVersion: "7.2.92" });
+
+    const result = await checkBinaryUpdate(home, {
+      fetchLatestRelease: async () => ({
+        tag_name: "v7.2.92",
+        name: "v7.2.92",
+        published_at: "",
+        assets: [],
+      }),
+    });
+
+    assert.deepEqual(result, { current: "7.2.92", latest: "7.2.92", upToDate: true });
+  });
+});
 
 describe("installBinaryPhase", () => {
   it("installs, records state, and clears the backup when CPA was not running", async () => {

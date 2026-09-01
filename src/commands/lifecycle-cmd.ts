@@ -15,7 +15,7 @@ import { inspectRunning, startDaemon, stopDaemon, type RunningInfo } from "../pr
 import { withMiniCpaLock } from "../process/lock.js";
 import {
   inspectRunnableExecutable,
-  readCurrentRuntimeVersion,
+  inspectRuntimeInstallation,
   runRuntimeAttached,
 } from "../process/runtime.js";
 import { tailFile } from "../util.js";
@@ -101,7 +101,9 @@ export async function runStatus(deps?: StatusDependencies): Promise<void> {
   const ctx = createContext();
   // Read-only: an unlocked command must not repair (or race) the instance home.
   const running = inspectRunning(ctx.home);
-  const version = await readCurrentRuntimeVersion(ctx.home);
+  const installed = inspectRuntimeInstallation(ctx.home);
+  const version =
+    installed.executable?.kind === "active" ? installed.state.runtimeVersion : undefined;
   let autostart: AutostartState | "unknown" = "unknown";
   let autostartWarning: string | undefined;
   try {
@@ -110,7 +112,7 @@ export async function runStatus(deps?: StatusDependencies): Promise<void> {
     autostartWarning = err instanceof Error && err.message ? err.message : String(err);
   }
   printHome(ctx);
-  console.log(`Version    ${version ?? "(not installed)"}`);
+  console.log(`Version    ${version ?? (installed.executable ? "(unknown)" : "(not installed)")}`);
   console.log(`Autostart  ${autostart}`);
   if (autostartWarning) {
     console.error(`Warning: could not inspect autostart: ${autostartWarning}`);

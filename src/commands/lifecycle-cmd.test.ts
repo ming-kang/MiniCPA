@@ -13,7 +13,7 @@ import {
   unlockProbePath,
 } from "../paths.js";
 import type { RunningInfo } from "../process/lifecycle.js";
-import { writePidRecord } from "../state.js";
+import { writeInstallState, writePidRecord } from "../state.js";
 import { withHttpFixture, withHttpsFixture } from "../test-fixtures/http-server.js";
 import { captureConsole } from "../test-fixtures/test-env.js";
 import {
@@ -319,6 +319,20 @@ describe("runStatus", () => {
       "Warning: could not inspect autostart: user manager unavailable",
     ]);
     assert.equal(process.exitCode, 1);
+  });
+
+  it("reports the recorded version without executing the active binary", async () => {
+    useTempRoot();
+    const home = resolveCpaHome();
+    ensureDir(home);
+    fs.writeFileSync(activeExecutablePath(home), "not a real binary");
+    writeInstallState(home, { runtimeVersion: "7.2.92" });
+
+    const output = await captureConsole(() =>
+      runStatus({ inspectAutostartState: async () => "off" }),
+    );
+
+    assert.ok(output.stdout.includes("Version    7.2.92"), output.stdout.join("\n"));
   });
 
   it("does not collapse stale or OS-disabled registrations into off", async () => {

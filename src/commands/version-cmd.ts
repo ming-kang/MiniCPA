@@ -1,18 +1,14 @@
 import { createContext } from "../context.js";
-import { readCurrentRuntimeVersion } from "../process/runtime.js";
-import { readInstallState } from "../state.js";
+import { inspectRuntimeInstallation } from "../process/runtime.js";
 
-export type VersionDeps = {
-  readCurrentRuntimeVersion?: (home: string) => Promise<string | undefined>;
-};
-
-export async function runVersion(cliVersion: string, deps?: VersionDeps): Promise<void> {
+export async function runVersion(cliVersion: string): Promise<void> {
   const ctx = createContext();
-  const state = readInstallState(ctx.home);
-  const probeRuntime = deps?.readCurrentRuntimeVersion ?? readCurrentRuntimeVersion;
-  const runtime = await probeRuntime(ctx.home);
+  const installed = inspectRuntimeInstallation(ctx.home);
+  const runtime =
+    installed.executable?.kind === "active" ? installed.state.runtimeVersion : undefined;
+  const runtimeLabel = runtime ?? (installed.executable ? "(unknown)" : "(not installed)");
   console.log(`MiniCPA      ${cliVersion}`);
-  console.log(`CLIProxyAPI  ${runtime ?? "(not installed)"}`);
-  console.log(`Web panel    ${state.panelVersion ?? "(not installed)"}`);
+  console.log(`CLIProxyAPI  ${runtimeLabel}`);
+  console.log(`Web panel    ${installed.state.panelVersion ?? "(not installed)"}`);
   console.log(`Home         ${ctx.home}`);
 }
