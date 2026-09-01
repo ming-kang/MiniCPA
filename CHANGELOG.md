@@ -4,6 +4,8 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-01
+
 ### Changed
 
 - Read-only runtime reporting (`status`, `version`, `doctor`, and `update check`) now uses the last health-verified install metadata instead of executing the active CLIProxyAPI binary, so it cannot hold a Windows image lock against an in-progress update.
