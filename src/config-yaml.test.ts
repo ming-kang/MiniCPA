@@ -95,8 +95,14 @@ describe("readCpaConfigWithWarnings", () => {
     temps.push(dir);
     const configPath = path.join(dir, "config.yaml");
     const generated = defaultConfigYaml("sk-test");
+    assert.match(generated, /^# CLIProxyAPI 中文配置示例/);
     assert.match(generated, /tls:\n {2}enable: false\n {2}cert: ""\n {2}key: ""/);
     assert.match(generated, /disable-auto-update-panel: false/);
+    assert.match(generated, /pprof:\n {2}enable: false/);
+    assert.match(generated, /commercial-mode: false/);
+    assert.match(generated, /logging-to-file: true/);
+    assert.match(generated, /api-keys:\n {2}- sk-test/);
+    assert.doesNotMatch(generated, /api-keys:\n {2}- sk-cliproxyapi/);
     fs.writeFileSync(configPath, generated);
 
     const { config, warnings } = readCpaConfigWithWarnings(configPath);
@@ -104,6 +110,7 @@ describe("readCpaConfigWithWarnings", () => {
     assert.equal(isTlsEnabled(config), false);
     assert.equal(config.tls?.cert, "");
     assert.equal(config.tls?.key, "");
+    assert.equal(config["remote-management"]?.["secret-key"], "CLIPROXYAPI");
     assert.equal(config["remote-management"]?.["disable-control-panel"], false);
     assert.equal(config["remote-management"]?.["disable-auto-update-panel"], false);
   });

@@ -94,7 +94,7 @@ describe("runInit", () => {
     assert.equal(fs.existsSync(path.join(miniCpaRoot(), "config.json")), false);
 
     const configText = fs.readFileSync(layout.configFile, "utf8");
-    const apiKey = /-\s+(sk-[a-f0-9]+)/.exec(configText)?.[1];
+    const apiKey = /-\s+"?(sk-[a-f0-9]+)"?/.exec(configText)?.[1];
     assert.ok(apiKey);
     assert.ok(fs.existsSync(layout.envFile));
     assert.match(configText, /api-keys:/);

@@ -4,6 +4,16 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-03
+
+### Added
+
+- Added the full Chinese-commented CLIProxyAPI configuration template at `docs/config.example.yaml`; newly initialized instances use it while still generating a private random API key.
+
+### Changed
+
+- `cpa update` now synchronizes an existing `config.yaml` before checking the binary: the template enforces operational settings, machine-local endpoints and credentials retain their values, extra and missing entries are carried forward appropriately, comments and known-key order follow the bundled template, and every changed file is backed up before an atomic replacement.
+
 ## [0.4.0] - 2026-09-02
 
 ### Changed

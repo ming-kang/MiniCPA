@@ -14,7 +14,7 @@ When MiniCPA starts CLIProxyAPI:
 - **Outbound HTTP (MiniCPA binary update / MiniCPA upgrade / doctor GitHub probe)** honors shell proxy env: `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` (case-insensitive). `ALL_PROXY` is a fallback for both schemes **only** when it is an `http://` or `https://` URL; any other scheme (`socks5://`, …) is not applied and `cpa doctor` labels it `(scheme not applied)` — set `HTTP_PROXY`/`HTTPS_PROXY` instead. CLIProxyAPI inherits these proxy settings for its own Web panel updater. Local `cpa start` / `cpa status` readiness probes use a dedicated direct dispatcher, so they are unaffected by proxy env vars, including under `NODE_USE_ENV_PROXY` / `--use-env-proxy`. With `tls.enable: true`, those probes use HTTPS and accept a self-signed certificate only through that isolated local dispatcher; GitHub/npm requests retain normal certificate validation.
 - **Upgrade npm env** also removes the credential keys above while preserving PATH and proxy settings. Install scripts are disabled. A normal `cpa upgrade` runs npm's named global update and verifies it reached the exact version returned by the registry; `--force` reinstalls that exact version.
 
-Default `config.yaml` from `cpa init` uses `auth-dir: auths` (relative to home). Optional `.env` in the same directory is loaded by CLIProxyAPI at startup. After writing these files, `cpa init` installs the latest integrity-checked CLIProxyAPI binary; it does not start the process. CLIProxyAPI provisions and updates `management.html` after it starts.
+Default `config.yaml` from `cpa init` comes from the packaged `docs/config.example.yaml` and uses `auth-dir: auths` (relative to home). The sample API key is replaced with a newly generated random key. Optional `.env` in the same directory is loaded by CLIProxyAPI at startup. After writing these files, `cpa init` installs the latest integrity-checked CLIProxyAPI binary; it does not start the process. CLIProxyAPI provisions and updates `management.html` after it starts.
 
 OAuth, routing, API keys, and management secrets: edit `config.yaml` / `.env` or use the web management panel after `cpa web`.
 
@@ -24,9 +24,12 @@ OAuth, routing, API keys, and management secrets: edit `config.yaml` / `.env` or
 
 - a **random** `api-keys` entry stored only in `config.yaml` — rotate it before public exposure (`cpa doctor` also warns if the legacy `sk-cliproxyapi` remains)
 - `host: 127.0.0.1` / `port: 8317` — local-only by default
-- `commercial-mode: true` — CLIProxyAPI product flag; adjust if your deployment expects otherwise
+- `commercial-mode: false` and `logging-to-file: true`
+- `proxy-url: socks5://127.0.0.1:7890`
 - `tls.enable: false` — when enabled with the corresponding CLIProxyAPI certificate/key settings, MiniCPA uses `https://` for readiness, status, and management URLs
-- `remote-management.disable-control-panel: false` / `disable-auto-update-panel: false` — CLIProxyAPI serves and periodically updates its own Web panel by default
+- `remote-management.secret-key: CLIPROXYAPI`, `disable-control-panel: false`, and `disable-auto-update-panel: false`
+
+The complete Chinese-commented template is [`config.example.yaml`](config.example.yaml).
 
 `cpa init --force` overwrites `config.yaml` after copying it to `config.yaml.bak.<timestamp>` (previous backups are kept). The flag does not force binary reinstallation; use `cpa update --force` for that. Initialization is retryable: a binary failure leaves the generated configuration in place.
 
@@ -55,7 +58,9 @@ MiniCPA manages one instance at `<cpa root>/instance`. `cpa home` prints its loc
 
 ## Update behaviour
 
-- `cpa init` and `cpa update` install or update only the managed CLIProxyAPI binary. They never update the MiniCPA npm package, so use `cpa upgrade` for that.
+- `cpa init` installs the managed CLIProxyAPI binary and creates config only when needed. `cpa update` synchronizes an existing config and updates the binary. Neither command updates the MiniCPA npm package, so use `cpa upgrade` for that.
+- Before binary discovery, `cpa update` rebuilds an existing `config.yaml` from the current bundled template. The template overwrites known operational settings, so new policy such as logging size limits takes effect on existing instances. Existing values are retained only for machine-local endpoint settings (`host`, `port`, `tls`, `proxy-url`), `auth-dir`, `api-keys`, top-level `*-api-key` / `*-api-keys` credential sections, `openai-compatibility`, `remote-management.secret-key`, and `plugins.configs`. Keys not enabled in the template are also retained. Missing map entries receive template values, while known-key order and comments come from the template rather than the old file. A changed file is first copied to `config.yaml.bak.<timestamp>`, then replaced atomically. An empty YAML document is treated as an empty map. A missing file is left to `cpa init`, while malformed YAML or a non-map root aborts the update without modifying the config.
+- Config synchronization is idempotent and runs even when the binary is already current. If a running process is restarted for a binary replacement, it loads the synchronized config. Otherwise MiniCPA prints that the changes apply on the next `cpa start` or `cpa restart`.
 - Release discovery prefers `github.com/releases/latest` redirects and browser download URLs; REST API is fallback only.
 - Asset names try current upstream labels (`aarch64`, `no-plugin`) then same-architecture legacy aliases (`arm64`, `portable`); 404s try the next candidate. ARM64 never falls back to an AMD64/x86_64 archive.
 - Binary path: **download → checksum → extract** while CLIProxyAPI may still be running, then **stop → replace → restart** only for the install window. Network/checksum failures do **not** stop a running instance.

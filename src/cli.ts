@@ -153,7 +153,9 @@ program
     }),
   );
 
-const updateCmd = program.command("update").description("Update the managed CLIProxyAPI binary");
+const updateCmd = program
+  .command("update")
+  .description("Synchronize config and update the managed CLIProxyAPI binary");
 
 updateCmd
   .command("check")
@@ -165,8 +167,8 @@ updateCmd
   );
 
 updateCmd
-  // Keep old scope spellings parseable for scripts. They are hidden because the
-  // binary is now MiniCPA's only update target.
+  // Keep old scope spellings parseable for scripts. They are hidden because
+  // these options only select the binary portion of the update.
   .addOption(
     new Option("--all", "Compatibility alias for a binary update")
       .hideHelp()
@@ -207,6 +209,7 @@ updateCmd.addHelpText(
   "after",
   [
     "",
+    "An existing config is synchronized from MiniCPA's bundled template first.",
     "CLIProxyAPI provisions and updates its Web panel itself.",
     "A running instance is restarted only when its CLIProxyAPI binary is replaced.",
     "To upgrade MiniCPA itself, run cpa upgrade.",

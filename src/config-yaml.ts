@@ -25,6 +25,12 @@ const DEFAULT_PORT = 8317;
 /** Well-known default from older MiniCPA templates — doctor warns if still present. */
 export const LEGACY_DEFAULT_API_KEY = "sk-cliproxyapi";
 
+const DEFAULT_CONFIG_TEMPLATE = fs.readFileSync(
+  new URL("../docs/config.example.yaml", import.meta.url),
+  "utf8",
+);
+const DEFAULT_API_KEY_LINE = `  - "${LEGACY_DEFAULT_API_KEY}"`;
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -184,40 +190,9 @@ export function generateApiKey(): string {
 }
 
 export function defaultConfigYaml(apiKey: string = LEGACY_DEFAULT_API_KEY): string {
-  return `# CLIProxyAPI configuration (managed by MiniCPA)
-host: "127.0.0.1"
-port: 8317
-
-tls:
-  enable: false
-  cert: ""
-  key: ""
-
-remote-management:
-  allow-remote: false
-  secret-key: ""
-  disable-control-panel: false
-  # CLIProxyAPI owns management.html and checks this repository for updates.
-  disable-auto-update-panel: false
-  panel-github-repository: "https://github.com/router-for-me/Cli-Proxy-API-Management-Center"
-
-auth-dir: "auths"
-
-api-keys:
-  - ${apiKey}
-
-debug: false
-commercial-mode: true
-logging-to-file: false
-usage-statistics-enabled: true
-
-proxy-url: ""
-
-routing:
-  strategy: "round-robin"
-
-request-retry: 3
-max-retry-credentials: 0
-max-retry-interval: 30
-`;
+  if (!DEFAULT_CONFIG_TEMPLATE.includes(DEFAULT_API_KEY_LINE)) {
+    throw new Error("The bundled config template is missing its API-key placeholder");
+  }
+  const encodedApiKey = YAML.stringify(apiKey).trimEnd();
+  return DEFAULT_CONFIG_TEMPLATE.replace(DEFAULT_API_KEY_LINE, `  - ${encodedApiKey}`);
 }

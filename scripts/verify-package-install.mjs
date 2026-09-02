@@ -209,6 +209,7 @@ try {
     "dist/commands/upgrade-cmd.js",
     "dist/update/minicpa-release.js",
     "dist/update/self-upgrade.js",
+    "docs/config.example.yaml",
     "docs/cpa-reference.md",
   ]) {
     assertFile(relativePath);

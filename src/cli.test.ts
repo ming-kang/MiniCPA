@@ -147,7 +147,7 @@ describe("cli smoke", () => {
 
     assert.equal(update.status, 0);
     assert.equal(update.stderr, "");
-    assert.match(update.stdout, /Update the managed CLIProxyAPI binary/);
+    assert.match(update.stdout, /Synchronize config and update the managed CLIProxyAPI binary/);
     assert.match(update.stdout, /CLIProxyAPI provisions and updates its Web panel itself\./);
     assert.match(update.stdout, /To upgrade MiniCPA itself, run cpa upgrade\./);
     for (const hidden of ["all", "binary", "panel"]) {

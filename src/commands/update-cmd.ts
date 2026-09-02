@@ -1,7 +1,8 @@
 import { formatCliError } from "../cli-errors.js";
+import { syncCpaConfigDefaults } from "../config-sync.js";
 import { createContext, printHome } from "../context.js";
 import { withMiniCpaLock } from "../process/lock.js";
-import { checkBinaryUpdate, updateBinary } from "../update/binary.js";
+import { checkBinaryUpdate, updateBinary, type BinaryUpdateResult } from "../update/binary.js";
 import { consoleUpdateReporter } from "../update/reporter.js";
 
 /** Exit rule documented for `cpa update check`: 0 only when the binary is current. */
@@ -105,7 +106,7 @@ export async function performUpdate(
   home: string,
   opts: UpdateOptions,
   deps: UpdateDeps = realUpdateDeps,
-): Promise<void> {
+): Promise<BinaryUpdateResult> {
   const binary = await deps.updateBinary(home, {
     version: opts.version,
     force: opts.force,
@@ -117,6 +118,7 @@ export async function performUpdate(
   } else {
     console.log(updateResultLine(binary, opts.version !== undefined));
   }
+  return binary;
 }
 
 export async function runUpdate(
@@ -125,5 +127,24 @@ export async function runUpdate(
 ): Promise<void> {
   const ctx = createContext();
   printHome(ctx);
-  await withMiniCpaLock("update", () => performUpdate(ctx.home, opts, deps));
+  await withMiniCpaLock("update", async () => {
+    const configSync = syncCpaConfigDefaults(ctx.layout.configFile);
+    if (configSync.changed) {
+      const details: string[] = [];
+      if (configSync.addedPaths.length > 0) {
+        details.push(`${configSync.addedPaths.length} defaults added`);
+      }
+      if (configSync.overwrittenPaths.length > 0) {
+        details.push(`${configSync.overwrittenPaths.length} settings updated`);
+      }
+      if (details.length === 0) details.push("template comments refreshed");
+      console.log(`Config synchronized: ${ctx.layout.configFile} (${details.join(", ")})`);
+      console.log(`Config backup:       ${configSync.backupPath}`);
+    }
+
+    const binary = await performUpdate(ctx.home, opts, deps);
+    if (configSync.changed && !binary.restarted) {
+      console.log("Config changes apply on the next cpa start/restart.");
+    }
+  });
 }

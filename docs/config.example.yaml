@@ -1,0 +1,841 @@
+# CLIProxyAPI 中文配置示例
+
+# 服务监听的主机或网络接口。留空（""）时默认监听所有接口（IPv4 和 IPv6）。
+# 使用 "127.0.0.1" 或 "localhost" 可将访问范围限制在本机。
+host: "127.0.0.1"
+
+# 服务端口
+port: 8317
+
+# HTTPS 的 TLS 设置。启用后，服务将使用所提供的证书和私钥进行监听。
+tls:
+  enable: false
+  cert: ""
+  key: ""
+
+# 管理 API 设置
+remote-management:
+  # 是否允许来自非本机地址的远程管理访问。
+  # 设为 false 时，只有本机能够访问管理端点，但仍然必须提供管理密钥。
+  allow-remote: false
+
+  # 管理密钥。此处填写明文时，程序会在启动时自动将其哈希。
+  # 所有管理请求（包括来自本机的请求）都必须提供此密钥。
+  # 留空将彻底禁用管理 API；所有 /v0/management 路由都会返回 404。
+  secret-key: "CLIPROXYAPI"
+
+  # 设为 true 时，禁止下载内置管理控制面板资源，并关闭对应的 HTTP 路由。
+  disable-control-panel: false
+
+  # 是否禁止管理面板从 GitHub 定期在后台自动更新
+  # 启用后，如果面板资源不存在，首次访问时仍会下载；此后不再自动更新。
+  disable-auto-update-panel: false
+
+  # 管理控制面板的 GitHub 仓库。可填写仓库 URL 或 Releases API URL。
+  panel-github-repository: "https://github.com/router-for-me/Cli-Proxy-API-Management-Center"
+
+# 身份验证文件目录（支持使用 ~ 表示用户主目录）
+auth-dir: "auths"
+
+# 用于客户端身份验证的 API 密钥
+api-keys:
+  - "sk-cliproxyapi"
+
+# 是否启用调试日志
+debug: false
+
+# 是否启用 pprof HTTP 调试服务（主机:端口）。为安全起见，应始终绑定到本机地址。
+pprof:
+  enable: false
+  addr: "127.0.0.1:8316"
+
+# 在 Home 模式下，凭据并发由 Home 统一配置。Home 合成的配置具有最终解释权，
+# 包括下列值在内的本地设置都会被忽略。不要使用本地配置覆盖 Home 的并发策略。
+# credential-concurrency:
+#   lifecycle-config-revision: 1
+#   observation-barrier-revision: 0
+#   cpa-heartbeat-timeout: "3s"
+#   cpa-cancel-bound: "5s"
+#   reclaim-grace: "5s"
+#   cleanup-interval: "5s"
+#   release-flush-interval: 250ms
+#   release-max-backoff: 2s
+#   busy-retry-min: 250ms
+#   busy-retry-max: 1s
+#   max-limit: 1000000
+
+# 凭据在途请求观测快照的约定。
+# credential-in-flight:
+#   snapshot-interval: 2s
+#   stale-after: 10s
+#   max-part-bytes: 262144
+#   max-part-count: 64
+#   max-revision-bytes: 16777216
+#   max-aggregate-groups: 100000
+#   max-details: 10000
+#   max-string-bytes: 256
+#   staging-retention: 1m
+
+# 标准动态库插件属于受信任的进程内代码，默认禁用。
+# 针对目标 GOOS/GOARCH，可使用 go build -buildmode=c-shared 编译 Go 示例。
+# 其他语言也可以实现相同的 C ABI 和 JSON 方法协议。
+# 插件执行器要求存在一个 provider key 相同的匹配身份验证记录。
+# 如果同一个提供商同时配置为 OpenAI 兼容提供商，则原生执行器优先。
+# 插件命令行参数和管理 API 路由都属于可选能力。
+# 现有原生命令行参数、路由，以及优先级更高的插件参数或路由均不能被替换。
+# 插件列表管理 API 会从插件元数据中读取 Logo 和 ConfigFields，用于管理界面展示。
+# 单个插件的 enabled 只控制 plugins.configs.<pluginID>.enabled，不会隐式修改全局 plugins.enabled。
+plugins:
+  enabled: false
+  dir: "plugins"
+  # 额外的插件商店注册表；内置的官方注册表始终会包含在内。
+  # store-sources:
+  #   - "https://example.com/cliproxy-plugins/registry.json"
+  # 可选的插件商店身份验证规则。对应值从环境变量中读取；
+  # 令牌不会写入插件清单或节点状态。
+  # store-auth:
+  #   - match: "https://example.com/cliproxy-plugins/"
+  #     apply-to: ["registry", "artifact"]
+  #     type: bearer
+  #     token-env: "CLIPROXY_PLUGIN_STORE_TOKEN"
+  configs:
+    example:
+      enabled: true
+      priority: 1
+      config1: true
+      config2: "string"
+      config3: 3
+      mode: "safe" # 枚举值示例：safe、fast
+
+# 设为 true 时，关闭开销较高的请求日志和 HTTP 中间件功能，以降低高并发下每个请求的内存占用。
+commercial-mode: false
+
+# 设为 true 时，将应用日志写入自动轮转的文件，而不是输出到 stdout。
+logging-to-file: true
+
+# logs 目录中全部日志文件允许占用的最大总空间（MB）。超过上限后，程序会从最旧的日志开始删除，
+# 直至总大小回到限制以内。设为 0 表示不启用总容量限制。
+logs-max-total-size-mb: 32
+
+# 关闭请求日志时，最多保留的错误日志文件数量。
+# 超出后会删除最旧的错误日志。默认值为 10；设为 0 表示不自动清理。
+error-logs-max-files: 10
+
+# 设为 false 时，关闭内存中的用量统计聚合。
+usage-statistics-enabled: true
+
+# 管理 API 的用量队列项目在内存中保留的时长（秒）。
+# 本地 Redis RESP 用量输出已禁用。
+# 默认值：60；最大值：3600。
+redis-usage-queue-retention-seconds: 60
+
+# 全局代理 URL。支持 socks5、http 和 https 协议。示例：socks5://user:pass@192.168.1.1:1080/
+# 单条凭据中的 proxy-url 还可填写 "direct" 或 "none"，以显式绕过全局代理和环境变量代理。
+proxy-url: "socks5://127.0.0.1:7890"
+
+# 设为 true 时，不带前缀的模型请求只会使用同样未设置前缀的凭据；prefix 与模型名相同时除外。
+force-model-prefix: false
+
+# 设为 true 时，将经过筛选的上游响应头转发给下游客户端。
+# 默认值为 false，即不转发。
+passthrough-headers: false
+
+# 第一轮已耗尽所有符合条件的凭据后，额外执行的凭据重试轮数。
+# 第 0 轮为初始轮；第 r 轮只允许有效 request-retry 不小于 r 的凭据参与。
+# 凭据或提供商层级显式设置的非负值优先；省略或设为负数时继承此全局值，
+# 显式设为 0 时只参与第 0 轮。新版 CPA 节点会在初始轮发送 retry_round=0，
+# 后续轮次逐次递增；旧版分发方法不发送该字段，并继续沿用旧语义。
+# 额外轮次适用于 HTTP 403、408、429、500、502、503 和 504 错误。
+# 单条凭据或提供商的覆盖值优先；0 表示禁用额外轮次，省略或设为负数则继承此全局设置。
+request-retry: 3
+
+# 每一轮凭据重试在完成逐凭据轮次筛选后，最多尝试多少个不同凭据。
+# 设为 0 表示尝试全部可用凭据。因该上限而跳过的凭据仍会随全局轮次推进，
+# 因此该上限并不能保证每个凭据拥有固定的实际重试次数。
+max-retry-credentials: 0
+
+# 两轮重试之间等待凭据冷却的最长时间（秒）。
+# 设为 0 或负数表示永不等待凭据冷却。
+# 无需等待的重试轮次仍由 request-retry 控制。
+max-retry-interval: 30
+
+# 设为 true 时，在全局范围内关闭身份验证或模型的冷却调度，以避免失败状态造成不可用时间窗。
+# 如果某条凭据或提供商设置了 disable-cooling，则该局部值优先于全局值。
+disable-cooling: false
+
+# 设为 true 时，在身份验证文件旁以 .cds 文件持久化每条凭据的冷却状态。
+# 默认值为 false；关闭时，冷却状态只保存在内存中。
+save-cooldown-status: false
+
+# 上游临时错误（408/500/502/503/504）的冷却时长（秒）。
+# 设为 0 时沿用旧版的 60 秒冷却；设为 -1 时禁用临时错误冷却。
+transient-error-cooldown-seconds: 0
+
+# 设为 true 时，在全局范围内关闭 Claude 请求伪装，包括 Claude Code CLI 身份伪装和
+# 系统提示词替换；此时原始系统提示词会原样传递给 Claude。
+# 单条凭据仍可覆盖此行为：claude-api-key 条目使用 "cloak.mode"，
+# Claude OAuth/令牌文件使用 "cloak_mode"。默认 false 保留按客户端自动判断的
+# "auto" 行为，即只对非 Claude Code 客户端启用伪装。
+disable-claude-cloak-mode: false
+
+# Claude Code 兼容性设置。
+claude-code:
+  # 设为 true 时，Anthropic 模型列表响应会返回原始模型 ID，而不是伪装后的 ID。
+  disable-cloaking-model-list: true
+
+# disable-image-generation 支持以下取值：false（默认）、true、"chat" 或 "passthrough"。
+# - true：在所有位置禁用 image_generation；/v1/images/generations 和 /v1/images/edits 也会返回 404。
+# - "chat"：禁止在非图片端点中注入 image_generation，但保留 /v1/images/generations 和 /v1/images/edits。
+# - "passthrough"：在非图片端点中既不注入也不移除 image_generation，原样转发客户端请求体；在 /v1/images/* 端点上的行为与 "chat" 相同。
+disable-image-generation: false
+
+# 当 Codex 图片请求未直接通过 Image API 代理时，旧版托管 image_generation 工具路径所使用的基础模型。
+# 模型名必须以 "gpt-" 开头（不区分大小写）。未设置或取值无效时，默认使用 "gpt-5.4-mini"。
+# gpt-image-2-base-model: "gpt-5.4-mini"
+
+# /openai/v1/videos 和 xAI 视频创建接口返回的视频 ID，与创建该视频的凭据保持绑定的时长。
+# 默认值：3h。
+video-result-auth-cache-ttl: "3h"
+
+# 核心身份验证自动刷新工作池大小，用于 OAuth 或文件型凭据的令牌刷新。
+# 大于 0 时会覆盖默认工作线程数 16。
+# auth-auto-refresh-workers: 16
+
+# 配额耗尽时的处理方式
+quota-exceeded:
+  switch-project: true # 配额耗尽时是否自动切换到另一个项目
+  switch-preview-model: false # 配额耗尽时是否自动切换到预览模型
+  antigravity-credits: true # Claude 模型的所有免费层凭据均耗尽时，是否将积分作为最后的兜底方案
+
+# 多个凭据同时匹配时的选择策略。
+routing:
+  strategy: "round-robin" # 可选：round-robin（默认）、weighted-round-robin、fill-first
+  # weighted-round-robin 使用每条凭据的整数权重；默认值为 1，最大值为 1,000,000。
+  # 使用该策略时，权重小于或等于 0 的凭据不会参与选择。
+  # 对于 OAuth 或文件型凭据，可在身份验证 JSON 顶层加入数值类型的 "weight" 字段。
+  # 为所有客户端启用通用的会话粘性路由。
+  # 优先识别 Claude Code、Codex、OpenCode 和 pi 的显式会话请求头，
+  # 其次依次使用 prompt_cache_key、Responses 会话 ID、旧版请求体 ID、
+  # 执行身份或推导出的会话身份，最后回退到现有的首条消息哈希。
+  # 绑定的身份验证不可用时，始终会自动故障转移。
+  # 已建立的绑定优先级高于凭据优先级：会话绑定后，即使更高优先级的凭据恢复，
+  # 仍会继续使用当前凭据。凭据优先级只决定首次绑定、无会话请求，以及故障转移后的重新绑定。
+  session-affinity: false # 默认值：false
+  # 会话到身份验证凭据的绑定保留时长。默认值：1h
+  session-affinity-ttl: "1h"
+
+# Codex 提供商行为设置。
+codex:
+  # 设为 true 且 routing.strategy 为 fill-first，或 routing.session-affinity 为 true 时，
+  # 会针对选中的身份验证凭据重新映射 Codex 的 prompt_cache_key 和安装身份。
+  # 某些用户担心请求跟踪标识符可能被用作违反服务条款并导致封禁的依据；
+  # 此选项仅用于满足这类顾虑，并不代表该担忧已被证实。
+  identity-confuse: false
+  # 是否关闭在 HTTP/SSE 和 WebSocket 请求中强制使用官方 Codex User-Agent 与 Originator 请求头。
+  disable-codex-cloaking: false
+  # 在上游发出第一个生成事件之前，暂缓向下游发送初始握手事件
+  #（response.created、response.in_progress 以及 WebSocket 元数据帧）。
+  # 原因：上游可能在 HTTP 200 流内部、紧接握手事件之后返回 `server_is_overloaded`，
+  # 而不是在传输层直接返回 503。缓存握手事件可延迟提交下游响应头，
+  # 从而有机会透明地改用另一条凭据重试。只有过载或限流拒绝会触发故障转移；
+  # 其他终止性错误仍会像以前一样原样在流中传递。
+  # 代价：响应头会延迟到开始生成时才发送；长时间推理请求可能因此触发客户端或
+  # 反向代理的读取超时，例如 nginx 的 proxy_read_timeout。
+  # 默认值：false
+  stream-bootstrap-buffering: false
+  # 设为 true 时，针对多智能体 v2 优化 Codex Desktop、codex-tui 和 codex_cli_rs 请求。
+  # 此功能会刷新 Codex 的 spawn_agent 模型信息、移除 message 参数加密、
+  # 规范化 Codex 使用的加密 agent_message 内容，并在非 Codex 上游协议中
+  # 将 agent_message 输入转换为标准的用户消息。
+  optimize-multi-agent-v2: false
+  # 在当前进程内终止并中继 Codex Live 的 WebRTC 音频和 DataChannel 流量。
+  # 该功能要求入站 UDP 可达；保持关闭可继续使用媒体直连行为。
+  live-media-relay:
+    enabled: false
+    # 最大并发媒体会话数。设为 0 时使用默认值 32。
+    max-sessions: 32
+    # 是否拒绝目标为私有、回环、链路本地或未指定 IP 的下游 SDP 候选地址。
+    # 对本机或受信任网络中的 Codex Desktop 连接，应保持为 false。
+    disable-private-remote-ips: false
+    # CPA 位于 1:1 NAT 后方时，对外通告的公网 IPv4 或 IPv6 地址。
+    public-ip: ""
+    # 可选的 UDP 分配端口范围。上下限必须同时设置，并且每个会话至少需要两个端口。
+    udp-port-min: 0
+    udp-port-max: 0
+    # 可选的 STUN/TURN 服务器。JSON 配置 API 永远不会返回 TURN 凭据。
+    # 如果全局或单条身份验证均未设置具体 proxy-url，WebRTC 将使用常规的 ICE/STUN/TURN 直连。
+    # 如果 proxy-url 使用 http、https、socks5 或 socks5h，面向 OpenAI 的一侧会被强制通过
+    # 该代理建立带身份验证的 ICE-TCP 连接，并且不会回退到 UDP 或直连。
+    # 面向 Codex Desktop 的一侧仍保持直连，已配置的 ICE 服务器也仍然适用于这一侧。
+    # ice-servers:
+    #   - urls:
+    #       - "stun:stun.example.com:3478"
+    #   - urls:
+    #       - "turn:turn.example.com:3478?transport=udp"
+    #     username: "user"
+    #     credential: "secret"
+
+# Antigravity 提供商行为设置。
+# antigravity:
+#   sensitive-words:             # 可选：在系统指令中用零宽字符混淆的词语
+#     - "API"
+#     - "proxy"
+
+# xAI 提供商行为设置。
+xai:
+  # 设为 true 时，如果请求中未声明原生 x_search 工具，则自动注入该工具。
+  # 适用时，注入的工具也会加入 tool_choice.allowed_tools。
+  inject-x-search: false
+
+# 设为 true 时，为 WebSocket API（/v1/ws）启用身份验证。
+ws-auth: true
+
+# 大于 0 时，非流式响应每隔 N 秒发送一个空行，以防止空闲超时。
+nonstream-keepalive-interval: 0
+# 流式响应行为，包括 SSE 保活和安全的启动阶段重试。
+# streaming:
+#   keepalive-seconds: 15   # 默认值：0（禁用）；小于或等于 0 时不发送保活。
+#   bootstrap-retries: 1    # 默认值：0（禁用）；在发送第一个字节之前允许的重试次数。
+
+# 对思考块（Antigravity/Claude）进行签名缓存校验。
+# 设为 true（默认）时，优先使用并验证缓存的签名。
+# 设为 false 时，客户端签名经过规范化后直接使用；这是供测试使用的旁路模式。
+# antigravity-signature-cache-enabled: true
+
+# 旁路模式下的签名验证严格程度；仅在关闭签名缓存时生效。
+# 设为 true 时，验证完整的 Claude protobuf 树结构（字段 2 -> 字段 1）。
+# 设为 false（默认）时，只检查 R/E 前缀、Base64 格式以及首字节是否为 0x12。
+# antigravity-signature-bypass-strict: false
+
+
+# Gemini API 密钥
+# gemini-api-key:
+#   - api-key: "AIzaSy...01"
+#     weight: 5 # 可选：weighted-round-robin 的流量权重；省略时默认为 1，最大值为 1,000,000
+#     prefix: "test" # 可选：要求使用类似 "test/gemini-3-pro-preview" 的模型名才能命中此凭据
+#     disable-cooling: false # 可选覆盖：true 禁用冷却，false 启用冷却；省略则继承全局设置
+#     request-retry: 3 # 可选的单认证覆盖值；0 禁用额外轮次；省略或设为负数则继承全局设置
+#     request-scoped-errors: # 可选：按 HTTP 状态码和响应正文模式自定义上游错误分类规则
+#       - status: 400        # 要匹配的 HTTP 状态码
+#         match:             # 可选：字符串包含匹配
+#           - "maximum_context_length"
+#           - "context_length_exceeded"
+#         match-regexr:      # 可选：正则表达式匹配
+#           - "maximum_context_length$"
+#           - "^context_length_exceeded"
+#         action: "stop"     # "stop"：返回错误且不冷却；"stop-and-cooldown"：返回错误并冷却；
+#                            # "continue"：尝试下一凭据且不冷却；"continue-and-cooldown"：尝试下一凭据并冷却
+#     base-url: "https://generativelanguage.googleapis.com"
+#     headers:
+#       X-Custom-Header: "custom-value"
+#       # 以 "$" 开头的值会动态复制下游客户端请求中对应请求头的值。
+#       # 若客户端未发送指定请求头，则省略该请求头。
+#       # X-Claude-Code-Session-Id: "$ABC" # 复制客户端的 "ABC" 请求头
+#     proxy-url: "socks5://proxy.example.com:1080"
+#     # proxy-url: "direct" # 可选：为此凭据明确使用直连
+#     models:
+#       - name: "gemini-2.5-flash" # 上游模型名称
+#         alias: "gemini-flash"    # 映射到该上游模型的客户端别名
+#         display-name: "Gemini Flash" # 可选：模型目录中显示的名称
+#         max-context-length: 1048576 # 可选：覆盖 Codex 客户端的上下文窗口元数据
+#         is-compat: false             # 可选：为兼容上游保留签名为空的思考块
+#         thinking:                    # 可选：精确声明此模型支持的思考级别
+#           levels: ["high", "medium", "low", "none", "auto"]
+#     excluded-models:
+#       - "gemini-2.5-pro"     # 从此提供商排除指定模型（精确匹配）
+#       - "gemini-2.5-*"       # 前缀通配匹配，例如 gemini-2.5-flash、gemini-2.5-pro
+#       - "*-preview"          # 后缀通配匹配，例如 gemini-3-pro-preview
+#       - "*flash*"            # 子串通配匹配，例如 gemini-2.5-flash-lite
+#   - api-key: "AIzaSy...02"
+
+# 原生 Interactions API 密钥
+# 这些密钥只用于直接执行 /v1beta/interactions。普通 gemini-api-key 条目在客户端通过
+# Interactions API 进入时，仍会发送 Gemini generateContent/streamGenerateContent 请求。
+# interactions-api-key:
+#   - api-key: "AIzaSy...03"
+#     weight: 5 # 可选：weighted-round-robin 的流量权重；省略时默认为 1，最大值为 1,000,000
+#     prefix: "native" # 可选：要求使用类似 "native/gemini-3-pro-preview" 的模型名才能命中此凭据
+#     disable-cooling: false # 可选覆盖：true 禁用冷却，false 启用冷却；省略则继承全局设置
+#     request-retry: 3 # 可选的单认证覆盖值；0 禁用额外轮次；省略或设为负数则继承全局设置
+#     request-scoped-errors: # 可选：按状态码和正文模式自定义上游错误分类规则
+#       - status: 400
+#         match:
+#           - "invalid_argument"
+#         action: "continue"
+#     base-url: "https://generativelanguage.googleapis.com"
+#     headers:
+#       X-Custom-Header: "custom-value"
+#       # 以 "$" 开头的值会动态复制下游客户端请求中对应请求头的值。
+#       # 若客户端未发送指定请求头，则省略该请求头。
+#       # X-Claude-Code-Session-Id: "$ABC" # 复制客户端的 "ABC" 请求头
+#     proxy-url: "socks5://proxy.example.com:1080"
+#     # proxy-url: "direct" # 可选：为此凭据明确使用直连
+#     models:
+#       - name: "gemini-2.5-flash" # 上游模型名称
+#         alias: "native-gemini-flash" # 映射到该上游模型的客户端别名
+#         max-context-length: 1048576 # 可选：覆盖 Codex 客户端的上下文窗口元数据
+#         is-compat: false             # 可选：为兼容上游保留签名为空的思考块
+#         thinking:                    # 可选：精确声明此模型支持的思考级别
+#           levels: ["high", "medium", "low", "none", "auto"]
+#     excluded-models:
+#       - "gemini-2.5-pro"
+
+# Codex API 密钥
+# codex-api-key:
+#   - api-key: "sk-atSM..."
+#     weight: 5 # 可选：weighted-round-robin 的流量权重；省略时默认为 1，最大值为 1,000,000
+#     prefix: "test" # 可选：要求使用类似 "test/gpt-5-codex" 的模型名才能命中此凭据
+#     disable-cooling: false # 可选覆盖：true 禁用冷却，false 启用冷却；省略则继承全局设置
+#     request-retry: 3 # 可选的单认证覆盖值；0 禁用额外轮次；省略或设为负数则继承全局设置
+#     request-scoped-errors: # 可选：按状态码和正文模式自定义上游错误分类规则
+#       - status: 400
+#         match:
+#           - "context_window_exceeded"
+#         action: "stop-and-cooldown"
+#     base-url: "https://www.example.com" # 使用自定义 Codex API 端点
+#     alpha-search: false # 可选：允许此密钥通过 base-url + /alpha/search 提供 /v1/alpha/search
+#     headers:
+#       X-Custom-Header: "custom-value"
+#       # 以 "$" 开头的值会动态复制下游客户端请求中对应请求头的值。
+#       # 若客户端未发送指定请求头，则省略该请求头。
+#       # X-Claude-Code-Session-Id: "$ABC" # 复制客户端的 "ABC" 请求头
+#     proxy-url: "socks5://proxy.example.com:1080" # 可选：覆盖此密钥使用的代理
+#     # proxy-url: "direct" # 可选：为此凭据明确使用直连
+#     models:
+#       - name: "gpt-5-codex"   # 上游模型名称
+#         alias: "codex-latest" # 映射到该上游模型的客户端别名
+#         display-name: "Codex Latest" # 可选：模型目录中显示的名称
+#         max-context-length: 1048576 # 可选：覆盖 Codex 客户端的上下文窗口元数据
+#         force-mapping: true    # 可选：把响应中的模型字段改写回客户端使用的别名
+#         # 当此项与 codex.optimize-multi-agent-v2 同时为 true 时，将 Codex MultiAgentV2
+#         # 的 agent_message 项转换为可移植的 Responses message/user 输入，供那些拒绝
+#         # agent_message 的第三方 Responses 兼容端点使用。
+#         # 默认 false：原生 OpenAI/Codex 端点继续保留 agent_message 不变。
+#         # 同时也会为兼容上游保留签名为空的思考块。
+#         is-compat: false
+#         thinking:              # 可选：精确声明此模型支持的思考级别
+#           levels: ["xhigh", "high", "medium", "low"]
+#     excluded-models:
+#       - "gpt-5.1"         # 排除指定模型（精确匹配）
+#       - "gpt-5-*"         # 前缀通配匹配，例如 gpt-5-medium、gpt-5-codex
+#       - "*-mini"          # 后缀通配匹配，例如 gpt-5-codex-mini
+#       - "*codex*"         # 子串通配匹配，例如 gpt-5-codex-low
+
+# xAI API 密钥
+# 使用原生 xAI 执行器，包括其对 Responses 命名空间工具的处理。
+# xai-api-key:
+#   - api-key: "xai-..."
+#     weight: 5 # 可选：weighted-round-robin 的流量权重；省略时默认为 1，最大值为 1,000,000
+#     prefix: "xai" # 可选：要求使用类似 "xai/grok-4.5" 的模型名才能命中此凭据
+#     disable-cooling: false # 可选覆盖：true 禁用冷却，false 启用冷却；省略则继承全局设置
+#     request-retry: 3 # 可选的单认证覆盖值；0 禁用额外轮次；省略或设为负数则继承全局设置
+#     request-scoped-errors: # 可选：按状态码和正文模式自定义上游错误分类规则
+#       - status: 400
+#         match:
+#           - "rate_limit_exceeded"
+#         action: "continue-and-cooldown"
+#     base-url: "https://api.x.ai/v1" # xAI 兼容的 Responses API 端点
+#     websockets: true # 可选：对下游 WebSocket 请求使用 xAI 上游 WebSocket 传输
+#     headers:
+#       X-Custom-Header: "custom-value"
+#       # 以 "$" 开头的值会动态复制下游客户端请求中对应请求头的值。
+#       # 若客户端未发送指定请求头，则省略该请求头。
+#       # X-Claude-Code-Session-Id: "$ABC" # 复制客户端的 "ABC" 请求头
+#     proxy-url: "socks5://proxy.example.com:1080" # 可选：覆盖此密钥使用的代理
+#     # proxy-url: "direct" # 可选：为此凭据明确使用直连
+#     models:
+#       - name: "grok-4.5"       # 上游模型名称
+#         alias: "grok-latest"   # 映射到该上游模型的客户端别名
+#         display-name: "Grok Latest" # 可选：模型目录中显示的名称
+#         max-context-length: 1048576 # 可选：覆盖 Codex 客户端的上下文窗口元数据
+#         force-mapping: true     # 可选：把响应中的模型字段改写回客户端使用的别名
+#         is-compat: false        # 可选：为兼容上游保留签名为空的思考块
+#         thinking:               # 可选：精确声明此模型支持的思考级别
+#           levels: ["xhigh", "high", "medium", "low"]
+#     excluded-models:
+#       - "grok-4.1"             # 排除指定模型（精确匹配）
+#       - "grok-3-*"             # 前缀通配匹配
+
+# Claude API 密钥
+# claude-api-key:
+#   - api-key: "sk-atSM..." # 使用官方 Claude API 密钥时，无需设置 base-url
+#   - api-key: "sk-atSM..."
+#     weight: 5 # 可选：weighted-round-robin 的流量权重；省略时默认为 1，最大值为 1,000,000
+#     prefix: "test" # 可选：要求使用类似 "test/claude-sonnet-latest" 的模型名才能命中此凭据
+#     disable-cooling: false # 可选覆盖：true 禁用冷却，false 启用冷却；省略则继承全局设置
+#     request-retry: 3 # 可选的单认证覆盖值；0 禁用额外轮次；省略或设为负数则继承全局设置
+#     request-scoped-errors: # 可选：按状态码和正文模式自定义上游错误分类规则
+#       - status: 400
+#         match:
+#           - "prompt is too long"
+#         action: "stop"
+#     base-url: "https://www.example.com" # 使用自定义 Claude API 端点
+#     headers:
+#       X-Custom-Header: "custom-value"
+#       # 以 "$" 开头的值会动态复制下游客户端请求中对应请求头的值。
+#       # 若客户端未发送指定请求头，则省略该请求头。
+#       # X-Claude-Code-Session-Id: "$ABC" # 复制客户端的 "ABC" 请求头
+#     proxy-url: "socks5://proxy.example.com:1080" # 可选：覆盖此密钥使用的代理
+#     # proxy-url: "direct" # 可选：为此凭据明确使用直连
+#     models:
+#       - name: "claude-3-5-sonnet-20241022" # 上游模型名称
+#         alias: "claude-sonnet-latest"      # 映射到该上游模型的客户端别名
+#         display-name: "Claude Sonnet"      # 可选：模型目录中显示的名称
+#         max-context-length: 1048576         # 可选：覆盖 Codex 客户端的上下文窗口元数据
+#         force-mapping: true                 # 可选：把响应中的模型字段改写回客户端使用的别名
+#         is-compat: false                    # 可选：为兼容上游保留签名为空的思考块
+#         thinking:                           # 可选：精确声明此模型支持的思考级别
+#           levels: ["max", "xhigh", "high", "medium", "low", "minimal", "none", "auto"]
+#     excluded-models:
+#       - "claude-opus-4-5-20251101" # 排除指定模型（精确匹配）
+#       - "claude-3-*"               # 前缀通配匹配，例如 claude-3-7-sonnet-20250219
+#       - "*-thinking"               # 后缀通配匹配，例如 claude-opus-4-5-thinking
+#       - "*haiku*"                  # 子串通配匹配，例如 claude-3-5-haiku-20241022
+#     rebuild-mid-system-message: false # 可选，默认 false；设为 true 时，把 role 为 "system" 的消息移到顶层 Claude system 字段
+#     cloak:                         # 可选：为非 Claude Code 客户端显式启用请求伪装
+#       mode: "auto"                 # "auto"（此区块内默认）：仅当客户端不是 Claude Code 时启用伪装
+#                                    # "always"：伪装所有未确认客户端；已确认的原生 Claude Code 仍直接通过
+#                                    # "never"：永不启用伪装
+#       # 此 "cloak" 区块只作用于当前 claude-api-key 条目。对于 Claude OAuth 凭据，
+#       # 请在认证/令牌 JSON 文件中使用 "cloak_mode"、"cloak_strict_mode"、
+#       # "cloak_sensitive_words" 和 "cloak_cache_user_id" 设置相同选项。顶层的
+#       # "disable-claude-cloak-mode: true" 可一次性关闭所有 Claude 凭据的伪装。
+#       strict-mode: false           # false（默认）：旧模型白名单使用用户 system-reminder；
+#                                    # 其他现有及未来模型使用 messages[].role=system
+#                                    # true：移除调用方提示，仅保留 Claude Code 计费和身份区块
+#       sensitive-words:             # 可选：使用零宽字符混淆的词语
+#         - "API"
+#         - "proxy"
+#       cache-user-id: true          # 可选，默认 false；设为 true 时，每个 API 密钥复用缓存的 user_id，而非每次请求随机生成
+#       # 伪装后的 OAuth 请求中，每个自定义工具都会自动使用对调用方稳定的、不透明的 mcp__<server>__<tool> 别名。
+#
+#     # fingerprint-profile（可选，位于当前 claude-api-key 条目顶层，不属于 cloak 子字段）：
+#     # OAuth 与 API 密钥使用不同的指纹约定。
+#     #   - 真实 Claude OAuth 始终使用严格的 Claude Code CLI 线上请求指纹。
+#     #   - API 密钥（官方 Anthropic、自定义网关、Kimi）默认保持宽松，
+#     #     并由调用方控制；仅在设置此字段后才改变。
+#     #
+#     # 默认行为（省略或留空）：保留调用方请求的指纹与请求头。
+#     # 官方 api.anthropic.com API 密钥默认不会额外添加 CLI beta/身份信息，
+#     # 除非设置此字段；自定义网关和委托提供商同样如此。
+#     #
+#     # 此字段只控制 /v1/messages 及相关 Claude 执行路径的请求指纹。
+#     # 认证方式仍然是 API 密钥：api.anthropic.com 使用 x-api-key，自定义 base-url 使用 Bearer。
+#     # 它不会启用 OAuth 刷新、用户资料获取或 OAuth 取消语义。
+#     #
+#     # 可选值：
+#     #   省略或留空       = 使用调用方控制的 API 密钥指纹（尊重调用方请求）
+#     #   "claude-code-cli" = 使用与 Claude Code OAuth CLI 相同的 Messages 请求指纹，
+#     #                       对官方 Anthropic API 密钥也包括 OAuth Anthropic-Beta 集合、
+#     #                       api.anthropic.com 上的 CCH 签名，以及稳定的 CLI
+#     #                       metadata.user_id、session_id 与设备身份。
+#     #                       API 密钥根据密钥本身生成身份种子；
+#     #                       委托 OAuth 提供商使用稳定的认证 ID，而不是轮换中的访问令牌。
+#     #                       "oauth-cli" 是保留兼容性的旧别名。
+#     #
+#     # count_tokens 对所有来源都保持原生 model/messages/tools 结构，包括选择启用的 Kimi。
+#     # 它不会发送 billing/CCH、currentDate、metadata 或诊断信息。
+#     #
+#     # CCH：计费区块可能携带逐请求生成的 cch 哈希。CPA 只在 Claude Code 实际使用的位置
+#     # 精确发送该值，即第一方 api.anthropic.com 与 Vertex。对其他网关（包括 Kimi）选择启用时，
+#     # 仍会发送计费区块，但不附带 cch，因此逐请求哈希不会破坏该网关的提示缓存。
+#     # api.anthropic.com 会自行移除此区块（占用 0 token，不影响缓存）。Kimi 默认丢弃整个区块，
+#     # 只有在明确启用指纹后才保留未签名版本。
+#     # 真实 Claude OAuth 凭据在所有上游都会进行签名；指向 CPA 的下游 Claude Code
+#     # 客户端本身无法生成该值。
+#     #
+#     # 示例（官方 Anthropic 或自定义 Messages 网关）：
+#     #   - api-key: "your-key"
+#     #     # base-url: "https://gateway.example"   # 使用 api.anthropic.com 时省略
+#     #     fingerprint-profile: "claude-code-cli"
+#     #     cloak:
+#     #       mode: "always"   # 当上游拒绝非 CLI 客户端时建议使用
+#     #
+#     # 委托式 Anthropic Messages OAuth 文件（Kimi 等）在认证 JSON 中使用 "fingerprint_profile"。
+#     # 刷新令牌时会保留该字段。示例：
+#     #   {
+#     #     "type": "kimi",
+#     #     "access_token": "...",
+#     #     "refresh_token": "...",
+#     #     "fingerprint_profile": "claude-code-cli"
+#     #   }
+#     #   旧版 "fingerprint-profile" 凭据仍受支持，并会在加载时规范化。
+#     # fingerprint-profile: "claude-code-cli" # 可选的 claude-api-key 提供商字段；默认留空并由调用方控制；取消注释即可启用
+#     experimental-cch-signing: false # 已弃用的兼容字段；真实 Claude OAuth 会自动生成 CCH，
+#                                     # claude-code-cli 配置仅在 api.anthropic.com 自动生成；
+#                                     # Vertex 继续使用提供商原生签名
+
+# Anthropic-Beta 会针对每个请求动态组装，而不是作为固定列表发送，其行为与
+# Claude Code 2.1.220 一致：context-1m 紧跟在 claude-code 之后；mid-conversation-system
+# 只会为接受 role=system 消息的模型添加；advanced-tool-use 只在请求声明工具时添加；
+# server-side-fallback、fallback-credit 和 structured-outputs 排在 effort 之后。
+# 直接请求 api.anthropic.com 时，调用方只能请求真实 Claude Code 也会发送的 beta，
+# 而且这些 beta 会被放在观测到的对应位置；其他 beta 会被丢弃，以确保发出的集合
+# 始终符合真实客户端可能产生的形态。其他 Anthropic 兼容上游仍会原样转发调用方的 beta。
+#
+# Claude API 请求的默认请求头。只有在测量新版 Claude Code 后才应更新。
+# 未确认的客户端使用这套 CLI 基线。经过验证的原生 Claude Code CLI、sdk-cli 和 VSCode 请求，
+# 只有在 Claude Code 版本、软件包版本和运行时版本都与这里配置的基线完全一致时，
+# 才会保留实测的入口点和软件形态；未经测量的版本会回退到该基线。在旧版模式中，
+# timeout 只作为兜底值，而经过验证的原生 OS/arch 仍由客户端提供。启用
+# stabilize-device-profile 后，OS/arch 会固定为下列值，缓存的资料也会被限制在
+# 同一套精确的软件基线上，而不会学习更新的客户端版本。
+# claude-header-defaults:
+#   user-agent: "claude-cli/2.1.220 (external, cli)"
+#   package-version: "0.94.0"
+#   runtime-version: "v26.3.0"
+#   os: "MacOS"
+#   arch: "arm64"
+#   timeout: "600"
+#   timezone: "Asia/Singapore"  # 用于伪装 currentDate 的兜底 IANA 时区；身份验证 JSON 中的 "timezone" 优先
+#   stabilize-device-profile: false  # 可选，默认 false；设为 true 时启用逐身份验证/API key 的指纹固定
+
+# Codex OAuth 模型请求的默认请求头。
+# 这些设置仅用于文件型/OAuth Codex 请求，并且只在客户端未发送对应请求头时补充。
+# `user-agent` 同时适用于 HTTP 和 WebSocket 请求；`beta-features` 只适用于 WebSocket 请求。
+# 它们不作用于 codex-api-key 条目。
+# codex-header-defaults:
+#   user-agent: "codex_cli_rs/0.114.0 (Mac OS 14.2.0; x86_64) vscode/1.111.0"
+#   beta-features: "multi_agent"
+
+# OpenAI 兼容提供商
+# openai-compatibility:
+#   - name: "openrouter" # 提供商名称；会用于 User-Agent 等位置
+#     disabled: false # 可选：设为 true 可在不删除配置的情况下禁用该提供商
+#     prefix: "test" # 可选：要求使用类似 "test/kimi-k2" 的名称才能命中该提供商的凭据
+#     base-url: "https://openrouter.ai/api/v1" # 提供商的基础 URL
+#     support-prompt-cache-key: false # 可选：为来自所有输入协议的请求推导 prompt_cache_key
+#     disable-cooling: false # 可选的提供商覆盖：true 禁用冷却，false 启用冷却；省略时继承全局设置
+#     request-retry: 3 # 可选的逐提供商覆盖；0 禁用额外轮次，省略或小于 0 时继承全局设置
+#     request-scoped-errors: # 可选：根据 HTTP 状态码和响应体模式，自定义上游错误分类规则
+#       - status: 400
+#         match:
+#           - "maximum_context_length"
+#           - "context_length_exceeded"
+#         match-regexr:
+#           - "maximum_context_length$"
+#           - "^context_length_exceeded"
+#         action: "stop" # 可选值："stop"、"stop-and-cooldown"、"continue"、"continue-and-cooldown"
+#     headers:
+#       X-Custom-Header: "custom-value"
+#       # 以 "$" 开头的值会从下游客户端请求中动态复制对应请求头的值。
+#       # 如果客户端没有发送指定请求头，则不会添加该请求头。
+#       # X-Claude-Code-Session-Id: "$ABC" # 复制客户端发送的 "ABC" 请求头
+#     api-key-entries:
+#       - api-key: "sk-or-v1-...b780"
+#         weight: 5 # 可选：weighted-round-robin 的分配权重；省略时默认为 1，最大为 1,000,000
+#         proxy-url: "socks5://proxy.example.com:1080" # 可选：覆盖该密钥使用的代理
+#         # proxy-url: "direct" # 可选：明确让该凭据直接连接
+#       - api-key: "sk-or-v1-...b781" # 不设置 proxy-url
+#     models: # 该提供商支持的模型
+#       - name: "moonshotai/kimi-k2:free" # 实际的上游模型名称
+#         alias: "kimi-k2"               # API 中使用的别名
+#         display-name: "Kimi K2"         # 可选：模型目录中显示的名称
+#         max-context-length: 1048576    # 可选：覆盖 Codex 客户端中的上下文窗口元数据
+#         image: false                   # 可选：设为 true 后允许该模型用于 /v1/images/generations 和 /v1/images/edits，但不影响 chat/responses 图片输入
+#         input-modalities: [text, image] # 可选：为 Codex 客户端声明 /v1/chat/completions 和 /v1/responses 的多模态输入；若上游拒绝多模态工具结果内容，请使用 [text]
+#         output-modalities: [text]       # 可选：已知时声明输出模态
+#         is-compat: false                # 可选：为兼容上游保留 Claude 思考块
+#         thinking:                      # 可选：省略时默认使用 ["low", "medium", "high"]
+#           levels: ["low", "medium", "high"]
+#       # 可以重复使用同一个 alias 来建立内部模型池。
+#       # 客户端在模型列表中仍然只会看到一个别名。
+#       # 对该别名的请求会在下列上游模型名之间轮询；
+#       # 如果选中的上游在输出任何内容前失败，请求会继续尝试
+#       # 同一别名池中的下一个上游模型。
+#       - name: "deepseek-v3.1"
+#         alias: "claude-opus-4.66"
+#       - name: "glm-5"
+#         alias: "claude-opus-4.66"
+#       - name: "kimi-k2.5"
+#         alias: "claude-opus-4.66"
+
+# Vertex API 密钥（用于 Vertex 兼容端点；base-url 可选）
+# vertex-api-key:
+#   - api-key: "vk-123..."                        # 通过 x-goog-api-key 请求头发送
+#     weight: 5                                    # 可选：weighted-round-robin 的分配权重；省略时默认为 1，最大为 1,000,000
+#     prefix: "test"                              # 可选：要求使用类似 "test/vertex-pro" 的名称才能命中该凭据
+#     disable-cooling: false                       # 可选覆盖：true 禁用冷却，false 启用冷却；省略时继承全局设置
+#     request-retry: 3                             # 可选的逐身份验证覆盖；0 禁用额外轮次，省略或小于 0 时继承全局设置
+#     base-url: "https://example.com/api"         # 可选，例如 https://zenmux.ai/api；省略时回退到 Google Vertex
+#     proxy-url: "socks5://proxy.example.com:1080" # 可选：覆盖该密钥使用的代理
+#     # proxy-url: "direct" # 可选：明确让该凭据直接连接
+#     headers:
+#       X-Custom-Header: "custom-value"
+#       # 以 "$" 开头的值会从下游客户端请求中动态复制对应请求头的值。
+#       # 如果客户端没有发送指定请求头，则不会添加该请求头。
+#       # X-Claude-Code-Session-Id: "$ABC" # 复制客户端发送的 "ABC" 请求头
+#     models:                                     # 可选：将别名映射到上游模型名称
+#       - name: "gemini-2.5-flash"                # 上游模型名称
+#         alias: "vertex-flash"                   # 客户端可见的别名
+#         display-name: "Vertex Flash"            # 可选：模型目录中显示的名称
+#         thinking:                                # 可选：精确声明该模型支持的思考等级
+#           levels: ["high", "medium", "low", "none", "auto"]
+#       - name: "gemini-2.5-pro"
+#         alias: "vertex-pro"
+#     excluded-models:                            # 可选：从模型列表中排除的模型
+#       - "imagen-3.0-generate-002"
+#       - "imagen-*"
+# 全局 OAuth 模型名称别名，按通道分别配置
+# 这些别名同时影响模型列表中的模型 ID 和请求路由。
+# 支持的通道：vertex、aistudio、antigravity、claude、codex、kimi、xai。
+# 注意：别名不适用于 gemini-api-key、interactions-api-key、codex-api-key、xai-api-key、
+# claude-api-key、openai-compatibility 或 vertex-api-key。
+# 注意：由于别名会影响合并后的 /v1 模型列表与合并路由，不同提供商之间重叠的
+# 客户端可见名称可能产生歧义。若需要严格固定后端，请使用唯一别名/前缀，或避免名称重叠。
+# 可以为同一个上游 name 重复配置不同 alias，从而公开多个客户端模型名称。
+# 每个条目的可选字段：
+#   fork: true                  # 保留上游模型，同时把别名作为独立的客户端可见模型公开
+#   display-name: "Model Name" # 覆盖模型目录中显示的人类可读名称
+#   force-mapping: true         # 把上游响应中的模型字段改写回客户端可见别名；下方示例仅在 antigravity 中使用
+# 每个认证记录的 OAuth 别名也可以保存在 OAuth 认证 JSON 的 "model_aliases" 字段中。
+# 旧版 "model-aliases" 凭据仍受支持，并会在加载时规范化。
+# 它们只作用于被选中的认证记录，并优先于相同客户端可见别名的全局设置。
+# 认证 JSON 示例：
+# {
+#   "type": "codex",
+#   "email": "user@example.com",
+#   "model_aliases": [
+#     {"name": "gpt-5.3-codex-spark", "alias": "gpt-5.5"},
+#     {"name": "gpt-5.3-codex-spark", "alias": "gpt-5.4"}
+#   ]
+# }
+# oauth-model-alias:
+#   vertex:
+#     - name: "gemini-2.5-pro"
+#       alias: "g2.5p"
+#   aistudio:
+#     - name: "gemini-2.5-pro"
+#       alias: "g2.5p"
+#   antigravity:
+#     - name: "gemini-pro-agent"                   # 上游 Antigravity 模型 ID
+#       alias: "gemini-3.1-pro-preview"            # 客户端可见 ID（Gemini 3.1 Pro Preview）
+#       display-name: "Antigravity Gemini 3.1 Pro" # 可选：模型目录中显示的名称
+#       fork: true
+#       force-mapping: true
+#   claude:
+#     - name: "claude-sonnet-4-5-20250929"
+#       alias: "cs4.5"
+#   codex:
+#     - name: "gpt-5"
+#       alias: "g5"
+#   kimi:
+#     - name: "kimi-k2.5"
+#       alias: "k2.5"
+#   xai:
+#     - name: "grok-4.3"
+#       alias: "grok-latest"
+#   sample-provider:                  # OAuth 插件也支持使用插件 provider key
+#     - name: "sample-model-latest"
+#       alias: "sample-latest"
+
+# OAuth 提供商排除模型列表
+# oauth-excluded-models:
+#   vertex:
+#     - "gemini-3-pro-preview"
+#   aistudio:
+#     - "gemini-3-pro-preview"
+#   antigravity:
+#     - "gemini-3-pro-preview"
+#   claude:
+#     - "claude-3-5-haiku-20241022"
+#   codex:
+#     - "gpt-5-codex-mini"
+#   kimi:
+#     - "kimi-k2-thinking"
+#   xai:
+#     - "grok-3-mini"
+
+# OAuth 提供商的请求级错误规则，用于为 OAuth 凭据自定义错误分类
+# oauth-request-scoped-errors:
+#   vertex:
+#     - status: 400
+#       match:
+#         - "maximum_context_length"
+#         - "context_length_exceeded"
+#       match-regexr:
+#         - "maximum_context_length$"
+#         - "^context_length_exceeded"
+#       action: "stop" # 可选："stop"、"stop-and-cooldown"、"continue"、"continue-and-cooldown"
+#   aistudio:
+#     - status: 400
+#       match:
+#         - "invalid_argument"
+#       action: "stop"
+#   antigravity:
+#     - status: 500
+#       match:
+#         - "internal_server_error"
+#       action: "stop-and-cooldown"
+#   claude:
+#     - status: 400
+#       match:
+#         - "prompt is too long"
+#       action: "stop"
+#   codex:
+#     - status: 400
+#       match:
+#         - "context_window_exceeded"
+#       action: "stop"
+#   kimi:
+#     - status: 400
+#       match:
+#         - "length_limit"
+#       action: "stop"
+#   xai:
+#     - status: 400
+#       match:
+#         - "max_tokens_exceeded"
+#       action: "stop"
+
+# 可选的请求负载配置
+# payload:
+#   default: # 默认规则仅在负载中缺少参数时写入参数
+#     - models:
+#         - name: "gemini-2.5-pro" # 支持通配符，例如 "gemini-*"
+#           protocol: "gemini" # 将规则限制到指定协议；可选：openai、gemini、claude、codex、antigravity
+#           from-protocol: "responses" # 将规则限制到指定来源协议；可选：openai、responses、gemini、claude
+#           headers: # 所有已配置请求头都必须匹配；值支持 "*" 通配符
+#             X-Client-Tier: "tenant-*-region-*"
+#           match: # 所有负载 JSON 路径都必须等于所配置的值
+#             - "metadata.client": "codex"
+#           not-match: # 负载 JSON 路径必须不等于所配置的值
+#             - "metadata.mode": "dev"
+#           exist: # 所有负载 JSON 路径都必须存在且不为 null
+#             - "tools.#(type==\"web_search\").type"
+#           not-exist: # 所有负载 JSON 路径都必须不存在或为 null
+#             - "metadata.disable_payload"
+#       params: # JSON 路径（gjson/sjson 语法）-> 值
+#         "generationConfig.thinkingConfig.thinkingBudget": 32768
+#   default-raw: # 默认原始规则仅在参数缺失时使用原始 JSON 写入；内容必须是有效 JSON
+#     - models:
+#         - name: "gemini-2.5-pro" # 支持通配符，例如 "gemini-*"
+#           protocol: "gemini" # 将规则限制到指定协议；可选：openai、gemini、claude、codex、antigravity
+#       params: # JSON 路径（gjson/sjson 语法）-> 原始 JSON 值；字符串按原样使用，且必须是有效 JSON
+#         "generationConfig.responseJsonSchema": "{\"type\":\"object\",\"properties\":{\"answer\":{\"type\":\"string\"}}}"
+#   override: # 覆盖规则始终写入参数，并覆盖负载中已有的值
+#     - models:
+#         - name: "gpt-5.4-fast"
+#           protocol: "codex"
+#         - name: "gpt-5.5-fast"
+#           protocol: "codex"
+#       params:
+#         service_tier: priority
+#     - models:
+#         - name: "gpt-*" # 支持通配符，例如 "gpt-*"
+#           protocol: "codex" # 将规则限制到指定协议；可选：openai、gemini、claude、codex、antigravity
+#       params: # JSON 路径（gjson/sjson 语法）-> 值
+#         "reasoning.effort": "high"
+#   override-raw: # 原始覆盖规则始终使用原始 JSON 写入参数；内容必须是有效 JSON
+#     - models:
+#         - name: "gpt-*" # 支持通配符，例如 "gpt-*"
+#           protocol: "codex" # 将规则限制到指定协议；可选：openai、gemini、claude、codex、antigravity
+#       params: # JSON 路径（gjson/sjson 语法）-> 原始 JSON 值；字符串按原样使用，且必须是有效 JSON
+#         "response_format": "{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"answer\",\"schema\":{\"type\":\"object\"}}}"
+#   filter: # 过滤规则会从负载中删除指定参数
+#     - models:
+#         - name: "gemini-2.5-pro" # 支持通配符，例如 "gemini-*"
+#           protocol: "gemini" # 将规则限制到指定协议；可选：openai、gemini、claude、codex、antigravity
+#       params: # 要删除的 JSON 路径，使用 gjson/sjson 语法
+#         - "generationConfig.thinkingConfig.thinkingBudget"
+#         - "generationConfig.responseJsonSchema"

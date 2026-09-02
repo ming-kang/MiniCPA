@@ -36,14 +36,16 @@ MiniCPA always uses the one directory printed by `cpa home`: `<cpa root>/instanc
 
 The two update commands have separate targets:
 
-- **`cpa update`** updates the managed CLIProxyAPI binary.
+- **`cpa update`** synchronizes `config.yaml` with MiniCPA's bundled template, then updates the managed CLIProxyAPI binary.
 - **`cpa upgrade`** upgrades the globally installed MiniCPA npm package.
 
 CLIProxyAPI itself owns `management.html`: it checks the configured panel repository when the service starts and periodically while running, and it provisions a missing panel on first access. `disable-auto-update-panel: true` stops startup/periodic replacement but still permits that first missing-file download; `disable-control-panel: true` disables both the asset and route. MiniCPA opens the panel but never downloads, versions, or replaces it. See the upstream [Web UI documentation](https://github.com/router-for-me/CLIProxyAPIDocs/blob/main/docs/en/management/webui.md).
 
 ### CLIProxyAPI binary updates
 
-Downloads and integrity checks finish before a running CLIProxyAPI process is stopped; it is restarted only when its binary is replaced. An already-current binary is skipped unless `--force` is used.
+Before checking the binary, `cpa update` rebuilds an existing `config.yaml` from the bundled [`docs/config.example.yaml`](docs/config.example.yaml). The template is authoritative for operational settings, including logging limits, retries, routing, and feature switches. Machine-local endpoint settings (`host`, `port`, `tls`, `proxy-url`), credentials/secrets, `auth-dir`, and `plugins.configs` keep their existing values; extra keys are retained; missing keys are added; comments/order follow the current template. A changed file is backed up as `config.yaml.bak.<timestamp>` and written atomically. A missing config is left for `cpa init`; invalid YAML aborts before the binary update. Synchronization still runs when the binary is already current.
+
+Downloads and integrity checks finish before a running CLIProxyAPI process is stopped; it is restarted only when its binary is replaced. An already-current binary is skipped unless `--force` is used. If only the config changed, MiniCPA prints that it will take effect on the next `cpa start` or `cpa restart`.
 
 ```bash
 cpa update check       # check the binary without installing
@@ -91,7 +93,7 @@ Upgrading MiniCPA does not stop, restart, or modify the managed CLIProxyAPI proc
 | `cpa web` | Open the web management panel; prints the URL when no browser launcher is available |
 | `cpa tui` | Open the CLIProxyAPI terminal UI; CLIProxyAPI must already be running |
 | `cpa logs` | Show logs; supports `-n`, `--err`, and `-f` |
-| `cpa update` / `cpa update check` | Update or inspect the CLIProxyAPI binary |
+| `cpa update` / `cpa update check` | Synchronize config and update the binary, or inspect the binary only |
 | `cpa upgrade` / `cpa upgrade check` | Upgrade or inspect the MiniCPA npm package |
 | `cpa doctor` | Run installation, autostart, runtime, network, and integrity diagnostics |
 | `cpa version` | Show MiniCPA, CLIProxyAPI, and home information |

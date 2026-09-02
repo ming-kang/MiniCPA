@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { cpaLayout, miniCpaRoot, resolveCpaHome } from "../paths.js";
 import type { BinaryUpdateResult } from "../update/binary.js";
 import {
   runUpdate,
@@ -82,7 +83,7 @@ afterEach(() => {
 });
 
 describe("runUpdate reporting", () => {
-  it("updates only the CLIProxyAPI binary", async () => {
+  it("updates the CLIProxyAPI binary when config is not initialized", async () => {
     isolateMiniCpaRoot();
     const deps: UpdateDeps = { updateBinary: binaryUpdated };
 
@@ -92,6 +93,50 @@ describe("runUpdate reporting", () => {
     assert.doesNotMatch(stdout, /Web panel/i);
     assert.equal(stderr, "");
     assert.equal(process.exitCode, undefined);
+  });
+
+  it("synchronizes an existing config before updating the binary", async () => {
+    isolateMiniCpaRoot();
+    const home = resolveCpaHome();
+    const layout = cpaLayout(home);
+    fs.mkdirSync(home, { recursive: true });
+    const existing =
+      '# old comments\nhost: "0.0.0.0"\nport: 9000\napi-keys:\n  - "sk-existing"\nlogging-to-file: false\n';
+    fs.writeFileSync(layout.configFile, existing);
+    let inspectedSynchronizedConfig = false;
+
+    const { stdout } = await captureOutput(() =>
+      runUpdate(
+        {},
+        {
+          updateBinary: async () => {
+            const configText = fs.readFileSync(layout.configFile, "utf8");
+            assert.match(configText, /^# CLIProxyAPI 中文配置示例/);
+            assert.match(configText, /pprof:\n {2}enable: false/);
+            assert.match(configText, /host: 0\.0\.0\.0/);
+            assert.match(configText, /port: 9000/);
+            assert.match(configText, /- sk-existing/);
+            assert.match(configText, /logging-to-file: true/);
+            assert.ok(fs.existsSync(path.join(miniCpaRoot(), "state", "cpa.lock")));
+            inspectedSynchronizedConfig = true;
+            return { version: "7.2.92", skipped: true, restarted: false };
+          },
+        },
+      ),
+    );
+
+    assert.equal(inspectedSynchronizedConfig, true);
+    assert.match(
+      stdout,
+      /Config synchronized: .*config\.yaml \(\d+ defaults added, 1 settings updated\)/,
+    );
+    assert.match(stdout, /Config backup:/);
+    assert.match(stdout, /Config changes apply on the next cpa start\/restart\./);
+    const backups = fs.readdirSync(home).filter((entry) => entry.startsWith("config.yaml.bak."));
+    assert.equal(backups.length, 1);
+    const backup = backups[0];
+    assert.ok(backup);
+    assert.equal(fs.readFileSync(path.join(home, backup), "utf8"), existing);
   });
 
   it("distinguishes install, reinstall, and explicit version changes", async () => {
