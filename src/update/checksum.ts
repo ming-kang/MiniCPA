@@ -20,13 +20,6 @@ export function parseChecksumsText(text: string): Map<string, string> {
   return map;
 }
 
-export function parseGithubDigest(digest: string | undefined): string | undefined {
-  // API payloads are untrusted: a non-string digest must not throw on .trim().
-  if (!digest || typeof digest !== "string") return undefined;
-  const m = digest.trim().match(/^sha256:([a-f0-9]{64})$/i);
-  return m?.[1]?.toLowerCase();
-}
-
 export async function fetchChecksums(
   release: GhRelease,
   repo: string,

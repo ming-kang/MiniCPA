@@ -66,17 +66,24 @@ function isReadyStatus(status: number): boolean {
 }
 
 export async function waitForHttpOk(url: string, timeoutMs = 8000): Promise<boolean> {
-  return waitForAnyHttpOk([url], timeoutMs);
+  return (await waitForFirstHttpOk([url], timeoutMs)) !== undefined;
+}
+
+export async function waitForAnyHttpOk(urls: string[], timeoutMs = 8000): Promise<boolean> {
+  return (await waitForFirstHttpOk(urls, timeoutMs)) !== undefined;
 }
 
 /**
- * Probe several URLs until one returns a "server up" status (panel may 404).
+ * Probe several URLs until one returns a "server up" status and return that URL.
  * Never runs past `timeoutMs`: every request timeout and inter-pass sleep is
  * clamped to the remaining budget, so N URLs cannot multiply the caller's wait.
  */
-export async function waitForAnyHttpOk(urls: string[], timeoutMs = 8000): Promise<boolean> {
+export async function waitForFirstHttpOk(
+  urls: string[],
+  timeoutMs = 8000,
+): Promise<string | undefined> {
   const unique = [...new Set(urls.filter(Boolean))];
-  if (unique.length === 0) return false;
+  if (unique.length === 0) return undefined;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     for (const url of unique) {
@@ -91,7 +98,7 @@ export async function waitForAnyHttpOk(urls: string[], timeoutMs = 8000): Promis
         // Release the socket back to the dispatcher; a probe never reads a body.
         await res.body?.cancel().catch(() => {});
         if (isReadyStatus(res.status)) {
-          return true;
+          return url;
         }
       } catch {
         /* try next URL */
@@ -101,7 +108,7 @@ export async function waitForAnyHttpOk(urls: string[], timeoutMs = 8000): Promis
     if (remaining <= 0) break;
     await sleep(Math.min(PROBE_PASS_INTERVAL_MS, remaining));
   }
-  return false;
+  return undefined;
 }
 
 /** Single source of truth for the configured CPA HTTP/HTTPS base (one config read). */
@@ -120,20 +127,22 @@ export function apiBaseUrl(home: string): string {
   return resolveBase(home);
 }
 
-/** Prefer panel URL, then root — works for binary-only installs without management.html. */
+/** Prefer the API root; the panel route is only a compatibility fallback. */
 export function readinessUrls(home: string): string[] {
   const layout = cpaLayout(home);
   const cfg = readCpaConfig(layout.configFile);
   const { host, port } = getListenAddress(cfg);
   const tls = isTlsEnabled(cfg);
   const primaryBase = formatHttpBase(host, port, tls);
-  const urls = [`${primaryBase}${PANEL_PATH}`, `${primaryBase}/`];
+  const rootUrls = [`${primaryBase}/`];
+  const panelUrls = [`${primaryBase}${PANEL_PATH}`];
 
   if (isWildcardListenHost(host)) {
     const scheme = tls ? "https" : "http";
     const ipv6Base = `${scheme}://[::1]:${port}`;
-    urls.push(`${ipv6Base}${PANEL_PATH}`, `${ipv6Base}/`);
+    rootUrls.push(`${ipv6Base}/`);
+    panelUrls.push(`${ipv6Base}${PANEL_PATH}`);
   }
 
-  return [...new Set(urls)];
+  return [...new Set([...rootUrls, ...panelUrls])];
 }

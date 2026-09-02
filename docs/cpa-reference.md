@@ -1,8 +1,8 @@
 # MiniCPA CLI reference
 
-MiniCPA manages one local CLIProxyAPI process and its updates. Configuration and provider authentication remain in CLIProxyAPI itself through the web panel, terminal UI, or `cli-proxy-api -config ...` flags.
+MiniCPA manages one local CLIProxyAPI process and its binary updates. Configuration and provider authentication remain in CLIProxyAPI itself through the web panel, terminal UI, or `cli-proxy-api -config ...` flags.
 
-Running `cpa` without arguments is equivalent to `cpa --help`. The `-v`, `-V`, and `--version` flags print only the MiniCPA version; `cpa version` reports all installed components and the instance home.
+Running `cpa` without arguments is equivalent to `cpa --help`. The `-v`, `-V`, and `--version` flags print only the MiniCPA version; `cpa version` reports MiniCPA, the managed CLIProxyAPI binary, and the instance home.
 
 When MiniCPA starts CLIProxyAPI:
 
@@ -11,10 +11,10 @@ When MiniCPA starts CLIProxyAPI:
 - **Binary** = `<home>/cli-proxy-api` (or `.exe` on Windows) — replaced in place by `cpa update`
 - **Logs** = `<home>/logs/cpa.log` and `<home>/logs/cpa.err.log`
 - **Child env** = parent env minus MiniCPA secrets (`GITHUB_TOKEN`, `GH_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_PAT`, `NPM_TOKEN`, `NPM_AUTH_TOKEN`, `NODE_AUTH_TOKEN`, …) in any environment-variable casing — including the locked update path's version probe via `cli-proxy-api --help`
-- **Outbound HTTP (CLIProxyAPI update / MiniCPA upgrade / doctor GitHub probe)** honors shell proxy env: `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` (case-insensitive). `ALL_PROXY` is a fallback for both schemes **only** when it is an `http://` or `https://` URL; any other scheme (`socks5://`, …) is not applied and `cpa doctor` labels it `(scheme not applied)` — set `HTTP_PROXY`/`HTTPS_PROXY` instead. Local `cpa start` / `cpa status` readiness probes use a dedicated direct dispatcher, so they are unaffected by proxy env vars, including under `NODE_USE_ENV_PROXY` / `--use-env-proxy`. With `tls.enable: true`, those probes use HTTPS and accept a self-signed certificate only through that isolated local dispatcher; GitHub/npm requests retain normal certificate validation.
+- **Outbound HTTP (MiniCPA binary update / MiniCPA upgrade / doctor GitHub probe)** honors shell proxy env: `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` (case-insensitive). `ALL_PROXY` is a fallback for both schemes **only** when it is an `http://` or `https://` URL; any other scheme (`socks5://`, …) is not applied and `cpa doctor` labels it `(scheme not applied)` — set `HTTP_PROXY`/`HTTPS_PROXY` instead. CLIProxyAPI inherits these proxy settings for its own Web panel updater. Local `cpa start` / `cpa status` readiness probes use a dedicated direct dispatcher, so they are unaffected by proxy env vars, including under `NODE_USE_ENV_PROXY` / `--use-env-proxy`. With `tls.enable: true`, those probes use HTTPS and accept a self-signed certificate only through that isolated local dispatcher; GitHub/npm requests retain normal certificate validation.
 - **Upgrade npm env** also removes the credential keys above while preserving PATH and proxy settings. Install scripts are disabled. A normal `cpa upgrade` runs npm's named global update and verifies it reached the exact version returned by the registry; `--force` reinstalls that exact version.
 
-Default `config.yaml` from `cpa init` uses `auth-dir: auths` (relative to home). Optional `.env` in the same directory is loaded by CLIProxyAPI at startup. After writing these files, `cpa init` installs the latest integrity-checked CLIProxyAPI binary and Web panel; it does not start the process.
+Default `config.yaml` from `cpa init` uses `auth-dir: auths` (relative to home). Optional `.env` in the same directory is loaded by CLIProxyAPI at startup. After writing these files, `cpa init` installs the latest integrity-checked CLIProxyAPI binary; it does not start the process. CLIProxyAPI provisions and updates `management.html` after it starts.
 
 OAuth, routing, API keys, and management secrets: edit `config.yaml` / `.env` or use the web management panel after `cpa web`.
 
@@ -26,8 +26,9 @@ OAuth, routing, API keys, and management secrets: edit `config.yaml` / `.env` or
 - `host: 127.0.0.1` / `port: 8317` — local-only by default
 - `commercial-mode: true` — CLIProxyAPI product flag; adjust if your deployment expects otherwise
 - `tls.enable: false` — when enabled with the corresponding CLIProxyAPI certificate/key settings, MiniCPA uses `https://` for readiness, status, and management URLs
+- `remote-management.disable-control-panel: false` / `disable-auto-update-panel: false` — CLIProxyAPI serves and periodically updates its own Web panel by default
 
-`cpa init --force` overwrites `config.yaml` after copying it to `config.yaml.bak.<timestamp>` (previous backups are kept). The flag does not force component reinstallation; use `cpa update --force` for that. Initialization is retryable: a binary failure skips the panel and leaves the generated configuration in place, while a panel failure keeps the successfully installed binary and recommends `cpa update --panel`.
+`cpa init --force` overwrites `config.yaml` after copying it to `config.yaml.bak.<timestamp>` (previous backups are kept). The flag does not force binary reinstallation; use `cpa update --force` for that. Initialization is retryable: a binary failure leaves the generated configuration in place.
 
 MiniCPA manages one instance at `<cpa root>/instance`. `cpa home` prints its location. `--home` and `CPA_HOME` are unsupported.
 
@@ -49,12 +50,12 @@ MiniCPA manages one instance at `<cpa root>/instance`. `cpa home` prints its loc
   - macOS: delete `~/Library/LaunchAgents/com.astralyn.minicpa.plist`
   - Linux: `systemctl --user disable minicpa.service`, then delete `~/.config/systemd/user/minicpa.service`
 - `cpa start` and `cpa doctor` print warnings when `host`, `port`, or recognized `tls` fields in `config.yaml` have invalid shapes and are ignored or replaced by defaults.
-- Readiness probes try `/management.html` then `/` so binary-only installs can start without a panel. They use HTTP by default and HTTPS when `tls.enable` is true; wildcard listen addresses also probe the corresponding IPv4/IPv6 loopback URL.
+- Readiness probes try `/` first and retain `/management.html` as a compatibility fallback, so routine status checks do not trigger first-access panel provisioning. They use HTTP by default and HTTPS when `tls.enable` is true; wildcard listen addresses also probe the corresponding IPv4/IPv6 loopback URL.
 - On `cpa start`, logs larger than **50 MiB** are rotated to `cpa.log.1` / `cpa.err.log.1` (keeps two generations).
 
 ## Update behaviour
 
-- The component-install phase of `cpa init` and a plain `cpa update` both install the managed CLIProxyAPI **binary + panel**. `cpa update` is used for subsequent updates; it never updates the MiniCPA npm package, so use `cpa upgrade` for that.
+- `cpa init` and `cpa update` install or update only the managed CLIProxyAPI binary. They never update the MiniCPA npm package, so use `cpa upgrade` for that.
 - Release discovery prefers `github.com/releases/latest` redirects and browser download URLs; REST API is fallback only.
 - Asset names try current upstream labels (`aarch64`, `no-plugin`) then same-architecture legacy aliases (`arm64`, `portable`); 404s try the next candidate. ARM64 never falls back to an AMD64/x86_64 archive.
 - Binary path: **download → checksum → extract** while CLIProxyAPI may still be running, then **stop → replace → restart** only for the install window. Network/checksum failures do **not** stop a running instance.
@@ -62,11 +63,11 @@ MiniCPA manages one instance at `<cpa root>/instance`. `cpa home` prints its loc
 - `cpa start` auto-recovers from crash residue: `*.unlock-probe` renames and, when the active binary is missing, the `.bak` rollback copy.
 - Failures while removing temp staging after an update are reported as warnings, never as an update failure; `cpa clean` removes the residue.
 - Outbound GitHub/API calls retry transient errors (429/5xx/timeouts) a few times with backoff.
-- Binary integrity: downloads release `checksums.txt` and verifies the **archive** SHA-256. Panel release discovery matches the binary path (quota-free `github.com` redirect + browser download URL; REST API is fallback only), so no asset digest exists on the default path — installs then rely on content sanity checks plus the install-time SHA-256 recorded in `install.json`. When the API fallback supplies a GitHub asset SHA-256 digest, it is verified. Asset download URLs must be on GitHub/CDN hosts (`github.com`, `api.github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`); off-platform URLs are rejected.
+- Binary integrity: MiniCPA downloads release `checksums.txt` and verifies the **archive** SHA-256. Asset download URLs must be on GitHub/CDN hosts (`github.com`, `api.github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`); off-platform URLs are rejected. Panel download and integrity policy belong to CLIProxyAPI upstream.
 - Already-latest versions are **skipped** unless you pass `--force` (or `--version` for a specific binary tag).
-- `remote-management.disable-auto-update-panel: true` suppresses the implicit panel leg of a plain `cpa update`, but not explicit installation through `cpa init`, `cpa update --panel`, or `cpa update --force`.
-- `cpa update check` runs the independent binary and panel network checks concurrently, renders their results in stable component order, and exits non-zero if anything is outdated **or** either check errors. A panel excluded by `remote-management.disable-auto-update-panel: true` is reported as ignored and does not fail this gate.
-- `--binary` and `--panel` are mutually exclusive. The older `--all` spelling remains accepted as a hidden compatibility option; a plain `cpa update` already selects both components.
+- CLIProxyAPI owns `management.html`: on current releases it checks once at service startup, checks periodically while running, and synchronously provisions a missing asset on first `/management.html` access. `disable-auto-update-panel: true` skips startup/periodic replacement but still permits that first missing-file download; `disable-control-panel: true` disables download and serving. `panel-github-repository` and `MANAGEMENT_STATIC_PATH` are likewise interpreted by CLIProxyAPI, not MiniCPA.
+- `cpa update check` checks only the CLIProxyAPI binary and exits non-zero when it is outdated or the check errors.
+- The older `--all` and `--binary` spellings remain accepted as hidden compatibility aliases for the binary update. Legacy `--panel` exits with guidance because MiniCPA no longer downloads or replaces the panel.
 
 ## MiniCPA upgrade
 
@@ -88,7 +89,7 @@ MiniCPA manages one instance at `<cpa root>/instance`. `cpa home` prints its loc
 |---------|-------------|
 | `cpa start` says HTTP/HTTPS not ready | `cpa logs --err`, check `host`, `port`, and `tls.enable` plus CLIProxyAPI certificate/key paths in `config.yaml`, then `cpa restart` |
 | Port already in use | Change `port` in `config.yaml`, or stop the other process |
-| `cpa web` cannot reach the panel | `cpa status` / `cpa start`; confirm `management.html` via `cpa doctor`. On a binary-only install `cpa web` reports that the web panel is not installed and points at `cpa update --panel`. When no browser launcher is available (`xdg-open` missing on a headless/WSL box), the URL is printed, a warning is written to stderr, and the command still succeeds. `cpa open` remains a compatibility alias. |
+| `cpa web` cannot reach the panel | `cpa status` / `cpa start`, then `cpa logs --err`. CLIProxyAPI downloads and updates the panel itself; check `remote-management.disable-control-panel`, `disable-auto-update-panel`, and `panel-github-repository`. `cpa web` waits for first-access provisioning before failing. When no browser launcher is available (`xdg-open` missing on a headless/WSL box), the URL is printed, a warning is written to stderr, and the command still succeeds. `cpa open` remains a compatibility alias. |
 | Another cpa … is running | Wait for the other command to finish. Otherwise run `cpa doctor`: it names the lock file, the holder PID and command, when the lock was acquired, and whether the holder process is still alive. Remove `<cpa root>/state/cpa.lock` by hand when doctor reports the holder is not alive — or when doctor still shows it held but you are certain no `cpa` command is running (the lock fails closed when a live PID's identity cannot be verified, so it will not preempt itself) |
 | `cpa doctor` reports lock preempt residue | `cpa.lock.preempt.*` files beside the lock are left behind when a stale-lock cleanup could not delete its copy (typically Windows `EBUSY`). Safe to delete when no `cpa` command is running |
 | CPA did not start after reboot | `cpa doctor` / `cpa status` show the autostart state; `stale`/`disabled` registrations are repaired by an argument-free `cpa auto`. `cpa doctor` also replays the last recorded start failure from `<cpa home>/logs/minicpa.log` — a login start writes its outcome there because the launcher discards its console output. An empty log means the launcher never fired at all. On Linux the systemd user unit starts at login only — for a headless machine run `loginctl enable-linger` (no argument enables it for the current user) |
@@ -96,8 +97,8 @@ MiniCPA manages one instance at `<cpa root>/instance`. `cpa home` prints its loc
 | Autostart registered but never runs | `cpa auto on` only schedules `cpa start --no-wait`; it does not install anything. Run `cpa init` (config) and `cpa update` (binary) — `cpa auto on` prints a note for whichever is missing, and `cpa doctor` reports the resulting start failure |
 | Update checksum / integrity error | Retry; if GitHub asset is broken, temporary `--insecure` then re-check later |
 | Update failed mid-way | `cpa status`; if not running, `cpa start`. Re-run `cpa update --force` if binary looks broken. `cpa doctor` if `.bak` remains |
-| GitHub rate limit on update | Binary discovery prefers `github.com/releases`. Panel integrity requires GitHub release metadata; if API 403/429 occurs, set `GITHUB_TOKEN` or `GH_TOKEN`, then retry (token is not passed into CLIProxyAPI) |
-| `fetch failed` / connect timeout on update | Ensure `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` are set in the same shell (profile.ps1 / bashrc). Run `cpa doctor` to confirm proxy env. Binary release metadata and assets use `github.com` by default; panel integrity metadata uses the GitHub API. MiniCPA retries transient failures automatically. |
+| GitHub rate limit on `cpa update` | Binary discovery prefers `github.com/releases`; for REST fallback, set `GITHUB_TOKEN` or `GH_TOKEN`, then retry. Tokens are not passed into CLIProxyAPI. |
+| `fetch failed` / connect timeout on update | Ensure `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` are set in the same shell (profile.ps1 / bashrc). Run `cpa doctor` to confirm proxy env. MiniCPA retries transient binary-update failures automatically; for panel failures inspect CLIProxyAPI with `cpa logs --err`. |
 | Binary still locked / `*.unlock-probe` | Wait for antivirus/explorer; `cpa start` recovers unlock-probe rename; retry stop/update |
 | ARM update 404 | Confirm upstream published an `aarch64`/`arm64` asset for your OS. MiniCPA deliberately refuses AMD64 fallback; retry after a native asset is available. |
 | `cpa upgrade` refuses the installation | It is not proven to be a writable direct npm global install. Follow the detected reason, then run `npm install -g @astralyn/minicpa@latest`; npx/link/local/source installs are intentionally not rewritten. |
@@ -116,7 +117,7 @@ cpa home    # instance (config, binary, logs)
 cpa root    # MiniCPA app data
 cpa temp    # download/extract staging (safe to wipe)
 cpa clean         # wipe temp only (not instance home)
-cpa update check  # check CLIProxyAPI binary/web panel
+cpa update check  # check the CLIProxyAPI binary
 cpa upgrade check # check the MiniCPA npm package
 cpa doctor        # layout + binary + autostart + HTTP/HTTPS + GitHub probe
 cpa logs -f       # follow stdout + stderr

@@ -2,7 +2,7 @@
 
 MiniCPA provides one cross-platform **`cpa`** command to set up, run, inspect, and update a local [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) instance.
 
-It manages **one instance**. Configuration and provider authentication remain in CLIProxyAPI; MiniCPA handles its files, background process, web and terminal interfaces, updates, and diagnostics.
+It manages **one instance**. Configuration, provider authentication, and the Web panel asset remain in CLIProxyAPI; MiniCPA handles the instance files, background process, interface launchers, binary updates, and diagnostics.
 
 ## Install
 
@@ -23,12 +23,12 @@ Running `cpa`, `cpa -h`, or `cpa --help` prints the same help. `cpa -v`, `cpa -V
 ## Quick start
 
 ```bash
-cpa init   # create config.yaml and install the latest CLIProxyAPI + Web panel
-cpa start  # start CLIProxyAPI in the background
+cpa init   # create config.yaml and install the latest CLIProxyAPI binary
+cpa start  # start CLIProxyAPI; it provisions and updates its own Web panel
 cpa web    # open the web management panel
 ```
 
-`cpa init` generates a random `api-keys` entry in `config.yaml` without printing it, then downloads and integrity-checks the latest CLIProxyAPI binary and Web panel. Rotate the key before exposing the API publicly. If a component download fails, the initialized configuration remains in place and `cpa init` can be retried. `cpa init --force` backs up and replaces only `config.yaml`; use `cpa update --force` to reinstall components.
+`cpa init` generates a random `api-keys` entry in `config.yaml` without printing it, then downloads and integrity-checks the latest CLIProxyAPI binary. Rotate the key before exposing the API publicly. If the binary download fails, the initialized configuration remains in place and `cpa init` can be retried. `cpa init --force` backs up and replaces only `config.yaml`; use `cpa update --force` to reinstall the binary.
 
 MiniCPA always uses the one directory printed by `cpa home`: `<cpa root>/instance`. `--home` and `CPA_HOME` are intentionally unsupported.
 
@@ -36,26 +36,22 @@ MiniCPA always uses the one directory printed by `cpa home`: `<cpa root>/instanc
 
 The two update commands have separate targets:
 
-- **`cpa update`** updates the managed CLIProxyAPI binary and web panel.
+- **`cpa update`** updates the managed CLIProxyAPI binary.
 - **`cpa upgrade`** upgrades the globally installed MiniCPA npm package.
 
-### CLIProxyAPI updates
+CLIProxyAPI itself owns `management.html`: it checks the configured panel repository when the service starts and periodically while running, and it provisions a missing panel on first access. `disable-auto-update-panel: true` stops startup/periodic replacement but still permits that first missing-file download; `disable-control-panel: true` disables both the asset and route. MiniCPA opens the panel but never downloads, versions, or replaces it. See the upstream [Web UI documentation](https://github.com/router-for-me/CLIProxyAPIDocs/blob/main/docs/en/management/webui.md).
 
-A plain `cpa update` updates both components. Downloads and integrity checks finish before a running CLIProxyAPI process is stopped; it is restarted only when its binary is replaced. Already-current components are skipped unless `--force` is used.
+### CLIProxyAPI binary updates
+
+Downloads and integrity checks finish before a running CLIProxyAPI process is stopped; it is restarted only when its binary is replaced. An already-current binary is skipped unless `--force` is used.
 
 ```bash
-cpa update check       # check both components without installing
-cpa update             # update both components
-cpa update --binary    # binary only
-cpa update --panel     # web panel only
+cpa update check       # check the binary without installing
+cpa update             # update the binary
 cpa update --version 7.2.66
 ```
 
-Binary archives are verified against upstream `checksums.txt`; the web panel requires its published GitHub SHA-256 asset digest. `--insecure` skips only binary checksum verification and is unsafe.
-
-If `remote-management.disable-auto-update-panel: true` is set in `config.yaml`, a plain update leaves the panel alone and `update check` reports it as ignored. Explicit installation through `cpa init` or `cpa update --panel` still installs it.
-
-`cpa update check` exits 1 when an update is available or either component check fails. If the binary succeeds but the panel fails, the command preserves and reports the binary result, exits 1, and recommends retrying only `cpa update --panel`.
+Binary archives are verified against upstream `checksums.txt`. `--insecure` skips that verification and is unsafe. `cpa update check` exits 1 when a binary update is available or the check fails.
 
 ### MiniCPA upgrades
 
@@ -86,7 +82,7 @@ Upgrading MiniCPA does not stop, restart, or modify the managed CLIProxyAPI proc
 
 | Command | Purpose |
 |---------|---------|
-| `cpa init` | Set up `config.yaml` and install the latest CLIProxyAPI and Web panel |
+| `cpa init` | Set up `config.yaml` and install the latest CLIProxyAPI binary |
 | `cpa start` | Start CLIProxyAPI in the background; waits until HTTP/HTTPS is ready |
 | `cpa stop` | Stop CLIProxyAPI |
 | `cpa restart` | Restart CLIProxyAPI |
@@ -95,10 +91,10 @@ Upgrading MiniCPA does not stop, restart, or modify the managed CLIProxyAPI proc
 | `cpa web` | Open the web management panel; prints the URL when no browser launcher is available |
 | `cpa tui` | Open the CLIProxyAPI terminal UI; CLIProxyAPI must already be running |
 | `cpa logs` | Show logs; supports `-n`, `--err`, and `-f` |
-| `cpa update` / `update check` | Update or inspect CLIProxyAPI and the web panel |
-| `cpa upgrade` / `upgrade check` | Upgrade or inspect the MiniCPA npm package |
+| `cpa update` / `cpa update check` | Update or inspect the CLIProxyAPI binary |
+| `cpa upgrade` / `cpa upgrade check` | Upgrade or inspect the MiniCPA npm package |
 | `cpa doctor` | Run installation, autostart, runtime, network, and integrity diagnostics |
-| `cpa version` | Show MiniCPA, CLIProxyAPI, web panel, and home information |
+| `cpa version` | Show MiniCPA, CLIProxyAPI, and home information |
 | `cpa home` | Print the managed instance directory |
 
 `cpa open` remains a compatibility alias for `cpa web`. Advanced recovery/path commands (`clean`, `root`, and `temp`) remain callable but are intentionally omitted from root help.
@@ -119,7 +115,7 @@ MiniCPA honors `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` (upper or lower case)
 
 Local readiness probes bypass proxy variables. With `tls.enable: true`, those isolated probes use HTTPS and accept a self-signed local certificate; GitHub and npm retain normal certificate validation.
 
-`GITHUB_TOKEN` or `GH_TOKEN` can increase GitHub API quota for panel metadata. GitHub/npm credential environment variables are removed from CLIProxyAPI child processes, version probes, and npm upgrade processes.
+`GITHUB_TOKEN` or `GH_TOKEN` can increase GitHub API quota for MiniCPA's binary-release fallback and doctor probe. GitHub/npm credential environment variables are removed from CLIProxyAPI child processes, version probes, and npm upgrade processes; CLIProxyAPI's panel updater still inherits the configured HTTP proxy settings.
 
 Mutating lifecycle commands, `cpa auto`, `cpa update`, `cpa clean`, and the installing phase of `cpa upgrade` share one exclusive MiniCPA lock. A blocked command reports the in-flight command and PID.
 

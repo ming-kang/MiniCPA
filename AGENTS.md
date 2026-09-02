@@ -20,7 +20,7 @@ Use two-space indentation, double quotes, semicolons, and explicit TypeScript ty
 
 ## Testing Guidelines
 
-Use the built-in `node:test` API with `node:assert/strict`. Name tests after the module they cover, for example `src/update/panel.test.ts`. Keep tests isolated with temporary directories and clean them in `afterEach`; do not depend on live GitHub releases, tokens, or a locally running CPA. Add regression coverage for lifecycle, update, locking, or integrity bugs before fixing them.
+Use the built-in `node:test` API with `node:assert/strict`. Name tests after the module they cover, for example `src/update/binary.test.ts`. Keep tests isolated with temporary directories and clean them in `afterEach`; do not depend on live GitHub releases, tokens, or a locally running CPA. Add regression coverage for lifecycle, update, locking, or integrity bugs before fixing them.
 
 ## Commit & Pull Request Guidelines
 

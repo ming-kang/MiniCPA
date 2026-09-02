@@ -9,6 +9,5 @@ export async function runVersion(cliVersion: string): Promise<void> {
   const runtimeLabel = runtime ?? (installed.executable ? "(unknown)" : "(not installed)");
   console.log(`MiniCPA      ${cliVersion}`);
   console.log(`CLIProxyAPI  ${runtimeLabel}`);
-  console.log(`Web panel    ${installed.state.panelVersion ?? "(not installed)"}`);
   console.log(`Home         ${ctx.home}`);
 }

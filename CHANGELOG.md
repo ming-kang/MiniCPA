@@ -4,6 +4,18 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-02
+
+### Changed
+
+- Delegated Web panel provisioning, integrity policy, and periodic updates to CLIProxyAPI itself. `cpa init`, `cpa update`, `cpa update check`, and `cpa version` now track only the managed CLIProxyAPI binary; `cpa web` waits for CLIProxyAPI's first-access panel provisioning.
+- Added the upstream `disable-auto-update-panel: false` default to newly generated `config.yaml` files and report CLIProxyAPI's panel ownership in `cpa doctor`.
+- Kept `cpa update --all` and `--binary` as hidden binary-update aliases. Legacy `--panel` now exits with migration guidance instead of downloading `management.html`.
+
+### Removed
+
+- Removed MiniCPA's duplicate panel downloader, release check, SHA-256 state, and `install.json` panel version fields. Existing panel contents are preserved, and legacy state fields are pruned on the next binary state write.
+
 ## [0.3.3] - 2026-09-01
 
 ### Changed

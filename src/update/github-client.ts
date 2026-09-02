@@ -3,14 +3,13 @@ import { httpFetch } from "../http.js";
 // Re-export download infrastructure for backward compatibility with existing callers.
 export { downloadToFile, type DownloadOptions } from "./download.js";
 // Re-export checksum utilities for backward compatibility with existing callers.
-export { fetchChecksums, parseChecksumsText, parseGithubDigest } from "./checksum.js";
+export { fetchChecksums, parseChecksumsText } from "./checksum.js";
 
 export type GhAsset = {
   id?: number;
   name: string;
   browser_download_url: string;
   url?: string;
-  digest?: string;
 };
 
 export type GhRelease = {
@@ -75,7 +74,7 @@ export function browserReleaseAssetUrl(repo: string, tag: string, assetName: str
   return `https://github.com/${repo}/releases/download/${encodedTag}/${encoded}`;
 }
 
-/** Hosts MiniCPA will fetch release assets / checksums / panels from. */
+/** Hosts MiniCPA will fetch release assets and checksums from. */
 const ALLOWED_GITHUB_DOWNLOAD_HOSTS = new Set([
   "github.com",
   "www.github.com",
@@ -323,26 +322,6 @@ export async function fetchLatestRelease(
       );
     }
   }
-}
-
-export function repoFromPanelUrl(panelRepoUrl: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(panelRepoUrl);
-  } catch {
-    throw new Error(`Unsupported panel repository URL: ${panelRepoUrl}`);
-  }
-  if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== "github.com") {
-    throw new Error(`Unsupported panel repository URL: ${panelRepoUrl}`);
-  }
-  const parts = parsed.pathname.split("/").filter(Boolean);
-  const owner = parts[0];
-  const repository = parts[1]?.replace(/\.git$/i, "");
-  const safePart = /^[A-Za-z0-9_.-]+$/;
-  if (!owner || !repository || !safePart.test(owner) || !safePart.test(repository)) {
-    throw new Error(`Unsupported panel repository URL: ${panelRepoUrl}`);
-  }
-  return `${owner}/${repository}`;
 }
 
 export function normalizeTagVersion(tag: string): string {

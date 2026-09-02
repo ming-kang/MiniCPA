@@ -17,7 +17,7 @@ import {
   unlockProbePath,
 } from "../paths.js";
 import { inspectAutostartState, lingerHint, type AutostartState } from "../process/autostart.js";
-import { readinessUrls, waitForAnyHttpOk } from "../process/health.js";
+import { readinessUrls, waitForFirstHttpOk } from "../process/health.js";
 import { inspectRunning } from "../process/lifecycle.js";
 import { inspectMiniCpaLock, listLockPreemptResidue } from "../process/lock.js";
 import { inspectRuntimeInstallation } from "../process/runtime.js";
@@ -166,6 +166,14 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
       if (host !== "127.0.0.1" && host !== "localhost" && hasLegacyApiKey) {
         console.log("[warn] non-loopback host with legacy default api-key is unsafe");
       }
+      const remoteManagement = cfg["remote-management"];
+      if (remoteManagement?.["disable-control-panel"] === true) {
+        console.log("[info] Web panel disabled in config.yaml");
+      } else if (remoteManagement?.["disable-auto-update-panel"] === true) {
+        console.log("[info] Web panel managed by CLIProxyAPI (periodic updates disabled)");
+      } else {
+        console.log("[info] Web panel managed and updated by CLIProxyAPI");
+      }
     } catch (err) {
       console.log(`[fail] config.yaml parse error: ${formatCliError(err)}`);
       ok = false;
@@ -198,14 +206,6 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
   if (state.runtimeVersion && exe === undefined) {
     console.log("[warn] install state has runtimeVersion but binary is missing");
   }
-  console.log(`[info] Web panel ${state.panelVersion ?? "(not installed)"}`);
-
-  if (fs.existsSync(ctx.layout.managementHtml)) {
-    console.log("[ ok ] Web panel (management.html)");
-  } else {
-    console.log("[warn] Web panel missing — run: cpa update --panel (or cpa update)");
-  }
-
   for (const dir of [
     ctx.layout.logsDir,
     ctx.layout.stateDir,
@@ -329,12 +329,12 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
     }
     try {
       const urls = readinessUrls(ctx.home);
-      const reachable = await waitForAnyHttpOk(urls, 3000);
-      if (!reachable) {
+      const reachableUrl = await waitForFirstHttpOk(urls, 3000);
+      if (!reachableUrl) {
         console.log(`[fail] HTTP not reachable (tried ${urls.join(", ")})`);
         ok = false;
       } else {
-        console.log(`[ ok ] HTTP ${urls[0]}`);
+        console.log(`[ ok ] HTTP ${reachableUrl}`);
       }
     } catch (err) {
       // A broken config.yaml is already reported above; re-throwing it here would
@@ -373,7 +373,7 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
       console.log(`[ ok ] GitHub API${detail}`);
       if (reach.remaining !== undefined && reach.remaining < 5) {
         console.log(
-          "[info] REST rate low (updates use github.com/releases by default; " +
+          "[info] REST rate low (binary updates use github.com/releases by default; " +
             "GITHUB_TOKEN/GH_TOKEN only needed for API fallback)",
         );
       }
@@ -381,9 +381,7 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
       const rateLimited = reach.status === 403 || reach.status === 429;
       console.log(
         `[warn] GitHub API HTTP ${reach.status}` +
-          (rateLimited
-            ? " (rate limited — set GITHUB_TOKEN/GH_TOKEN; panel updates always need the API)"
-            : ""),
+          (rateLimited ? " (rate limited — set GITHUB_TOKEN/GH_TOKEN and retry)" : ""),
       );
     }
   } catch (err) {

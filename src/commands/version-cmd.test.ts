@@ -19,46 +19,25 @@ afterEach(() => {
 });
 
 describe("runVersion", () => {
-  it("reports all components not installed on empty home", async () => {
+  it("reports MiniCPA, CLIProxyAPI, and home on an empty installation", async () => {
     const home = resolveCpaHome();
     const { stdout } = await captureConsole(() => runVersion("1.0.0"));
 
-    assert.equal(stdout.length, 4);
-    assert.equal(stdout[0], "MiniCPA      1.0.0");
-    assert.equal(stdout[1], "CLIProxyAPI  (not installed)");
-    assert.equal(stdout[2], "Web panel    (not installed)");
-    assert.equal(stdout[3], `Home         ${home}`);
-  });
-
-  it("reports recorded panel version when runtime binary is absent", async () => {
-    const home = resolveCpaHome();
-    writeInstallState(home, {
-      panelVersion: "1.2.0",
-    });
-
-    const { stdout } = await captureConsole(() => runVersion("0.2.0"));
-    assert.equal(stdout.length, 4);
-    assert.equal(stdout[0], "MiniCPA      0.2.0");
-    assert.equal(stdout[1], "CLIProxyAPI  (not installed)");
-    assert.equal(stdout[2], "Web panel    1.2.0");
-    assert.equal(stdout[3], `Home         ${home}`);
+    assert.deepEqual(stdout, [
+      "MiniCPA      1.0.0",
+      "CLIProxyAPI  (not installed)",
+      `Home         ${home}`,
+    ]);
   });
 
   it("reports the recorded runtime version without executing the binary", async () => {
     const home = resolveCpaHome();
-    writeInstallState(home, {
-      runtimeVersion: "7.0.0",
-      panelVersion: "1.2.0",
-    });
+    writeInstallState(home, { runtimeVersion: "7.0.0" });
     // Deliberately not executable: read-only version reporting must not spawn it.
     fs.writeFileSync(activeExecutablePath(home), "not a real binary");
 
     const { stdout } = await captureConsole(() => runVersion("0.2.0"));
 
-    assert.equal(stdout.length, 4);
-    assert.equal(stdout[0], "MiniCPA      0.2.0");
-    assert.equal(stdout[1], "CLIProxyAPI  7.0.0");
-    assert.equal(stdout[2], "Web panel    1.2.0");
-    assert.equal(stdout[3], `Home         ${home}`);
+    assert.deepEqual(stdout, ["MiniCPA      0.2.0", "CLIProxyAPI  7.0.0", `Home         ${home}`]);
   });
 });

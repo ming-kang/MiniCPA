@@ -12,6 +12,7 @@ import {
   normalizeListenHost,
   readinessUrls,
   waitForAnyHttpOk,
+  waitForFirstHttpOk,
 } from "./health.js";
 
 /**
@@ -71,6 +72,21 @@ describe("waitForAnyHttpOk", () => {
       },
       async (baseUrl) => {
         assert.equal(await waitForAnyHttpOk([`${baseUrl}/ok`], 3_000), true);
+      },
+    );
+  });
+
+  it("returns the URL that actually answered", async () => {
+    await withHttpFixture(
+      {
+        "/ok": (_req, res) => {
+          res.statusCode = 200;
+          res.end("up");
+        },
+      },
+      async (baseUrl) => {
+        const okUrl = `${baseUrl}/ok`;
+        assert.equal(await waitForFirstHttpOk([`${baseUrl}/missing`, okUrl], 3_000), okUrl);
       },
     );
   });
@@ -258,24 +274,24 @@ describe("readinessUrls", () => {
     }
   });
 
-  it("puts managementUrl first and the API root second, followed by IPv6 loopback for wildcards", () => {
+  it("puts all API root candidates before panel compatibility fallbacks", () => {
     const home = makeHome('host: "0.0.0.0"\nport: 9123\n');
     const urls = readinessUrls(home);
     assert.equal(urls.length, 4);
-    assert.equal(urls[0], managementUrl(home));
-    assert.equal(urls[0], "http://127.0.0.1:9123/management.html");
-    assert.equal(urls[1], `${apiBaseUrl(home)}/`);
-    assert.equal(urls[1], "http://127.0.0.1:9123/");
-    assert.equal(urls[2], "http://[::1]:9123/management.html");
-    assert.equal(urls[3], "http://[::1]:9123/");
+    assert.equal(urls[0], `${apiBaseUrl(home)}/`);
+    assert.equal(urls[0], "http://127.0.0.1:9123/");
+    assert.equal(urls[1], "http://[::1]:9123/");
+    assert.equal(urls[2], managementUrl(home));
+    assert.equal(urls[2], "http://127.0.0.1:9123/management.html");
+    assert.equal(urls[3], "http://[::1]:9123/management.html");
   });
 
   it("brackets IPv6 listen hosts consistently across both entries", () => {
     const home = makeHome('host: "::1"\nport: 9124\n');
     assert.equal(apiBaseUrl(home), "http://[::1]:9124");
     assert.deepEqual(readinessUrls(home), [
-      "http://[::1]:9124/management.html",
       "http://[::1]:9124/",
+      "http://[::1]:9124/management.html",
     ]);
   });
 
@@ -285,27 +301,27 @@ describe("readinessUrls", () => {
     assert.equal(urls.length, 4);
     assert.equal(managementUrl(home), "https://127.0.0.1:9123/management.html");
     assert.equal(apiBaseUrl(home), "https://127.0.0.1:9123");
-    assert.equal(urls[0], "https://127.0.0.1:9123/management.html");
-    assert.equal(urls[1], "https://127.0.0.1:9123/");
-    assert.equal(urls[2], "https://[::1]:9123/management.html");
-    assert.equal(urls[3], "https://[::1]:9123/");
+    assert.equal(urls[0], "https://127.0.0.1:9123/");
+    assert.equal(urls[1], "https://[::1]:9123/");
+    assert.equal(urls[2], "https://127.0.0.1:9123/management.html");
+    assert.equal(urls[3], "https://[::1]:9123/management.html");
   });
 
   it("uses https:// when tls.enable is true with IPv6 wildcard :: and [::]", () => {
     const homeColons = makeHome('host: "::"\nport: 9123\ntls:\n  enable: true\n');
     assert.deepEqual(readinessUrls(homeColons), [
-      "https://127.0.0.1:9123/management.html",
       "https://127.0.0.1:9123/",
-      "https://[::1]:9123/management.html",
       "https://[::1]:9123/",
+      "https://127.0.0.1:9123/management.html",
+      "https://[::1]:9123/management.html",
     ]);
 
     const homeBracketed = makeHome('host: "[::]"\nport: 9123\ntls:\n  enable: true\n');
     assert.deepEqual(readinessUrls(homeBracketed), [
-      "https://127.0.0.1:9123/management.html",
       "https://127.0.0.1:9123/",
-      "https://[::1]:9123/management.html",
       "https://[::1]:9123/",
+      "https://127.0.0.1:9123/management.html",
+      "https://[::1]:9123/management.html",
     ]);
   });
 
@@ -314,8 +330,8 @@ describe("readinessUrls", () => {
     assert.equal(apiBaseUrl(home), "https://[::1]:9124");
     assert.equal(managementUrl(home), "https://[::1]:9124/management.html");
     assert.deepEqual(readinessUrls(home), [
-      "https://[::1]:9124/management.html",
       "https://[::1]:9124/",
+      "https://[::1]:9124/management.html",
     ]);
   });
 
@@ -324,8 +340,8 @@ describe("readinessUrls", () => {
     assert.equal(apiBaseUrl(home), "https://192.168.1.50:9125");
     assert.equal(managementUrl(home), "https://192.168.1.50:9125/management.html");
     assert.deepEqual(readinessUrls(home), [
-      "https://192.168.1.50:9125/management.html",
       "https://192.168.1.50:9125/",
+      "https://192.168.1.50:9125/management.html",
     ]);
   });
 
@@ -334,8 +350,8 @@ describe("readinessUrls", () => {
     assert.equal(apiBaseUrl(home), "http://127.0.0.1:9123");
     assert.equal(managementUrl(home), "http://127.0.0.1:9123/management.html");
     assert.deepEqual(readinessUrls(home), [
-      "http://127.0.0.1:9123/management.html",
       "http://127.0.0.1:9123/",
+      "http://127.0.0.1:9123/management.html",
     ]);
   });
 });

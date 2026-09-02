@@ -96,6 +96,7 @@ describe("readCpaConfigWithWarnings", () => {
     const configPath = path.join(dir, "config.yaml");
     const generated = defaultConfigYaml("sk-test");
     assert.match(generated, /tls:\n {2}enable: false\n {2}cert: ""\n {2}key: ""/);
+    assert.match(generated, /disable-auto-update-panel: false/);
     fs.writeFileSync(configPath, generated);
 
     const { config, warnings } = readCpaConfigWithWarnings(configPath);
@@ -103,6 +104,8 @@ describe("readCpaConfigWithWarnings", () => {
     assert.equal(isTlsEnabled(config), false);
     assert.equal(config.tls?.cert, "");
     assert.equal(config.tls?.key, "");
+    assert.equal(config["remote-management"]?.["disable-control-panel"], false);
+    assert.equal(config["remote-management"]?.["disable-auto-update-panel"], false);
   });
 
   it("reads and parses tls config from config.yaml", () => {
@@ -120,6 +123,24 @@ describe("readCpaConfigWithWarnings", () => {
     assert.equal(config.tls?.cert, "c.pem");
     assert.equal(config.tls?.key, "k.pem");
     assert.equal(isTlsEnabled(config), true);
+  });
+
+  it("reads CLIProxyAPI-owned Web panel settings for diagnostics", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-config-yaml-"));
+    temps.push(dir);
+    const configPath = path.join(dir, "config.yaml");
+    fs.writeFileSync(
+      configPath,
+      "remote-management:\n  disable-control-panel: true\n  disable-auto-update-panel: true\n  panel-github-repository: https://github.com/example/panel\n",
+    );
+
+    const { config } = readCpaConfigWithWarnings(configPath);
+    assert.equal(config["remote-management"]?.["disable-control-panel"], true);
+    assert.equal(config["remote-management"]?.["disable-auto-update-panel"], true);
+    assert.equal(
+      config["remote-management"]?.["panel-github-repository"],
+      "https://github.com/example/panel",
+    );
   });
 
   it("names the offending file when the YAML cannot be parsed", () => {

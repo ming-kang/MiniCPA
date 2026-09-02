@@ -151,7 +151,7 @@ describe("runStart", () => {
 });
 
 describe("runOpen", () => {
-  it("blames the missing panel, not a stopped CPA, on a binary-only install", async () => {
+  it("attributes an unavailable panel to CLIProxyAPI when the server itself is up", async () => {
     useTempRoot();
     await withHttpFixture(
       {
@@ -163,15 +163,77 @@ describe("runOpen", () => {
       async (baseUrl) => {
         writeHomeForBase(baseUrl);
         await assert.rejects(
-          () => runOpen(),
+          () => runOpen({ initialPanelWaitMs: 50, serverWaitMs: 50, panelBootstrapWaitMs: 50 }),
           (err: Error) => {
-            assert.match(err.message, /cpa update --panel/);
+            assert.match(err.message, /CLIProxyAPI manages this asset/);
             assert.equal(/cpa start/.test(err.message), false, err.message);
+            assert.equal(/cpa update --panel/.test(err.message), false, err.message);
             return true;
           },
         );
       },
     );
+  });
+
+  it("waits for detached first-access panel provisioning after its probe times out", async () => {
+    useTempRoot();
+    let panelRequests = 0;
+    let provisioned = false;
+    await withHttpFixture(
+      {
+        "/": (_req, res) => {
+          res.statusCode = 200;
+          res.end("ok");
+        },
+        "/management.html": (_req, res) => {
+          panelRequests += 1;
+          if (provisioned) {
+            res.statusCode = 200;
+            res.end("panel");
+            return;
+          }
+          if (panelRequests === 1) {
+            // Current CLIProxyAPI detaches provisioning from the browser request,
+            // so it continues even after MiniCPA's short probe is aborted.
+            setTimeout(() => {
+              provisioned = true;
+            }, 100);
+            return;
+          }
+          res.statusCode = 404;
+          res.end("missing");
+        },
+      },
+      async (baseUrl) => {
+        writeHomeForBase(baseUrl);
+        const launched: string[] = [];
+
+        await runOpen({
+          initialPanelWaitMs: 50,
+          serverWaitMs: 50,
+          panelBootstrapWaitMs: 500,
+          openInBrowser: async (url) => {
+            launched.push(url);
+          },
+        });
+
+        assert.equal(provisioned, true);
+        assert.ok(panelRequests >= 2);
+        assert.deepEqual(launched, [`${baseUrl}/management.html`]);
+      },
+    );
+  });
+
+  it("reports a control panel disabled in config without probing the server", async () => {
+    useTempRoot();
+    const home = resolveCpaHome();
+    ensureDir(home);
+    fs.writeFileSync(
+      cpaLayout(home).configFile,
+      "host: 127.0.0.1\nport: 8317\nremote-management:\n  disable-control-panel: true\n",
+    );
+
+    await assert.rejects(() => runOpen(), /remote-management\.disable-control-panel/);
   });
 
   it("tells the user to start CPA when nothing answers", async () => {
@@ -182,7 +244,7 @@ describe("runOpen", () => {
     });
     writeHomeForBase(closedBase);
 
-    await assert.rejects(() => runOpen(), /cpa start/);
+    await assert.rejects(() => runOpen({ initialPanelWaitMs: 50, serverWaitMs: 50 }), /cpa start/);
   });
 
   it("keeps a successful exit when no browser launcher exists", async () => {

@@ -13,7 +13,7 @@ import {
   resolveCpaHome,
 } from "../paths.js";
 import { writeInstallState, writePidRecord } from "../state.js";
-import { withHttpsFixture } from "../test-fixtures/http-server.js";
+import { withHttpFixture, withHttpsFixture } from "../test-fixtures/http-server.js";
 import type { GithubReachability } from "../update/github-client.js";
 import { DEFAULT_LOG_ROTATE_BYTES } from "../util.js";
 import { LINGER_HINT, type AutostartState } from "../process/autostart.js";
@@ -117,6 +117,28 @@ describe("runDoctor", () => {
 
     assert.ok(hasLine(lines, "[fail] config.yaml missing"), lines.join("\n"));
     assert.equal(process.exitCode, 1);
+  });
+
+  it("reports CLIProxyAPI ownership of Web panel lifecycle settings", async () => {
+    useTempRoot();
+    const home = resolveCpaHome();
+    const configFile = cpaLayout(home).configFile;
+    ensureDir(home);
+
+    fs.writeFileSync(configFile, "port: 8317\n");
+    const managed = await runDoctorCapturing();
+    assert.ok(hasLine(managed, "Web panel managed and updated by CLIProxyAPI"));
+
+    fs.writeFileSync(
+      configFile,
+      "port: 8317\nremote-management:\n  disable-auto-update-panel: true\n",
+    );
+    const pinned = await runDoctorCapturing();
+    assert.ok(hasLine(pinned, "Web panel managed by CLIProxyAPI (periodic updates disabled)"));
+
+    fs.writeFileSync(configFile, "port: 8317\nremote-management:\n  disable-control-panel: true\n");
+    const disabled = await runDoctorCapturing();
+    assert.ok(hasLine(disabled, "Web panel disabled in config.yaml"));
   });
 
   it("completes the report when config.yaml cannot be parsed", async () => {
@@ -323,6 +345,40 @@ describe("runDoctor", () => {
           hasLine(lines, `[ ok ] HTTP https://127.0.0.1:${port}/management.html`),
           lines.join("\n"),
         );
+      },
+    );
+  });
+
+  it("reports the API root that answered without probing the panel fallback", async () => {
+    useTempRoot();
+    const home = resolveCpaHome();
+    ensureDir(home);
+    let panelRequests = 0;
+    await withHttpFixture(
+      {
+        "/": (_req, res) => {
+          res.statusCode = 200;
+          res.end("ok");
+        },
+        "/management.html": (_req, res) => {
+          panelRequests += 1;
+          res.statusCode = 200;
+          res.end("panel");
+        },
+      },
+      async (baseUrl) => {
+        const port = new URL(baseUrl).port;
+        fs.writeFileSync(cpaLayout(home).configFile, `host: "127.0.0.1"\nport: ${port}\n`);
+        writePidRecord(home, {
+          pid: process.pid,
+          exe: process.execPath,
+          startedAt: new Date().toISOString(),
+        });
+
+        const lines = await runDoctorCapturing();
+
+        assert.ok(hasLine(lines, `[ ok ] HTTP ${baseUrl}/`), lines.join("\n"));
+        assert.equal(panelRequests, 0);
       },
     );
   });

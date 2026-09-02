@@ -5,8 +5,6 @@ import { cpaLayout, ensureDir } from "./paths.js";
 export type InstallState = {
   cpaHome: string;
   runtimeVersion?: string;
-  panelVersion?: string;
-  panelSha256?: string;
   lastUpdateCheck?: string;
 };
 
@@ -36,8 +34,6 @@ export function readInstallState(home: string): InstallState {
     return {
       cpaHome: home,
       runtimeVersion: typeof parsed.runtimeVersion === "string" ? parsed.runtimeVersion : undefined,
-      panelVersion: typeof parsed.panelVersion === "string" ? parsed.panelVersion : undefined,
-      panelSha256: typeof parsed.panelSha256 === "string" ? parsed.panelSha256 : undefined,
       lastUpdateCheck:
         typeof parsed.lastUpdateCheck === "string" ? parsed.lastUpdateCheck : undefined,
     };
@@ -52,8 +48,6 @@ export function writeInstallState(home: string, state: Omit<InstallState, "cpaHo
   const clean: InstallState = {
     cpaHome: home,
     runtimeVersion: state.runtimeVersion,
-    panelVersion: state.panelVersion,
-    panelSha256: state.panelSha256,
     lastUpdateCheck: state.lastUpdateCheck,
   };
   writeFileAtomic(layout.installStateFile, `${JSON.stringify(clean, null, 2)}\n`);

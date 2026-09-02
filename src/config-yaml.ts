@@ -14,8 +14,9 @@ export type CpaConfig = {
   "api-keys"?: string[];
   "remote-management"?: {
     "secret-key"?: string;
-    "panel-github-repository"?: string;
+    "disable-control-panel"?: boolean;
     "disable-auto-update-panel"?: boolean;
+    "panel-github-repository"?: string;
   };
 };
 
@@ -131,12 +132,15 @@ export function normalizeCpaConfigWithWarnings(doc: unknown): {
     if (typeof remote["secret-key"] === "string") {
       config["remote-management"]["secret-key"] = remote["secret-key"];
     }
-    if (typeof remote["panel-github-repository"] === "string") {
-      config["remote-management"]["panel-github-repository"] = remote["panel-github-repository"];
+    if (typeof remote["disable-control-panel"] === "boolean") {
+      config["remote-management"]["disable-control-panel"] = remote["disable-control-panel"];
     }
     if (typeof remote["disable-auto-update-panel"] === "boolean") {
       config["remote-management"]["disable-auto-update-panel"] =
         remote["disable-auto-update-panel"];
+    }
+    if (typeof remote["panel-github-repository"] === "string") {
+      config["remote-management"]["panel-github-repository"] = remote["panel-github-repository"];
     }
   }
 
@@ -175,13 +179,6 @@ export function isTlsEnabled(config: CpaConfig): boolean {
   return config.tls?.enable === true;
 }
 
-export function getPanelRepository(config: CpaConfig): string {
-  return (
-    config["remote-management"]?.["panel-github-repository"] ??
-    "https://github.com/router-for-me/Cli-Proxy-API-Management-Center"
-  );
-}
-
 export function generateApiKey(): string {
   return `sk-${crypto.randomBytes(18).toString("hex")}`;
 }
@@ -200,6 +197,8 @@ remote-management:
   allow-remote: false
   secret-key: ""
   disable-control-panel: false
+  # CLIProxyAPI owns management.html and checks this repository for updates.
+  disable-auto-update-panel: false
   panel-github-repository: "https://github.com/router-for-me/Cli-Proxy-API-Management-Center"
 
 auth-dir: "auths"

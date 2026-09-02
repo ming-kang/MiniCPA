@@ -79,7 +79,6 @@ export type CpaLayout = {
   errLogFile: string;
   /** MiniCPA's own event log, distinct from the CPA child's stdout/stderr logs. */
   minicpaLogFile: string;
-  managementHtml: string;
 };
 
 export function cpaLayout(home: string): CpaLayout {
@@ -96,7 +95,6 @@ export function cpaLayout(home: string): CpaLayout {
     logFile: path.join(home, "logs", "cpa.log"),
     errLogFile: path.join(home, "logs", "cpa.err.log"),
     minicpaLogFile: path.join(home, "logs", "minicpa.log"),
-    managementHtml: path.join(home, "static", "management.html"),
   };
 }
 

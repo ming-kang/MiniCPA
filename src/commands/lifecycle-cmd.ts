@@ -153,20 +153,35 @@ function missingBrowserCommand(err: unknown): string | undefined {
 
 export async function runOpen(deps?: {
   openInBrowser?: (url: string) => Promise<void>;
+  /** Test seams; production waits long enough for CLIProxyAPI's first panel download. */
+  initialPanelWaitMs?: number;
+  serverWaitMs?: number;
+  panelBootstrapWaitMs?: number;
 }): Promise<void> {
   const ctx = createContext();
+  const config = readCpaConfigWithWarnings(ctx.layout.configFile).config;
+  if (config["remote-management"]?.["disable-control-panel"] === true) {
+    throw new Error(
+      "Web management panel is disabled by remote-management.disable-control-panel in config.yaml",
+    );
+  }
+
   const url = managementUrl(ctx.home);
-  const ok = await waitForHttpOk(url, 3000);
+  let ok = await waitForHttpOk(url, deps?.initialPanelWaitMs ?? 3000);
   if (!ok) {
-    // A binary-only install (`cpa update --binary`) serves the API but has no
-    // management.html, so "run cpa start" would be a no-op remedy.
-    const serverUp = await waitForAnyHttpOk(readinessUrls(ctx.home), 2000);
-    if (serverUp) {
+    // The first request can trigger CLIProxyAPI's own management.html download,
+    // which current upstream detaches from the client request. Distinguish an
+    // offline server quickly, then give that download its full HTTP budget.
+    const serverUp = await waitForHttpOk(`${apiBaseUrl(ctx.home)}/`, deps?.serverWaitMs ?? 2000);
+    if (!serverUp) {
+      throw new Error(`CLIProxyAPI is not reachable at ${url}. Run: cpa start`);
+    }
+    ok = await waitForHttpOk(url, deps?.panelBootstrapWaitMs ?? 35_000);
+    if (!ok) {
       throw new Error(
-        "Web management panel is not installed (management.html is missing). Run: cpa update --panel",
+        `Web management panel is unavailable at ${url}. CLIProxyAPI manages this asset; check: cpa logs --err`,
       );
     }
-    throw new Error(`CLIProxyAPI is not reachable at ${url}. Run: cpa start`);
   }
   // Print before launching: the URL is the useful output even when no browser
   // can be started.

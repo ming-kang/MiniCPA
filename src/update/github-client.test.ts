@@ -23,10 +23,8 @@ import {
   isSafeReleaseTag,
   normalizeTagVersion,
   parseChecksumsText,
-  parseGithubDigest,
   parseReleaseTagFromLocation,
   releaseAssetDownloadUrl,
-  repoFromPanelUrl,
   resolveLatestReleaseTag,
   type GhRelease,
 } from "./github-client.js";
@@ -74,24 +72,6 @@ describe("githubAuthToken", () => {
   });
 });
 
-describe("repoFromPanelUrl", () => {
-  it("parses github URLs", () => {
-    assert.equal(
-      repoFromPanelUrl("https://github.com/router-for-me/Cli-Proxy-API-Management-Center"),
-      "router-for-me/Cli-Proxy-API-Management-Center",
-    );
-    assert.equal(repoFromPanelUrl("https://github.com/foo/bar.git"), "foo/bar");
-    assert.equal(repoFromPanelUrl("https://github.com/foo/bar/releases/latest"), "foo/bar");
-  });
-
-  it("rejects non-github and spoofed URLs", () => {
-    assert.throws(() => repoFromPanelUrl("https://gitlab.com/a/b"), /Unsupported/);
-    assert.throws(() => repoFromPanelUrl("https://evil.example/github.com/a/b"), /Unsupported/);
-    assert.throws(() => repoFromPanelUrl("http://github.com/a/b"), /Unsupported/);
-    assert.throws(() => repoFromPanelUrl("https://github.com/a"), /Unsupported/);
-  });
-});
-
 describe("parseReleaseTagFromLocation", () => {
   it("parses absolute releases/tag Location", () => {
     assert.equal(
@@ -123,7 +103,7 @@ describe("browserReleaseAssetUrl", () => {
   });
 });
 
-describe("parseChecksumsText / parseGithubDigest", () => {
+describe("parseChecksumsText", () => {
   it("parses sha256 lines", () => {
     const a = "a".repeat(64);
     const b = "b".repeat(64);
@@ -137,16 +117,6 @@ describe("parseChecksumsText / parseGithubDigest", () => {
     const map = parseChecksumsText(`${a} *CLIProxyAPI_7.2.66_linux_amd64.tar.gz\n`);
     assert.equal(map.get("CLIProxyAPI_7.2.66_linux_amd64.tar.gz"), a);
     assert.equal(map.has("*CLIProxyAPI_7.2.66_linux_amd64.tar.gz"), false);
-  });
-
-  it("parses asset digest", () => {
-    assert.equal(parseGithubDigest(`sha256:${"c".repeat(64)}`), "c".repeat(64));
-    assert.equal(parseGithubDigest("md5:abc"), undefined);
-  });
-
-  it("returns undefined for a non-string digest", () => {
-    assert.equal(parseGithubDigest(12_345 as unknown as string), undefined);
-    assert.equal(parseGithubDigest({} as unknown as string), undefined);
   });
 });
 

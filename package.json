@@ -1,6 +1,6 @@
 {
   "name": "@astralyn/minicpa",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Manage, run, and update one local CLIProxyAPI instance",
   "license": "MIT",
   "author": "ming-kang",

@@ -99,7 +99,7 @@ describe("cli smoke", () => {
     }
     assert.match(
       stdout,
-      /^ {2}init \[options\]\s+Initialize configuration and install the latest components$/m,
+      /^ {2}init \[options\]\s+Initialize configuration and install the latest CLIProxyAPI\s+binary$/m,
     );
     assert.match(
       stdout,
@@ -147,24 +147,41 @@ describe("cli smoke", () => {
 
     assert.equal(update.status, 0);
     assert.equal(update.stderr, "");
-    assert.match(update.stdout, /Update the managed CLIProxyAPI binary and web management panel/);
-    assert.match(update.stdout, /Both components are updated by default\./);
+    assert.match(update.stdout, /Update the managed CLIProxyAPI binary/);
+    assert.match(update.stdout, /CLIProxyAPI provisions and updates its Web panel itself\./);
     assert.match(update.stdout, /To upgrade MiniCPA itself, run cpa upgrade\./);
-    assert.doesNotMatch(update.stdout, /^ {2}--all(?:\s|$)/m);
+    for (const hidden of ["all", "binary", "panel"]) {
+      assert.doesNotMatch(update.stdout, new RegExp(`^ {2}--${hidden}(?:\\s|$)`, "m"));
+    }
 
     assert.equal(upgrade.status, 0);
     assert.equal(upgrade.stderr, "");
     assert.match(upgrade.stdout, /Upgrade the globally installed MiniCPA package through npm/);
     assert.match(upgrade.stdout, /does not update, stop, or restart the managed CLIProxyAPI/);
-    assert.match(upgrade.stdout, /To update CLIProxyAPI or the web panel, run cpa update\./);
+    assert.match(upgrade.stdout, /To update CLIProxyAPI, run cpa update/);
+    assert.match(upgrade.stdout, /CLIProxyAPI manages its own Web panel/);
     assert.match(upgrade.stdout, /--force/);
   });
 
-  it("accepts hidden --all but rejects conflicting update scopes without network access", () => {
-    const { status, stdout, stderr } = runCli(["update", "--all", "--panel"]);
+  it("keeps the legacy --panel spelling as non-network migration guidance", () => {
+    const { status, stdout, stderr } = runCli(["update", "--panel"]);
     assert.equal(status, 1);
     assert.equal(stdout, "");
-    assert.match(stderr, /option '--all' cannot be used with option '--panel'/);
+    assert.match(stderr, /Web panel updates are managed by CLIProxyAPI/);
+    assert.match(stderr, /cpa web/);
+  });
+
+  it("continues to reject conflicting legacy update scopes", () => {
+    for (const args of [
+      ["update", "--all", "--binary"],
+      ["update", "--all", "--panel"],
+      ["update", "--binary", "--panel"],
+    ]) {
+      const { status, stdout, stderr } = runCli(args);
+      assert.equal(status, 1);
+      assert.equal(stdout, "");
+      assert.match(stderr, /cannot be used with option/);
+    }
   });
 
   it("reports an unknown command exactly once with exit 1", () => {
@@ -189,13 +206,13 @@ describe("cli smoke", () => {
     });
   }
 
-  it("shows all installed component labels for the version command", () => {
+  it("shows the MiniCPA and CLIProxyAPI versions without tracking the Web panel", () => {
     const { status, stdout, stderr, root } = runCli(["version"]);
     assert.equal(status, 0);
     assert.equal(stderr, "");
     assert.match(stdout, new RegExp(`^MiniCPA\\s+${pkgVersion.replaceAll(".", "\\.")}$`, "m"));
     assert.match(stdout, /^CLIProxyAPI\s+\(not installed\)$/m);
-    assert.match(stdout, /^Web panel\s+\(not installed\)$/m);
+    assert.doesNotMatch(stdout, /^Web panel\s+/m);
     assert.ok(stdout.includes(`Home         ${root}`), stdout);
   });
 
@@ -217,11 +234,11 @@ describe("cli smoke", () => {
   });
 
   it("parses the update version pin without treating it as the global version flag", () => {
-    // --panel makes the parsed pin fail locally in assertUpdateScopeFlags, before any network work.
+    // The legacy --panel branch fails locally after Commander parses --version.
     const { status, stdout, stderr } = runCli(["update", "--panel", "--version", "7.2.66"]);
     assert.equal(status, 1);
     assert.equal(stdout, "");
-    assert.match(stderr, /--version/);
+    assert.match(stderr, /Web panel updates are managed by CLIProxyAPI/);
     assert.doesNotMatch(stderr, new RegExp(`^${pkgVersion}$`, "m"));
   });
 

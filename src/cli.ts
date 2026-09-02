@@ -19,7 +19,7 @@ import {
   runTui,
   parseLogLineCount,
 } from "./commands/lifecycle-cmd.js";
-import { assertUpdateScopeFlags, runUpdate, runUpdateCheck } from "./commands/update-cmd.js";
+import { runUpdate, runUpdateCheck } from "./commands/update-cmd.js";
 import { runUpgrade, runUpgradeCheck } from "./commands/upgrade-cmd.js";
 import { runVersion } from "./commands/version-cmd.js";
 import { createContext } from "./context.js";
@@ -54,7 +54,7 @@ program.on("option:V", () => {
 
 program
   .command("init")
-  .description("Initialize configuration and install the latest components")
+  .description("Initialize configuration and install the latest CLIProxyAPI binary")
   .option("--force", "Overwrite config.yaml (backs up to config.yaml.bak.<timestamp>)")
   .action(
     withCliErrors(async (opts: { force?: boolean }) => {
@@ -153,13 +153,11 @@ program
     }),
   );
 
-const updateCmd = program
-  .command("update")
-  .description("Update the managed CLIProxyAPI binary and web management panel");
+const updateCmd = program.command("update").description("Update the managed CLIProxyAPI binary");
 
 updateCmd
   .command("check")
-  .description("Check CLIProxyAPI and web panel versions without installing")
+  .description("Check the CLIProxyAPI binary version without installing")
   .action(
     withCliErrors(async () => {
       await runUpdateCheck();
@@ -167,37 +165,36 @@ updateCmd
   );
 
 updateCmd
+  // Keep old scope spellings parseable for scripts. They are hidden because the
+  // binary is now MiniCPA's only update target.
   .addOption(
-    new Option("--all", "Update the CLIProxyAPI binary and web panel (the default)")
+    new Option("--all", "Compatibility alias for a binary update")
       .hideHelp()
       .conflicts(["binary", "panel"]),
   )
   .addOption(
-    new Option("--binary", "Update only the CLIProxyAPI binary").conflicts(["all", "panel"]),
+    new Option("--binary", "Compatibility alias for a binary update")
+      .hideHelp()
+      .conflicts(["all", "panel"]),
   )
   .addOption(
-    new Option("--panel", "Update only the web management panel").conflicts(["all", "binary"]),
+    new Option("--panel", "Legacy Web panel update option").hideHelp().conflicts(["all", "binary"]),
   )
   .option(
     "--version <version>",
     "Install a specific CLIProxyAPI binary version (for example, 7.2.66)",
   )
-  .option("--force", "Reinstall selected components even when up to date")
+  .option("--force", "Reinstall the CLIProxyAPI binary even when up to date")
   .option("--insecure", "Skip CLIProxyAPI checksum verification (unsafe)")
   .action(
     withCliErrors(
-      async (opts: {
-        all?: boolean;
-        binary?: boolean;
-        panel?: boolean;
-        version?: string;
-        force?: boolean;
-        insecure?: boolean;
-      }) => {
-        assertUpdateScopeFlags(opts);
+      async (opts: { panel?: boolean; version?: string; force?: boolean; insecure?: boolean }) => {
+        if (opts.panel) {
+          throw new Error(
+            "Web panel updates are managed by CLIProxyAPI. Start or restart CLIProxyAPI, then run: cpa web",
+          );
+        }
         await runUpdate({
-          panelOnly: !!opts.panel,
-          binaryOnly: !!opts.binary,
           version: opts.version,
           force: opts.force,
           insecure: opts.insecure,
@@ -210,7 +207,7 @@ updateCmd.addHelpText(
   "after",
   [
     "",
-    "Both components are updated by default.",
+    "CLIProxyAPI provisions and updates its Web panel itself.",
     "A running instance is restarted only when its CLIProxyAPI binary is replaced.",
     "To upgrade MiniCPA itself, run cpa upgrade.",
     "",
@@ -246,7 +243,7 @@ upgradeCmd
     [
       "",
       "This command does not update, stop, or restart the managed CLIProxyAPI instance.",
-      "To update CLIProxyAPI or the web panel, run cpa update.",
+      "To update CLIProxyAPI, run cpa update. CLIProxyAPI manages its own Web panel.",
       "",
     ].join("\n"),
   );
@@ -271,7 +268,7 @@ program
 
 program
   .command("version")
-  .description("Show installed component versions")
+  .description("Show MiniCPA, CLIProxyAPI, and instance home")
   .action(
     withCliErrors(async () => {
       await runVersion(pkg.version);

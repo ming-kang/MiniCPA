@@ -43,18 +43,12 @@ export async function runInit(opts: { force?: boolean }, updateDeps?: UpdateDeps
     hardenCpaPermissions(home);
     console.log(`MiniCPA root  ${miniCpaRoot()}`);
     console.log(`Home          ${home}`);
-    console.log("Components    Ensuring latest CLIProxyAPI and Web panel");
+    console.log("Component     Ensuring latest CLIProxyAPI binary");
 
-    const updateResult = await performUpdate(
-      home,
-      { panelTrigger: "explicit" },
-      updateDeps,
-    ).finally(() => {
+    await performUpdate(home, {}, updateDeps).finally(() => {
       // Also tighten files written by the install path, including partial installs.
       hardenCpaPermissions(home);
     });
-
-    if (updateResult.partialFailure) return;
 
     console.log("Next:");
     console.log("  cpa start");
