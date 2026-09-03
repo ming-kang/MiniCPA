@@ -32,7 +32,7 @@ remote-management:
   disable-auto-update-panel: false
 
   # 管理控制面板的 GitHub 仓库。可填写仓库 URL 或 Releases API URL。
-  panel-github-repository: "https://github.com/router-for-me/Cli-Proxy-API-Management-Center"
+  panel-github-repository: "https://github.com/seakee/CPA-Manager-Plus"
 
 # 身份验证文件目录（支持使用 ~ 表示用户主目录）
 auth-dir: "auths"
@@ -220,7 +220,7 @@ routing:
   # 绑定的身份验证不可用时，始终会自动故障转移。
   # 已建立的绑定优先级高于凭据优先级：会话绑定后，即使更高优先级的凭据恢复，
   # 仍会继续使用当前凭据。凭据优先级只决定首次绑定、无会话请求，以及故障转移后的重新绑定。
-  session-affinity: false # 默认值：false
+  session-affinity: true # MiniCPA 默认启用
   # 会话到身份验证凭据的绑定保留时长。默认值：1h
   session-affinity-ttl: "1h"
 

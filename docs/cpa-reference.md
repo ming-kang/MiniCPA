@@ -27,7 +27,8 @@ OAuth, routing, API keys, and management secrets: edit `config.yaml` / `.env` or
 - `commercial-mode: false` and `logging-to-file: true`
 - `proxy-url: socks5://127.0.0.1:7890`
 - `tls.enable: false` — when enabled with the corresponding CLIProxyAPI certificate/key settings, MiniCPA uses `https://` for readiness, status, and management URLs
-- `remote-management.secret-key: CLIPROXYAPI`, `disable-control-panel: false`, and `disable-auto-update-panel: false`
+- `remote-management.secret-key: CLIPROXYAPI`, `disable-control-panel: false`, `disable-auto-update-panel: false`, and panel repository `seakee/CPA-Manager-Plus`
+- `routing.session-affinity: true` with a `1h` binding TTL
 
 The complete Chinese-commented template is [`config.example.yaml`](config.example.yaml).
 

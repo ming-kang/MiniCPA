@@ -98,6 +98,11 @@ describe("readCpaConfigWithWarnings", () => {
     assert.match(generated, /^# CLIProxyAPI 中文配置示例/);
     assert.match(generated, /tls:\n {2}enable: false\n {2}cert: ""\n {2}key: ""/);
     assert.match(generated, /disable-auto-update-panel: false/);
+    assert.match(
+      generated,
+      /panel-github-repository: "https:\/\/github\.com\/seakee\/CPA-Manager-Plus"/,
+    );
+    assert.match(generated, /session-affinity: true # MiniCPA 默认启用/);
     assert.match(generated, /pprof:\n {2}enable: false/);
     assert.match(generated, /commercial-mode: false/);
     assert.match(generated, /logging-to-file: true/);

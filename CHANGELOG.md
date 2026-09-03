@@ -4,6 +4,13 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-03
+
+### Changed
+
+- Switched the default management panel repository to `seakee/CPA-Manager-Plus`.
+- Enabled `routing.session-affinity` by default; existing instances receive both operational changes on their next `cpa update`, with the previous config backed up first.
+
 ## [0.4.1] - 2026-09-03
 
 ### Added
