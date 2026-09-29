@@ -1,5 +1,5 @@
-import { formatNetworkError, NetworkError } from "./http.js";
-import { BinaryUpdateError } from "./update/binary.js";
+import { formatNetworkError, NetworkError } from "./network-error.js";
+import { BinaryUpdateError } from "./update/binary-error.js";
 
 export function formatCliError(err: unknown): string {
   // Messages of these types are already user-ready (enriched / suffixed).

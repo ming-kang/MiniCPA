@@ -1,13 +1,8 @@
-import AdmZip from "adm-zip";
+import { extractZipExecutable } from "./zip.js";
 import fs from "node:fs";
 import path from "node:path";
 import * as tar from "tar";
-import {
-  activeExecutablePath,
-  executableName,
-  miniCpaTempDownloadDir,
-  miniCpaTempExtractDir,
-} from "../paths.js";
+import { executableName, miniCpaTempDownloadDir, miniCpaTempExtractDir } from "../paths.js";
 import {
   resolveRunning,
   startDaemon,
@@ -17,11 +12,9 @@ import {
   type StartOptions,
 } from "../process/lifecycle.js";
 import {
-  clearRuntimeBinaryBackup,
   inspectRuntimeInstallation,
-  installRuntimeBinary,
+  RuntimeBinaryTransaction,
   readCurrentRuntimeVersion,
-  restoreRuntimeBinaryFromBackup,
 } from "../process/runtime.js";
 import { patchInstallState, readInstallState } from "../state.js";
 import { removeDirBestEffort, sha256File } from "../util.js";
@@ -41,36 +34,8 @@ import { silentUpdateReporter, type UpdateReporter } from "./reporter.js";
 const MAX_BINARY_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const MAX_EXTRACTED_EXECUTABLE_BYTES = 512 * 1024 * 1024;
 
-export class BinaryUpdateError extends Error {
-  readonly previousRestarted: boolean;
-  readonly previousRestored: boolean;
-  readonly causeMessage: string;
-
-  constructor(
-    causeMessage: string,
-    previousRestarted: boolean,
-    recovery?: { previousRestored?: boolean; previousAvailable?: boolean },
-  ) {
-    const previousRestored = recovery?.previousRestored === true;
-    let suffix: string;
-    if (previousRestarted) {
-      suffix = previousRestored
-        ? "\nThe previous CLIProxyAPI version was restored and restarted."
-        : "\nThe existing CLIProxyAPI version was restarted.";
-    } else if (recovery?.previousAvailable === false) {
-      suffix = "\nNo previous CLIProxyAPI executable could be restored. Run: cpa update";
-    } else {
-      suffix = previousRestored
-        ? "\nThe previous CLIProxyAPI version was restored but could not be restarted. Run: cpa start"
-        : "\nThe existing CLIProxyAPI version could not be restarted. Run: cpa start";
-    }
-    super(`${causeMessage}${suffix}`);
-    this.name = "BinaryUpdateError";
-    this.causeMessage = causeMessage;
-    this.previousRestarted = previousRestarted;
-    this.previousRestored = previousRestored;
-  }
-}
+export { BinaryUpdateError } from "./binary-error.js";
+import { BinaryUpdateError } from "./binary-error.js";
 
 function isPathInsideDirectory(candidatePath: string, directoryPath: string): boolean {
   const resolvedDirectory = path.resolve(directoryPath);
@@ -121,28 +86,7 @@ export async function extractArchive(
   fs.mkdirSync(destDir, { recursive: true });
 
   if (archivePath.endsWith(".zip")) {
-    const zip = new AdmZip(archivePath);
-    const entry = zip
-      .getEntries()
-      .find((e) => !e.isDirectory && path.basename(e.entryName) === exeName);
-    if (!entry) throw new Error(`${exeName} not found in ${archivePath}`);
-    if (isUnsafeArchiveEntryName(entry.entryName)) {
-      throw new Error(`Unsafe zip entry path: ${entry.entryName}`);
-    }
-    if (entry.header.size > maxExtractedBytes) {
-      throw new Error(`${exeName} in ${archivePath} exceeds extraction size limit`);
-    }
-    const data = entry.getData();
-    // The declared header size is attacker-controlled; re-check the inflated bytes.
-    if (data.length > maxExtractedBytes) {
-      throw new Error(
-        `${exeName} in ${archivePath} exceeds extraction size limit ` +
-          `(declared ${entry.header.size}, actual ${data.length})`,
-      );
-    }
-    const out = path.join(destDir, exeName);
-    fs.writeFileSync(out, data);
-    return out;
+    return extractZipExecutable(archivePath, destDir, exeName, maxExtractedBytes);
   }
 
   if (archivePath.endsWith(".tar.gz") || archivePath.endsWith(".tgz")) {
@@ -181,11 +125,11 @@ export async function extractArchive(
  * Verify the downloaded release archive against checksums.txt.
  * CLIProxyAPI publishes SHA-256 of the zip/tar.gz asset names, not the nested binary.
  */
-export function verifyArchiveChecksum(
+export async function verifyArchiveChecksum(
   checksums: Map<string, string>,
   archivePath: string,
   archiveName: string,
-): void {
+): Promise<void> {
   if (checksums.size === 0) {
     throw new Error("No checksums available (use --insecure to skip integrity check)");
   }
@@ -196,7 +140,7 @@ export function verifyArchiveChecksum(
       `No checksum entry for archive ${archiveName} (tried: ${keys.join(", ")}). Use --insecure to skip.`,
     );
   }
-  const actual = sha256File(archivePath);
+  const actual = await sha256File(archivePath);
   if (actual !== expected) {
     throw new Error(`Checksum mismatch for ${archiveName}`);
   }
@@ -269,7 +213,7 @@ async function downloadFirstAvailableAsset(
 export type BinaryUpdateDeps = {
   stopDaemon(home: string): Promise<boolean>;
   startDaemon(home: string, options?: StartOptions): Promise<RunningInfo>;
-  resolveRunning(home: string): RunningInfo | undefined;
+  resolveRunning(home: string): Promise<RunningInfo | undefined>;
   waitForBinaryUnlocked(home: string): Promise<void>;
 };
 
@@ -310,11 +254,11 @@ export async function installBinaryPhase(
   // Whether there was anything to roll back to at all. A fresh install has no
   // previous binary, so a leftover file under the active name after a failure is
   // the half-installed NEW one and must not be reported as a usable rollback.
-  const hadPreviousBinary = fs.existsSync(activeExecutablePath(home));
+  const transaction = new RuntimeBinaryTransaction(home);
 
   try {
     await deps.waitForBinaryUnlocked(home);
-    installRuntimeBinary(home, extractedExe);
+    transaction.install(extractedExe);
 
     let restarted = false;
     if (wasRunning) {
@@ -330,57 +274,50 @@ export async function installBinaryPhase(
       lastUpdateCheck: new Date().toISOString(),
     });
 
-    clearRuntimeBinaryBackup(home);
+    transaction.commit();
     return { restarted };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     reporter.warn("CLIProxyAPI update failed; recovering the previous installation…");
 
-    // Half-started new process may still be running after a failed restart.
-    if (deps.resolveRunning(home)) {
-      try {
-        await deps.stopDaemon(home);
-      } catch {
-        /* best-effort */
-      }
+    const recoveryErrors: string[] = [];
+    // Do not replace an executable until any half-started process is stopped.
+    try {
+      if (await deps.resolveRunning(home)) await deps.stopDaemon(home);
+    } catch (stopError) {
+      throw new BinaryUpdateError(
+        `${msg}\nRecovery could not stop CLIProxyAPI: ${String(stopError)}`,
+        false,
+      );
     }
-
-    const restored = restoreRuntimeBinaryFromBackup(home);
-    // `.bak` presence is not the same question as "is a usable previous binary on
-    // disk?". Every failure raised before installRuntimeBinary moves the old binary
-    // aside — a file lock that keeps waitForBinaryUnlocked from returning, but also
-    // an ENOSPC/EACCES on its staging copy, chmod or fsync — leaves the previous
-    // binary byte-intact under the active name and creates no `.bak` at all. Ask
-    // the filesystem, gated on there having been a previous binary in the first
-    // place so a half-installed fresh install is still reported as unrecoverable.
-    const binaryPresent =
-      restored || (hadPreviousBinary && fs.existsSync(activeExecutablePath(home)));
-
-    // Never record a version when no binary is on disk to back it. A failed
-    // executable probe is not evidence that the previous version record was
-    // wrong, so preserve it when rollback leaves the previous binary in place.
-    patchInstallState(home, {
-      runtimeVersion: binaryPresent ? (currentVersion ?? recordedCurrentVersion) : undefined,
-      lastUpdateCheck: new Date().toISOString(),
-    });
+    const { restored, previousAvailable: binaryPresent } = transaction.rollback();
+    try {
+      patchInstallState(home, {
+        runtimeVersion: binaryPresent ? (currentVersion ?? recordedCurrentVersion) : undefined,
+        lastUpdateCheck: new Date().toISOString(),
+      });
+    } catch (stateError) {
+      recoveryErrors.push(`Could not restore install metadata: ${String(stateError)}`);
+    }
+    const failureMessage = [msg, ...recoveryErrors].join("\n");
 
     if (wasRunning) {
       if (!binaryPresent) {
-        throw new BinaryUpdateError(msg, false, { previousAvailable: false });
+        throw new BinaryUpdateError(failureMessage, false, { previousAvailable: false });
       }
       try {
         await deps.startDaemon(home);
-        throw new BinaryUpdateError(msg, true, { previousRestored: restored });
       } catch (restartErr) {
-        if (restartErr instanceof BinaryUpdateError) throw restartErr;
         const restartMessage =
           restartErr instanceof Error ? restartErr.message : String(restartErr);
-        throw new BinaryUpdateError(`${msg}\nRestart error: ${restartMessage}`, false, {
+        throw new BinaryUpdateError(`${failureMessage}\nRestart error: ${restartMessage}`, false, {
           previousRestored: restored,
         });
       }
+      throw new BinaryUpdateError(failureMessage, true, { previousRestored: restored });
     }
 
+    if (recoveryErrors.length) throw new Error(failureMessage, { cause: err });
     throw err;
   }
 }
@@ -391,7 +328,7 @@ export async function installBinaryPhase(
  * - Running process is stopped only for the brief install window, then restarted.
  * - Already-latest installs are skipped unless `force` or a specific `version` is requested.
  * - `.bak` is cleared only after a successful install (and healthy restart when it was running).
- * - On any phase-2 failure, restore `.bak` when present; if it was running, stop → restore → start.
+ * - On failure, restore only this transaction's backup and restart even if metadata repair fails.
  */
 export async function updateBinary(
   home: string,
@@ -405,7 +342,7 @@ export async function updateBinary(
 ): Promise<BinaryUpdateResult> {
   const reporter = options?.reporter ?? silentUpdateReporter;
   const deps = options?.deps ?? defaultBinaryUpdateDeps;
-  const wasRunning = !!deps.resolveRunning(home);
+  const wasRunning = !!(await deps.resolveRunning(home));
   const currentVersion = await readCurrentRuntimeVersion(home);
 
   const release: GhRelease = options?.version
@@ -442,7 +379,7 @@ export async function updateBinary(
 
     if (!options?.insecure) {
       const checksums = await fetchChecksums(release, CPA_REPO);
-      verifyArchiveChecksum(checksums, archivePath, assetName);
+      await verifyArchiveChecksum(checksums, archivePath, assetName);
     } else {
       reporter.warn("Warning: --insecure skips archive integrity verification");
     }

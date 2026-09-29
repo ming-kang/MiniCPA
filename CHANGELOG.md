@@ -4,6 +4,22 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-09-29
+
+### Fixed
+
+- Protect lock recovery with a kernel-owned lease and restrict reentrancy to the owning async operation.
+- Restart the previous binary even when rollback metadata cannot be written; prevent stale backups from causing unintended downgrades.
+- Preserve existing autostart launchers when registration fails.
+- Handle log rotation and access failures without uncaught timer errors, and apply output backpressure.
+
+### Changed
+
+- Redesign `cpa status` as aligned source, MiniCPA/Core version, download route, API, configuration, and runtime fields; redact proxy credentials.
+- Stream archive checksums and ZIP extraction, bound subprocess output, and combine Windows process identity queries under one timeout budget.
+- Load CLI commands on demand and separate shared contracts from platform and transport implementations.
+- Update vulnerable dependencies; keep the ZIP fixture writer in development dependencies only.
+
 ## [0.4.2] - 2026-09-03
 
 ### Changed

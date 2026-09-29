@@ -196,8 +196,8 @@ export function removeDirBestEffort(dir: string, warn?: (message: string) => voi
   }
 }
 
-export function sha256File(file: string): string {
+export async function sha256File(file: string): Promise<string> {
   const hash = crypto.createHash("sha256");
-  hash.update(fs.readFileSync(file));
+  for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
   return hash.digest("hex");
 }

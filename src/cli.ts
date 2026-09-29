@@ -5,23 +5,6 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { withCliErrors } from "./cli-errors.js";
-import { runAuto } from "./commands/auto-cmd.js";
-import { runClean } from "./commands/clean.js";
-import { runDoctor } from "./commands/doctor.js";
-import { runInit } from "./commands/init.js";
-import {
-  runLogs,
-  runOpen,
-  runRestart,
-  runStart,
-  runStatus,
-  runStop,
-  runTui,
-  parseLogLineCount,
-} from "./commands/lifecycle-cmd.js";
-import { runUpdate, runUpdateCheck } from "./commands/update-cmd.js";
-import { runUpgrade, runUpgradeCheck } from "./commands/upgrade-cmd.js";
-import { runVersion } from "./commands/version-cmd.js";
 import { createContext } from "./context.js";
 import { miniCpaRoot, miniCpaTempRoot } from "./paths.js";
 
@@ -58,6 +41,7 @@ program
   .option("--force", "Overwrite config.yaml (backs up to config.yaml.bak.<timestamp>)")
   .action(
     withCliErrors(async (opts: { force?: boolean }) => {
+      const { runInit } = await import("./commands/init.js");
       await runInit({ force: opts.force });
     }),
   );
@@ -68,6 +52,7 @@ program
   .option("--no-wait", "Do not wait for CLIProxyAPI to become ready")
   .action(
     withCliErrors(async (opts: { wait?: boolean }) => {
+      const { runStart } = await import("./commands/lifecycle-cmd.js");
       await runStart({ noWait: opts.wait === false });
     }),
   );
@@ -77,6 +62,7 @@ program
   .description("Stop CLIProxyAPI")
   .action(
     withCliErrors(async () => {
+      const { runStop } = await import("./commands/lifecycle-cmd.js");
       await runStop();
     }),
   );
@@ -87,7 +73,10 @@ program
   .option("--no-wait", "Do not wait for CLIProxyAPI to become ready")
   .action(
     withCliErrors(async (opts: { wait?: boolean }) => {
-      await runRestart({ noWait: opts.wait === false });
+      const { runRestart } = await import("./commands/lifecycle-cmd.js");
+      await runRestart({
+        noWait: opts.wait === false,
+      });
     }),
   );
 
@@ -97,6 +86,7 @@ program
   .addArgument(new Argument("[mode]", "Set autostart explicitly").choices(["on", "off"]))
   .action(
     withCliErrors(async (mode?: "on" | "off") => {
+      const { runAuto } = await import("./commands/auto-cmd.js");
       await runAuto({ packageRoot, mode });
     }),
   );
@@ -106,7 +96,8 @@ program
   .description("Show CLIProxyAPI runtime, autostart, and endpoints")
   .action(
     withCliErrors(async () => {
-      await runStatus();
+      const { runStatus } = await import("./commands/lifecycle-cmd.js");
+      await runStatus(pkg.version);
     }),
   );
 
@@ -115,6 +106,7 @@ program
   .description("Open the web management panel")
   .action(
     withCliErrors(async () => {
+      const { runOpen } = await import("./commands/lifecycle-cmd.js");
       await runOpen();
     }),
   );
@@ -124,6 +116,7 @@ program
   .description("Open the web management panel")
   .action(
     withCliErrors(async () => {
+      const { runOpen } = await import("./commands/lifecycle-cmd.js");
       await runOpen();
     }),
   );
@@ -136,6 +129,7 @@ program
   .option("--err", "Show error log only")
   .action(
     withCliErrors(async (opts: { follow?: boolean; lines: string; err?: boolean }) => {
+      const { runLogs, parseLogLineCount } = await import("./commands/lifecycle-cmd.js");
       await runLogs({
         follow: opts.follow,
         lines: parseLogLineCount(opts.lines),
@@ -149,6 +143,7 @@ program
   .description("Open the CLIProxyAPI terminal UI")
   .action(
     withCliErrors(async () => {
+      const { runTui } = await import("./commands/lifecycle-cmd.js");
       await runTui();
     }),
   );
@@ -162,6 +157,7 @@ updateCmd
   .description("Check the CLIProxyAPI binary version without installing")
   .action(
     withCliErrors(async () => {
+      const { runUpdateCheck } = await import("./commands/update-cmd.js");
       await runUpdateCheck();
     }),
   );
@@ -196,6 +192,7 @@ updateCmd
             "Web panel updates are managed by CLIProxyAPI. Start or restart CLIProxyAPI, then run: cpa web",
           );
         }
+        const { runUpdate } = await import("./commands/update-cmd.js");
         await runUpdate({
           version: opts.version,
           force: opts.force,
@@ -226,6 +223,7 @@ upgradeCmd
   .description("Check npm for a newer MiniCPA version without installing")
   .action(
     withCliErrors(async () => {
+      const { runUpgradeCheck } = await import("./commands/upgrade-cmd.js");
       await runUpgradeCheck(pkg.version);
     }),
   );
@@ -234,6 +232,7 @@ upgradeCmd
   .option("--force", "Reinstall the latest npm version when current (never downgrade)")
   .action(
     withCliErrors(async (opts: { force?: boolean }) => {
+      const { runUpgrade } = await import("./commands/upgrade-cmd.js");
       await runUpgrade({
         currentVersion: pkg.version,
         packageRoot,
@@ -256,6 +255,7 @@ program
   .description("Diagnose CLIProxyAPI installation and runtime problems")
   .action(
     withCliErrors(async () => {
+      const { runDoctor } = await import("./commands/doctor.js");
       await runDoctor();
     }),
   );
@@ -265,6 +265,7 @@ program
   .description("Remove old MiniCPA staging files (never touches the CLIProxyAPI instance)")
   .action(
     withCliErrors(async () => {
+      const { runClean } = await import("./commands/clean.js");
       await runClean();
     }),
   );
@@ -274,6 +275,7 @@ program
   .description("Show MiniCPA, CLIProxyAPI, and instance home")
   .action(
     withCliErrors(async () => {
+      const { runVersion } = await import("./commands/version-cmd.js");
       await runVersion(pkg.version);
     }),
   );

@@ -1,3 +1,4 @@
+import { lingerHint } from "../process/autostart-linux.js";
 import fs from "node:fs";
 import path from "node:path";
 import { formatCliError } from "../cli-errors.js";
@@ -16,7 +17,7 @@ import {
   miniCpaTempRoot,
   unlockProbePath,
 } from "../paths.js";
-import { inspectAutostartState, lingerHint, type AutostartState } from "../process/autostart.js";
+import { inspectAutostartState, type AutostartState } from "../process/autostart.js";
 import { readinessUrls, waitForFirstHttpOk } from "../process/health.js";
 import { inspectRunning } from "../process/lifecycle.js";
 import { inspectMiniCpaLock, listLockPreemptResidue } from "../process/lock.js";
@@ -318,7 +319,7 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
     );
   }
 
-  const running = inspectRunning(ctx.home);
+  const running = await inspectRunning(ctx.home);
   if (running) {
     if (running.identityUnknown) {
       console.log(

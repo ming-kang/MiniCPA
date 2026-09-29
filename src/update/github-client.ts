@@ -1,10 +1,5 @@
 import { httpFetch } from "../http.js";
 
-// Re-export download infrastructure for backward compatibility with existing callers.
-export { downloadToFile, type DownloadOptions } from "./download.js";
-// Re-export checksum utilities for backward compatibility with existing callers.
-export { fetchChecksums, parseChecksumsText } from "./checksum.js";
-
 export type GhAsset = {
   id?: number;
   name: string;

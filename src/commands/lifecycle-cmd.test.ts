@@ -319,6 +319,24 @@ describe("runOpen", () => {
 });
 
 describe("runStatus", () => {
+  it("prints aligned versions, configuration source and endpoints even while stopped", async () => {
+    useTempRoot();
+    const home = writeHomeForBase("http://127.0.0.1:19090");
+    const output = await captureConsole(() =>
+      runStatus("0.4.3", { inspectAutostartState: async () => "off" }),
+    );
+    for (const line of [
+      "Source           Local File",
+      "MiniCPA Version  0.4.3",
+      "Local API        http://127.0.0.1:19090",
+      `Core Config      ${cpaLayout(home).configFile}`,
+      "Status           stopped",
+    ])
+      assert.ok(output.stdout.includes(line), output.stdout.join("\n"));
+    assert.ok(output.stdout.some((line) => line.startsWith("Download Via     ")));
+    assert.equal(process.exitCode, 1);
+  });
+
   it("never repairs the instance home while reporting on it", async () => {
     useTempRoot();
     let closedBase = "";
@@ -344,13 +362,13 @@ describe("runStatus", () => {
       lines.push(args.map((arg) => String(arg)).join(" "));
     };
     try {
-      await runStatus({ inspectAutostartState: async () => "off" });
+      await runStatus("0.4.3", { inspectAutostartState: async () => "off" });
     } finally {
       console.log = originalLog;
     }
 
     assert.ok(
-      lines.some((line) => line.includes("Autostart  off")),
+      lines.some((line) => line.includes("Autostart        off")),
       lines.join("\n"),
     );
     assert.deepEqual(snapshotHome(home), before, "cpa status must not mutate the instance home");
@@ -361,7 +379,7 @@ describe("runStatus", () => {
     useTempRoot();
 
     const output = await captureConsole(() =>
-      runStatus({
+      runStatus("0.4.3", {
         inspectAutostartState: async () => {
           throw new Error("user manager unavailable");
         },
@@ -369,12 +387,12 @@ describe("runStatus", () => {
     );
 
     assert.ok(
-      output.stdout.some((line) => line.startsWith("Home       ")),
+      output.stdout.some((line) => line.startsWith("Home             ")),
       output.stdout.join("\n"),
     );
-    assert.ok(output.stdout.includes("Version    (not installed)"), output.stdout.join("\n"));
-    assert.ok(output.stdout.includes("Autostart  unknown"), output.stdout.join("\n"));
-    assert.ok(output.stdout.includes("Status     stopped"), output.stdout.join("\n"));
+    assert.ok(output.stdout.includes("Core Version     (not installed)"), output.stdout.join("\n"));
+    assert.ok(output.stdout.includes("Autostart        unknown"), output.stdout.join("\n"));
+    assert.ok(output.stdout.includes("Status           stopped"), output.stdout.join("\n"));
     assert.deepEqual(output.stderr, [
       "Warning: could not inspect autostart: user manager unavailable",
     ]);
@@ -389,10 +407,10 @@ describe("runStatus", () => {
     writeInstallState(home, { runtimeVersion: "7.2.92" });
 
     const output = await captureConsole(() =>
-      runStatus({ inspectAutostartState: async () => "off" }),
+      runStatus("0.4.3", { inspectAutostartState: async () => "off" }),
     );
 
-    assert.ok(output.stdout.includes("Version    7.2.92"), output.stdout.join("\n"));
+    assert.ok(output.stdout.includes("Core Version     7.2.92"), output.stdout.join("\n"));
   });
 
   it("does not collapse stale or OS-disabled registrations into off", async () => {
@@ -400,9 +418,9 @@ describe("runStatus", () => {
 
     for (const state of ["stale", "disabled"] as const) {
       const output = await captureConsole(() =>
-        runStatus({ inspectAutostartState: async () => state }),
+        runStatus("0.4.3", { inspectAutostartState: async () => state }),
       );
-      assert.ok(output.stdout.includes(`Autostart  ${state}`), output.stdout.join("\n"));
+      assert.ok(output.stdout.includes(`Autostart        ${state}`), output.stdout.join("\n"));
     }
   });
 
@@ -429,25 +447,25 @@ describe("runStatus", () => {
           lines.push(args.map((arg) => String(arg)).join(" "));
         };
         try {
-          await runStatus({ inspectAutostartState: async () => "on" });
+          await runStatus("0.4.3", { inspectAutostartState: async () => "on" });
         } finally {
           console.log = originalLog;
         }
 
         assert.ok(
-          lines.some((l) => l.includes("Autostart  on")),
+          lines.some((l) => l.includes("Autostart        on")),
           lines.join("\n"),
         );
         assert.ok(
-          lines.some((l) => l.includes(`API        ${baseUrl}`)),
+          lines.some((l) => l.includes(`Local API        ${baseUrl}`)),
           lines.join("\n"),
         );
         assert.ok(
-          lines.some((l) => l.includes(`Web        ${baseUrl}/management.html`)),
+          lines.some((l) => l.includes(`Web Panel        ${baseUrl}/management.html`)),
           lines.join("\n"),
         );
         assert.ok(
-          lines.some((l) => l.includes("HTTP       ok")),
+          lines.some((l) => l.includes("HTTP             ok")),
           lines.join("\n"),
         );
         assert.equal(process.exitCode, 0);
@@ -484,7 +502,7 @@ describe("runTui", () => {
     let failure: unknown;
     try {
       await runTui({
-        inspectRunning: () => fakeRunning(unlockProbePath(home)),
+        inspectRunning: async () => fakeRunning(unlockProbePath(home)),
         runRuntimeAttached: async (exe, args, options) => {
           launched.push({ exe, args, cwd: options.cwd });
         },
@@ -521,7 +539,7 @@ describe("runTui", () => {
     let failure: unknown;
     try {
       await runTui({
-        inspectRunning: () => fakeRunning(backupExecutablePath(home)),
+        inspectRunning: async () => fakeRunning(backupExecutablePath(home)),
         runRuntimeAttached: async (exe) => {
           launchedExe = exe;
         },
@@ -547,7 +565,7 @@ describe("runTui", () => {
     await assert.rejects(
       () =>
         runTui({
-          inspectRunning: () => fakeRunning(activeExecutablePath(home)),
+          inspectRunning: async () => fakeRunning(activeExecutablePath(home)),
           runRuntimeAttached: async () => {
             launched = true;
           },

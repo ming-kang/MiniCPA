@@ -1,9 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { ensureDir, miniCpaRoot } from "../paths.js";
 import { sleep } from "../util.js";
 import { isProcessAlive } from "./alive.js";
+import { acquireLockLease } from "./lock-lease.js";
 import { probePidReuse, readProcessStartMarker } from "./pid-identity.js";
 
 export type MiniCpaLockRecord = {
@@ -13,8 +14,8 @@ export type MiniCpaLockRecord = {
   startMarker?: string;
 };
 
-/** Per-process re-entrancy depth for the one global MiniCPA lock. */
-const lockDepth = new Map<string, number>();
+type LockOwner = { key: string; active: boolean };
+const ownership = new AsyncLocalStorage<LockOwner>();
 
 /** A freshly created lock may still be between open("wx") and write. */
 const EMPTY_LOCK_GRACE_MS = 2_000;
@@ -39,7 +40,8 @@ export type LockInspection =
 function parseLockRecord(raw: string): MiniCpaLockRecord | undefined {
   try {
     const parsed = JSON.parse(raw) as Partial<MiniCpaLockRecord>;
-    if (typeof parsed.pid !== "number" || !Number.isFinite(parsed.pid)) return undefined;
+    if (typeof parsed.pid !== "number" || !Number.isSafeInteger(parsed.pid) || parsed.pid <= 0)
+      return undefined;
     return {
       pid: parsed.pid,
       command: typeof parsed.command === "string" ? parsed.command : "unknown",
@@ -55,8 +57,9 @@ function inspectLock(lockPath: string): LockInspection {
   let raw: string;
   try {
     raw = fs.readFileSync(lockPath, "utf8");
-  } catch {
-    return { kind: "absent" };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "absent" };
+    throw error;
   }
   const record = parseLockRecord(raw);
   if (record) return { kind: "record", record, raw };
@@ -84,57 +87,16 @@ function formatLockAgeSuffix(acquiredAt: string | undefined): string {
   return `, ${Math.max(0, Math.round(ageMs / 60_000))}m ago`;
 }
 
-/**
- * Remove a lock we judged stale WITHOUT a blind unlink: rename it aside, confirm
- * the file still holds exactly the content the decision was based on, and only
- * then delete it. If the content changed, a new holder re-created the lock in
- * the meantime — put it back (or drop our copy if yet another lock appeared).
- *
- * Residual window: a displaced holder that verified before our rename could
- * briefly coexist with a new acquirer. The post-create verification in
- * tryAcquireLock plus this confirm-before-delete shrinks that window to the
- * microseconds between one read and one rename; a full fix needs OS-held file
- * locks, which have their own portability hazards (see AGENTS.md history).
- */
-/** @internal exported for tests only */
+/** Remove stale metadata only while holding the kernel lease. Never displace a new record. */
 export function preemptLock(lockPath: string, expected: LockInspection): boolean {
   if (expected.kind === "absent") return true;
-  const aside = `${lockPath}.preempt.${process.pid}.${randomUUID()}`;
   try {
-    fs.renameSync(lockPath, aside);
+    if (fs.readFileSync(lockPath, "utf8") !== expected.raw) return false;
+    fs.unlinkSync(lockPath);
+    return true;
   } catch {
-    // Raced with another preemptor or the holder released it.
     return false;
   }
-
-  let observedRaw: string | undefined;
-  try {
-    observedRaw = fs.readFileSync(aside, "utf8");
-  } catch {
-    observedRaw = undefined;
-  }
-
-  if (observedRaw === expected.raw) {
-    try {
-      fs.unlinkSync(aside);
-    } catch {
-      /* ignore */
-    }
-    return true;
-  }
-
-  // Content changed since our decision: a live holder wrote it. Restore.
-  try {
-    fs.renameSync(aside, lockPath);
-  } catch {
-    // A newer lock already exists; drop our displaced copy.
-    try {
-      fs.unlinkSync(aside);
-    } catch {
-      /* ignore */
-    }
-  }
-  return false;
 }
 
 /**
@@ -142,21 +104,13 @@ export function preemptLock(lockPath: string, expected: LockInspection): boolean
  * preempt only when the holder is provably gone (dead PID, PID reuse detected via
  * start marker, ourselves after a crashed finally, or stale corrupt content).
  */
-async function tryAcquireLock(command: string): Promise<void> {
-  const key = homeKey();
-  const depth = lockDepth.get(key) ?? 0;
-  if (depth > 0) {
-    lockDepth.set(key, depth + 1);
-    return;
-  }
-
-  const lockPath = resolveLockPath();
+async function tryAcquireLock(command: string, lockPath: string): Promise<void> {
   ensureDir(path.dirname(lockPath));
   const record: MiniCpaLockRecord = {
     pid: process.pid,
     command,
     acquiredAt: new Date().toISOString(),
-    startMarker: readProcessStartMarker(process.pid),
+    startMarker: await readProcessStartMarker(process.pid),
   };
   const payload = `${JSON.stringify(record)}\n`;
 
@@ -186,7 +140,6 @@ async function tryAcquireLock(command: string): Promise<void> {
       if (verified.kind !== "record" || verified.record.pid !== process.pid) {
         continue;
       }
-      lockDepth.set(key, 1);
       return;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
@@ -220,7 +173,7 @@ async function tryAcquireLock(command: string): Promise<void> {
     }
 
     if (isProcessAlive(holder.pid)) {
-      const { reused } = probePidReuse(holder.pid, holder.startMarker);
+      const { reused } = await probePidReuse(holder.pid, holder.startMarker);
       if (reused) {
         // PID reused by an unrelated process — the recorded holder is gone.
         preemptLock(lockPath, existing);
@@ -242,18 +195,7 @@ async function tryAcquireLock(command: string): Promise<void> {
   throw new Error(`Failed to acquire MiniCPA lock within ${ACQUIRE_TIMEOUT_MS}ms. Retry.`);
 }
 
-function releaseLock(): void {
-  const key = homeKey();
-  const depth = lockDepth.get(key) ?? 0;
-  if (depth > 1) {
-    lockDepth.set(key, depth - 1);
-    return;
-  }
-  if (depth === 1) {
-    lockDepth.delete(key);
-  }
-
-  const lockPath = resolveLockPath();
+function releaseLock(lockPath: string): void {
   const existing = inspectLock(lockPath);
   if (existing.kind !== "record" || existing.record.pid !== process.pid) return;
   try {
@@ -309,9 +251,8 @@ export function inspectMiniCpaLock(): MiniCpaLockStatus {
 /**
  * Absolute paths of leftover `cpa.lock.preempt.*` files beside the lock.
  *
- * preemptLock swallows unlink failures, so a transient Windows EBUSY strands the
- * aside copy forever. This only reports them: an automatic sweep would race a
- * concurrent preemptor's in-flight rename/restore.
+ * Older versions renamed stale locks aside. Keep diagnosing their residue,
+ * without racing a legacy process that may still be restoring one.
  */
 export function listLockPreemptResidue(): string[] {
   try {
@@ -329,10 +270,35 @@ export function listLockPreemptResidue(): string[] {
 
 /** Exclusive global lock for the one managed CPA instance. */
 export async function withMiniCpaLock<T>(command: string, fn: () => Promise<T>): Promise<T> {
-  await tryAcquireLock(command);
+  const key = homeKey();
+  const inherited = ownership.getStore();
+  if (inherited?.active && inherited.key === key) return fn();
+  ensureDir(path.dirname(key));
+  let releaseLease: () => Promise<void>;
   try {
-    return await fn();
+    releaseLease = await acquireLockLease(key);
+  } catch (error) {
+    const holder = inspectLock(key);
+    if (holder.kind === "record") {
+      throw new Error(
+        `Another cpa ${holder.record.command} is running (PID=${holder.record.pid}). ` +
+          `Retry after it finishes. Lock file: ${key}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  const owner: LockOwner = { key, active: true };
+  try {
+    await tryAcquireLock(command, key);
+    try {
+      return await ownership.run(owner, fn);
+    } finally {
+      owner.active = false;
+      releaseLock(key);
+    }
   } finally {
-    releaseLock();
+    owner.active = false;
+    await releaseLease();
   }
 }

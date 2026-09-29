@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AutostartDependencies, AutostartState } from "./autostart.js";
+import type { AutostartDependencies, AutostartState } from "./autostart-shared.js";
 import {
   assertSafeLauncherValue,
   autostartVerdict,
@@ -13,7 +13,7 @@ import {
   registerWithRollback,
   runAutostartCommand,
   readFileIfExists,
-} from "./autostart.js";
+} from "./autostart-shared.js";
 
 const SYSTEMD_UNIT_NAME = "minicpa.service";
 

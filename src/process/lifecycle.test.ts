@@ -103,7 +103,7 @@ describe("process identity safety", () => {
   it("refuses to stop an alive PID when executable probe is inconclusive and start marker is legacy/incomparable", async () => {
     const home = tempHome();
     const pid = spawnLiveChild();
-    const currentMarker = readProcessStartMarker(pid);
+    const currentMarker = await readProcessStartMarker(pid);
     if (!currentMarker) return;
 
     // Cross-generation marker: untagged legacy Darwin marker against tagged Darwin probe,
@@ -119,7 +119,7 @@ describe("process identity safety", () => {
       startMarker: incomparableMarker,
     });
 
-    const running = resolveRunning(home);
+    const running = await resolveRunning(home);
     assert.equal(running?.pid, pid);
     assert.equal(running?.identityUnknown, true);
 
@@ -131,7 +131,7 @@ describe("process identity safety", () => {
   it("allows stopping an alive PID with a legacy start marker when executable identity matches", async () => {
     const home = tempHome();
     const pid = spawnLiveChild();
-    const currentMarker = readProcessStartMarker(pid);
+    const currentMarker = await readProcessStartMarker(pid);
     if (!currentMarker) return;
 
     const incomparableMarker = isTaggedStartMarker(currentMarker)
@@ -145,7 +145,7 @@ describe("process identity safety", () => {
       startMarker: incomparableMarker,
     });
 
-    const running = resolveRunning(home);
+    const running = await resolveRunning(home);
     assert.equal(running?.pid, pid);
     assert.equal(running?.identityUnknown, false);
 
@@ -157,7 +157,7 @@ describe("process identity safety", () => {
   it("verifies ownership by start marker alone when executable identity is inconclusive but marker matches", async () => {
     const home = tempHome();
     const pid = spawnLiveChild();
-    const startMarker = readProcessStartMarker(pid);
+    const startMarker = await readProcessStartMarker(pid);
     if (!startMarker) return;
 
     writePidRecord(home, {
@@ -167,7 +167,7 @@ describe("process identity safety", () => {
       startMarker,
     });
 
-    const running = resolveRunning(home);
+    const running = await resolveRunning(home);
     assert.equal(running?.pid, pid);
     assert.equal(running?.identityUnknown, false);
 
@@ -187,10 +187,10 @@ describe("inspectRunning", () => {
     const before = snapshotHome(home);
 
     // The live child is not the managed CPA, so both variants report not-running.
-    assert.equal(inspectRunning(home), undefined);
+    assert.equal(await inspectRunning(home), undefined);
     assert.deepEqual(snapshotHome(home), before);
 
-    assert.equal(resolveRunning(home), undefined);
+    assert.equal(await resolveRunning(home), undefined);
     assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "rollback-binary");
     assert.equal(fs.existsSync(cpaLayout(home).pidFile), false);
   });
@@ -202,10 +202,10 @@ describe("inspectRunning", () => {
     writePidRecord(home, { pid, exe: process.execPath, startedAt: new Date().toISOString() });
     const pidFile = cpaLayout(home).pidFile;
 
-    assert.equal(inspectRunning(home), undefined);
+    assert.equal(await inspectRunning(home), undefined);
     assert.equal(fs.existsSync(pidFile), true);
 
-    assert.equal(resolveRunning(home), undefined);
+    assert.equal(await resolveRunning(home), undefined);
     assert.equal(fs.existsSync(pidFile), false);
   });
 });
@@ -272,11 +272,11 @@ describe("resolveRunning", () => {
   it("verifies a live process by executable path and start marker", async () => {
     const home = tempHome();
     const pid = spawnLiveChild();
-    const startMarker = readProcessStartMarker(pid);
+    const startMarker = await readProcessStartMarker(pid);
     const startedAt = new Date().toISOString();
     writePidRecord(home, { pid, exe: process.execPath, startedAt, startMarker });
 
-    const running = resolveRunning(home);
+    const running = await resolveRunning(home);
     assert.equal(running?.pid, pid);
     assert.equal(running?.identityUnknown, false);
 
@@ -289,7 +289,7 @@ describe("resolveRunning", () => {
         startedAt,
         startMarker: differentComparableStartMarker(startMarker),
       });
-      assert.equal(resolveRunning(home), undefined);
+      assert.equal(await resolveRunning(home), undefined);
       assert.equal(fs.existsSync(cpaLayout(home).pidFile), false);
     }
   });

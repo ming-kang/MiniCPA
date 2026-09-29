@@ -47,6 +47,10 @@ Before checking the binary, `cpa update` rebuilds an existing `config.yaml` from
 
 Downloads and integrity checks finish before a running CLIProxyAPI process is stopped; it is restarted only when its binary is replaced. An already-current binary is skipped unless `--force` is used. If only the config changed, MiniCPA prints that it will take effect on the next `cpa start` or `cpa restart`.
 
+Binary rollback uses only the backup created by that update. A leftover backup from an earlier update cannot replace an untouched current binary. If install metadata cannot be written during recovery, MiniCPA still attempts to restart the previous binary and reports the metadata error. SHA-256 verification and ZIP extraction stream data with bounded buffers.
+
+Mutating commands hold a kernel-owned lease for their entire operation, including lock-file recovery. Windows uses a named pipe, Linux an abstract Unix socket, and macOS an exclusive loopback TCP listener derived from the application path. The lease disappears when the command exits or crashes; `state/cpa.lock` remains the diagnostic record. A busy endpoint is never taken over. On macOS, an unrelated listener can cause a lock conflict; the error includes the endpoint. Avoid running different MiniCPA versions concurrently during an upgrade.
+
 ```bash
 cpa update check       # check the binary without installing
 cpa update             # update the binary
@@ -103,11 +107,28 @@ Upgrading MiniCPA does not stop, restart, or modify the managed CLIProxyAPI proc
 
 `cpa auto` toggles login autostart; `cpa auto on` and `cpa auto off` set it explicitly. Use the explicit `off` form for deterministic cleanup even when inspection is unavailable. Enabling requires a stable, direct npm-global MiniCPA installation; npx caches, local/source installs, and links are rejected. It changes only future automatic startup and does not start or stop the current CLIProxyAPI process. On Windows it registers a hidden WScript launcher (`wscript.exe` plus a generated `.vbs` under `%LOCALAPPDATA%\MiniCPA`), so `cpa start --no-wait` no longer flashes a console window at logon. Linux uses a systemd user unit and records the effective `XDG_DATA_HOME` so the login service selects the same MiniCPA instance; that unit starts at login, so a headless machine also needs `loginctl enable-linger` (an argument-free `cpa auto` prints this hint when linger is off).
 
-`cpa status` reports `Autostart  on`, `off`, `stale`, or `disabled`. `stale` means an OS registration exists but targets a different launcher; an argument-free `cpa auto` repairs it. `disabled` means the registration is present but disabled by the OS; an argument-free `cpa auto` re-enables it. Inspection failures are reported as `unknown` without hiding runtime status. Read-only commands report the CLIProxyAPI version last recorded after a healthy install/restart and never execute the active binary, so they cannot hold a Windows image lock against `cpa update`.
+`cpa status` shows aligned configuration, version, download transport, and runtime details. `Download Via` reflects the environment proxy used for HTTPS downloads, with credentials redacted and any `NO_PROXY` rules noted. API and configuration paths are shown even while the instance is stopped.
+
+```text
+Source           Local File
+MiniCPA Version  0.4.3
+Core Version     7.2.92
+Download Via     Environment Proxy · http://127.0.0.1:7890
+Local API        http://127.0.0.1:8317
+Web Panel        http://127.0.0.1:8317/management.html
+Core Config      C:\Users\Asterin\AppData\Local\MiniCPA\instance\config.yaml
+Home             C:\Users\Asterin\AppData\Local\MiniCPA\instance
+Autostart        off
+Status           stopped
+```
+
+Autostart is reported as `on`, `off`, `stale`, or `disabled`. `stale` means an OS registration exists but targets a different launcher; an argument-free `cpa auto` repairs it. `disabled` means the registration is present but disabled by the OS; an argument-free `cpa auto` re-enables it. Inspection failures are reported as `unknown` without hiding runtime status. Read-only commands report the CLIProxyAPI version last recorded after a healthy install/restart and never execute the active binary, so they cannot hold a Windows image lock against `cpa update`.
 
 `cpa auto on` only schedules `cpa start --no-wait`; it installs nothing. Enabling it before `cpa init` or `cpa update` still succeeds, but prints a `Note:` naming the missing config or binary — otherwise that start would fail at every login without anyone seeing it. Every `cpa start` records its outcome in `<cpa home>/logs/minicpa.log`, since a login launch discards its own output and pre-spawn failures never reach CLIProxyAPI's logs; `cpa doctor` replays the last record when it was a failure.
 
 `cpa logs` prints the last `-n, --lines <n>` lines from stdout and stderr logs (default `80`; positive whole numbers only). `--err` selects the error log, while `-f`/`--follow` streams new output and ignores `--lines`.
+
+Log following detects file replacement, waits for slow output consumers, and reports file-access failures through the normal CLI error handler. In combined stdout/stderr output, very long lines are emitted in bounded fragments to keep memory usage bounded.
 
 Errors print a short message. Set `DEBUG=1` to include stack traces.
 

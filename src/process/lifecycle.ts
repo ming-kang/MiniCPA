@@ -12,7 +12,12 @@ import { rotateFileIfLarge, sleep, tailFile } from "../util.js";
 import { isProcessAlive } from "./alive.js";
 import { buildCredentialSafeChildEnv } from "./child-env.js";
 import { readinessUrls, waitForAnyHttpOk } from "./health.js";
-import { classifyProcessIdentity, probePidReuse, readProcessStartMarker } from "./pid-identity.js";
+import {
+  inspectProcessIdentity,
+  startMarkersProveReuse,
+  startMarkersProveIdentity,
+  readProcessStartMarker,
+} from "./pid-identity.js";
 import {
   findRunnableExecutable,
   recoverUnlockProbeBinary,
@@ -41,21 +46,11 @@ export type RunningInfo = {
  * without it nothing on disk is touched, so unlocked read-only commands cannot
  * race a lock-holding `cpa update` over the binary it is replacing.
  */
-function evaluateRunning(home: string, repair: boolean): RunningInfo | undefined {
+async function evaluateRunning(home: string, repair: boolean): Promise<RunningInfo | undefined> {
   const record = readPidRecord(home);
   if (!record) return undefined;
 
   if (!isProcessAlive(record.pid)) {
-    if (repair) clearPid(home);
-    return undefined;
-  }
-
-  const {
-    currentMarker,
-    reused,
-    matched: markerVerified,
-  } = probePidReuse(record.pid, record.startMarker);
-  if (reused) {
     if (repair) clearPid(home);
     return undefined;
   }
@@ -71,7 +66,12 @@ function evaluateRunning(home: string, repair: boolean): RunningInfo | undefined
     exe = findRunnableExecutable(home) ?? record.exe;
   }
 
-  const identity = classifyProcessIdentity(record.pid, exe);
+  const { currentMarker, identity } = await inspectProcessIdentity(record.pid, exe);
+  if (startMarkersProveReuse(record.startMarker, currentMarker)) {
+    if (repair) clearPid(home);
+    return undefined;
+  }
+  const markerVerified = startMarkersProveIdentity(record.startMarker, currentMarker);
   if (identity === "mismatch") {
     if (repair) clearPid(home);
     return undefined;
@@ -95,12 +95,12 @@ function evaluateRunning(home: string, repair: boolean): RunningInfo | undefined
 }
 
 /** Repairing lookup for commands that hold the MiniCPA lock. */
-export function resolveRunning(home: string): RunningInfo | undefined {
+export async function resolveRunning(home: string): Promise<RunningInfo | undefined> {
   return evaluateRunning(home, true);
 }
 
 /** Read-only lookup for unlocked commands; never mutates the instance home. */
-export function inspectRunning(home: string): RunningInfo | undefined {
+export async function inspectRunning(home: string): Promise<RunningInfo | undefined> {
   return evaluateRunning(home, false);
 }
 
@@ -161,8 +161,8 @@ async function killUntrackedChild(pid: number): Promise<void> {
 }
 
 /** Re-check immediately before a destructive signal to avoid PID-reuse kills. */
-function assertSafeToStop(home: string, pid: number): void {
-  const current = resolveRunning(home);
+async function assertSafeToStop(home: string, pid: number): Promise<void> {
+  const current = await resolveRunning(home);
   if (!current || current.pid !== pid || current.identityUnknown) {
     throw new Error(
       `Refusing to stop PID=${pid}: MiniCPA can no longer verify it is the managed CLIProxyAPI process. ` +
@@ -221,7 +221,7 @@ export type StartOptions = {
 export async function startDaemon(home: string, options?: StartOptions): Promise<RunningInfo> {
   recoverUnlockProbeBinary(home);
 
-  const existing = resolveRunning(home);
+  const existing = await resolveRunning(home);
   if (existing) {
     if (!options?.noWait) {
       const ready = await waitForAnyHttpOk(
@@ -286,7 +286,7 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
   }
 
   const startedAt = new Date().toISOString();
-  const startMarker = readProcessStartMarker(child.pid);
+  const startMarker = await readProcessStartMarker(child.pid);
   try {
     writePidRecord(home, { pid: child.pid, exe, startedAt, startMarker });
   } catch (err) {
@@ -335,7 +335,7 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
 }
 
 export async function stopDaemon(home: string): Promise<boolean> {
-  const running = resolveRunning(home);
+  const running = await resolveRunning(home);
   if (!running) {
     clearPid(home);
     return false;
@@ -350,7 +350,7 @@ export async function stopDaemon(home: string): Promise<boolean> {
   }
 
   // Verify ownership immediately before sending any signal (graceful or force).
-  assertSafeToStop(home, pid);
+  await assertSafeToStop(home, pid);
 
   if (process.platform === "win32") {
     // Graceful taskkill (no /F) cannot signal windowless detached children;
@@ -363,7 +363,7 @@ export async function stopDaemon(home: string): Promise<boolean> {
       }
     }
     if (isProcessAlive(pid)) {
-      assertSafeToStop(home, pid);
+      await assertSafeToStop(home, pid);
       await runTaskkill(pid, true);
       const hardDeadline = Date.now() + STOP_KILL_WAIT_MS;
       while (Date.now() < hardDeadline && isProcessAlive(pid)) {
@@ -381,7 +381,7 @@ export async function stopDaemon(home: string): Promise<boolean> {
       await sleep(200);
     }
     if (isProcessAlive(pid)) {
-      assertSafeToStop(home, pid);
+      await assertSafeToStop(home, pid);
       try {
         process.kill(pid, "SIGKILL");
       } catch (err) {

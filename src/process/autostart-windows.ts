@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { writeFileAtomic } from "../fs-atomic.js";
-import type { AutostartDependencies, AutostartState } from "./autostart.js";
+import type { AutostartDependencies, AutostartState } from "./autostart-shared.js";
 import {
+  withRegistrationFile,
   assertSafeLauncherValue,
   autostartVerdict,
   commandFailure,
@@ -11,7 +11,7 @@ import {
   nodePathOf,
   cliPathOf,
   runAutostartCommand,
-} from "./autostart.js";
+} from "./autostart-shared.js";
 
 const WINDOWS_RUN_SUBKEY = String.raw`Software\Microsoft\Windows\CurrentVersion\Run`;
 const WINDOWS_APPROVAL_SUBKEY = String.raw`Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`;
@@ -129,13 +129,6 @@ export function windowsVbsContents(nodePath: string, cliPath: string): string {
   ].join("\r\n");
 }
 
-function writeWindowsLauncher(deps?: AutostartDependencies): string {
-  const vbsPath = windowsVbsPath(deps);
-  const contents = `\uFEFF${windowsVbsContents(nodePathOf(deps), cliPathOf(deps))}`;
-  writeFileAtomic(vbsPath, Buffer.from(contents, "utf16le"));
-  return vbsPath;
-}
-
 /**
  * Read the generated Windows launcher back as comparable text.
  */
@@ -183,31 +176,30 @@ export async function setWindowsAutostart(
   deps?: AutostartDependencies,
 ): Promise<void> {
   const vbsPath = windowsVbsPath(deps);
-  if (enabled) writeWindowsLauncher(deps);
-  const result = await runAutostartCommand(
-    deps,
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_SET_SCRIPT],
-    {
-      [WINDOWS_MODE_ENV]: enabled ? "on" : "off",
-      ...(enabled ? { [WINDOWS_EXPECTED_ENV]: windowsLauncherCommand(deps) } : {}),
-    },
-  );
-  if (result.code !== 0) {
-    if (enabled) {
-      try {
-        fs.rmSync(vbsPath, { force: true });
-      } catch {
-        /* leftover launcher is inert without the Run value */
-      }
-    }
-    throw commandFailure(enabled ? "enable" : "disable", result);
-  }
-  if (!enabled) {
+  const register = async (): Promise<void> => {
+    const result = await runAutostartCommand(
+      deps,
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_SET_SCRIPT],
+      {
+        [WINDOWS_MODE_ENV]: enabled ? "on" : "off",
+        ...(enabled ? { [WINDOWS_EXPECTED_ENV]: windowsLauncherCommand(deps) } : {}),
+      },
+    );
+    if (result.code !== 0) throw commandFailure(enabled ? "enable" : "disable", result);
+  };
+  if (enabled) {
+    const contents = Buffer.from(
+      `\uFEFF${windowsVbsContents(nodePathOf(deps), cliPathOf(deps))}`,
+      "utf16le",
+    );
+    await withRegistrationFile(vbsPath, contents, register);
+  } else {
+    await register();
     try {
       fs.rmSync(vbsPath, { force: true });
     } catch {
-      /* the Run value is already gone; a leftover launcher cannot start again */
+      /* registration is already gone */
     }
   }
 }

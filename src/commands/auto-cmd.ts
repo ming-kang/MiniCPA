@@ -1,8 +1,8 @@
+import { lingerHint } from "../process/autostart-linux.js";
 import fs from "node:fs";
 import { createContext } from "../context.js";
 import {
   inspectAutostartState,
-  lingerHint,
   type AutostartState,
   setAutostartEnabled,
 } from "../process/autostart.js";

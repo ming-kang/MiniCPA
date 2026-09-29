@@ -1,3 +1,4 @@
+import { LINGER_HINT } from "../process/autostart-linux.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -16,7 +17,7 @@ import { writeInstallState, writePidRecord } from "../state.js";
 import { withHttpFixture, withHttpsFixture } from "../test-fixtures/http-server.js";
 import type { GithubReachability } from "../update/github-client.js";
 import { DEFAULT_LOG_ROTATE_BYTES } from "../util.js";
-import { LINGER_HINT, type AutostartState } from "../process/autostart.js";
+import type { AutostartState } from "../process/autostart.js";
 import { runDoctor, type DoctorDeps } from "./doctor.js";
 
 const originalLocalAppData = process.env.LOCALAPPDATA;

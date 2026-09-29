@@ -1,6 +1,6 @@
 {
   "name": "@astralyn/minicpa",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Manage, run, and update one local CLIProxyAPI instance",
   "license": "MIT",
   "author": "ming-kang",
@@ -50,19 +50,21 @@
     "access": "public"
   },
   "dependencies": {
-    "adm-zip": "^0.6.0",
     "commander": "^13.1.0",
     "cross-spawn": "^7.0.6",
     "semver": "^7.8.5",
     "tar": "^7.5.22",
-    "undici": "^7.29.0",
-    "yaml": "^2.7.0"
+    "undici": "^7.30.0",
+    "yaml": "^2.7.0",
+    "yauzl": "^3.4.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.5",
     "@types/cross-spawn": "^6.0.6",
     "@types/node": "^24.0.0",
     "@types/semver": "^7.8.0",
+    "@types/yauzl": "^3.4.0",
+    "adm-zip": "^0.6.1",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2"
   }

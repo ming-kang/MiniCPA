@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AutostartDependencies, AutostartState } from "./autostart.js";
+import type { AutostartDependencies, AutostartState } from "./autostart-shared.js";
 import {
   assertSafeLauncherValue,
   autostartVerdict,
@@ -11,7 +11,7 @@ import {
   registerWithRollback,
   runAutostartCommand,
   readFileIfExists,
-} from "./autostart.js";
+} from "./autostart-shared.js";
 
 const LAUNCH_AGENT_LABEL = "com.astralyn.minicpa";
 const LAUNCH_AGENT_NAME = `${LAUNCH_AGENT_LABEL}.plist`;

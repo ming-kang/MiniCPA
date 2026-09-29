@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
+import spawnCommand from "cross-spawn";
 import fs from "node:fs";
-import path from "node:path";
-import { syncDirectory } from "../fs-atomic.js";
+import { renameWithWindowsRetry, syncDirectory } from "../fs-atomic.js";
 import {
   activeExecutablePath,
   backupExecutablePath,
@@ -12,7 +12,12 @@ import { readInstallState, type InstallState } from "../state.js";
 import { buildCredentialSafeChildEnv } from "./child-env.js";
 
 /** Outcome of a finished child process: exit code plus its captured streams. */
-export type CommandResult = { code: number; stdout: string; stderr: string };
+export type CommandResult = {
+  code: number;
+  stdout: string;
+  stderr: string;
+  signal?: NodeJS.Signals | null;
+};
 
 /** MiniCPA tokens are always stripped from the child environment (see AGENTS.md). */
 export async function runCommand(
@@ -22,44 +27,62 @@ export async function runCommand(
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     timeoutMs?: number;
+    maxOutputBytes?: number;
   },
 ): Promise<CommandResult> {
   const timeoutMs = options?.timeoutMs ?? 30_000;
   const env = buildCredentialSafeChildEnv({ ...process.env, ...options?.env });
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawnCommand(command, args, {
       cwd: options?.cwd,
       env,
       windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    let stdout = "";
-    let stderr = "";
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let outputBytes = 0;
     let settled = false;
 
-    const timer = setTimeout(() => {
+    const fail = (error: Error): void => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       child.kill("SIGKILL");
-      reject(new Error(`Command timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`));
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      reject(error);
+    };
+
+    const timer = setTimeout(() => {
+      fail(new Error(`Command timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`));
     }, timeoutMs);
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
+    const capture = (chunks: Buffer[], chunk: Buffer): void => {
+      if (settled) return;
+      outputBytes += chunk.length;
+      if (outputBytes > (options?.maxOutputBytes ?? 1024 * 1024)) {
+        fail(new Error(`Command output exceeds capture limit: ${command}`));
+      } else chunks.push(chunk);
+    };
+    child.stdout?.on("data", (chunk: Buffer) => capture(stdout, chunk));
+    child.stderr?.on("data", (chunk: Buffer) => capture(stderr, chunk));
     child.on("error", (err) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       reject(err);
     });
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ code: code ?? 1, stdout, stderr });
+      resolve({
+        code: code ?? 1,
+        signal,
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+      });
     });
   });
 }
@@ -92,92 +115,89 @@ export async function readCurrentRuntimeVersion(home: string): Promise<string | 
   return readInstalledRuntimeVersion(activeExecutablePath(home));
 }
 
-function moveAsideExisting(target: string, backup: string): void {
-  if (!fs.existsSync(target)) return;
-  try {
-    if (fs.existsSync(backup)) fs.unlinkSync(backup);
-  } catch {
-    /* ignore */
+/** A replacement owns its backup only after the old active file has been moved. */
+export class RuntimeBinaryTransaction {
+  private phase: "prepared" | "backed-up" | "published" = "prepared";
+  private readonly hadPrevious: boolean;
+  private readonly target: string;
+  private readonly backup: string;
+
+  constructor(private readonly home: string) {
+    this.target = activeExecutablePath(home);
+    this.backup = backupExecutablePath(home);
+    this.hadPrevious = fs.existsSync(this.target);
   }
-  try {
-    fs.renameSync(target, backup);
-  } catch {
-    fs.copyFileSync(target, backup);
+
+  install(source: string): void {
+    ensureDir(this.home);
+    const staging = `${this.target}.new`;
     try {
-      fs.unlinkSync(target);
-    } catch {
-      /* Windows may still hold the file briefly */
+      stageBinary(source, staging);
+      if (this.hadPrevious) {
+        // Failure here leaves the active version untouched and owns no backup.
+        fs.rmSync(this.backup, { force: true });
+        renameWithWindowsRetry(this.target, this.backup);
+        this.phase = "backed-up";
+      }
+      renameWithWindowsRetry(staging, this.target);
+      this.phase = "published";
+      syncDirectory(this.home);
+    } finally {
+      try {
+        fs.rmSync(staging, { force: true });
+      } catch {
+        /* preserve install result */
+      }
     }
+  }
+
+  rollback(): { restored: boolean; previousAvailable: boolean } {
+    if (this.phase === "prepared") {
+      return { restored: false, previousAvailable: this.hadPrevious && fs.existsSync(this.target) };
+    }
+    if (this.hadPrevious) {
+      const restored = restoreRuntimeBinaryFromBackup(this.home);
+      return { restored, previousAvailable: restored };
+    }
+    try {
+      fs.rmSync(this.target, { force: true });
+    } catch {
+      /* no usable previous version */
+    }
+    return { restored: false, previousAvailable: false };
+  }
+
+  commit(): void {
+    clearRuntimeBinaryBackup(this.home);
   }
 }
 
-/**
- * Replace the active CPA binary in-place, keeping a `.bak` for rollback.
- *
- * Deliberately does NOT record the installed version: install state is written
- * only after a healthy restart (see installBinaryPhase), so a failed update
- * never leaves state claiming a version that is not actually running.
- */
-export function installRuntimeBinary(home: string, sourceExe: string): void {
-  ensureDir(home);
-  const target = activeExecutablePath(home);
-  const backup = backupExecutablePath(home);
-  const staging = `${target}.new`;
-
-  fs.copyFileSync(sourceExe, staging);
-  if (process.platform !== "win32") {
-    fs.chmodSync(staging, 0o755);
-  }
-  // Flush the staged bytes before publishing them under the runnable name: a
-  // power loss inside the writeback window would otherwise leave a truncated
-  // executable that resolveRunnableExecutable happily hands back, and the `.bak`
-  // that could have rescued it is dropped as soon as the update succeeds.
-  const stagingFd = fs.openSync(staging, "r+");
+function stageBinary(source: string, staging: string): void {
+  fs.copyFileSync(source, staging);
+  if (process.platform !== "win32") fs.chmodSync(staging, 0o755);
+  const fd = fs.openSync(staging, "r+");
   try {
-    fs.fsyncSync(stagingFd);
+    fs.fsyncSync(fd);
   } finally {
-    fs.closeSync(stagingFd);
+    fs.closeSync(fd);
   }
-
-  moveAsideExisting(target, backup);
-
-  try {
-    fs.renameSync(staging, target);
-  } catch {
-    // Windows can refuse rename over existing; copy then drop staging.
-    fs.copyFileSync(staging, target);
-    try {
-      fs.unlinkSync(staging);
-    } catch {
-      /* ignore */
-    }
-  }
-
-  if (process.platform !== "win32") {
-    fs.chmodSync(target, 0o755);
-  }
-
-  syncDirectory(path.dirname(target));
 }
 
-/** Restore `.bak` over the active binary (best-effort). */
+/** Replace the active binary; callers own rollback and recording the verified version. */
+export function installRuntimeBinary(home: string, sourceExe: string): void {
+  new RuntimeBinaryTransaction(home).install(sourceExe);
+}
+
+/** Atomically restore `.bak`, without needing free space for another binary copy. */
 export function restoreRuntimeBinaryFromBackup(home: string): boolean {
   const target = activeExecutablePath(home);
   const backup = backupExecutablePath(home);
   if (!fs.existsSync(backup)) return false;
 
   try {
-    if (fs.existsSync(target)) {
-      try {
-        fs.unlinkSync(target);
-      } catch {
-        /* continue with overwrite copy */
-      }
-    }
-    fs.copyFileSync(backup, target);
-    if (process.platform !== "win32") {
-      fs.chmodSync(target, 0o755);
-    }
+    if (process.platform !== "win32") fs.chmodSync(backup, 0o755);
+    renameWithWindowsRetry(backup, target);
+    syncDirectory(home);
     return true;
   } catch {
     return false;

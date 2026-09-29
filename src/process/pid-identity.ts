@@ -1,4 +1,5 @@
-import { execFileSync } from "node:child_process";
+import { runCommand } from "./runtime.js";
+import { readWindowsProcess } from "./windows-process.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -30,41 +31,7 @@ export function imageMatchesExpectedExe(imageOrComm: string, expectedExe: string
   return false;
 }
 
-/**
- * PowerShell cold starts routinely exceed a few seconds on throttled machines;
- * remember which shell answered so later probes skip the dead candidate.
- */
-let cachedPowerShell: string | undefined;
-
-function runPowerShell(script: string, timeoutMs = 10_000): string | undefined {
-  const shells = cachedPowerShell
-    ? [cachedPowerShell, ...["powershell.exe", "pwsh.exe"].filter((s) => s !== cachedPowerShell)]
-    : ["powershell.exe", "pwsh.exe"];
-  for (const shell of shells) {
-    try {
-      const output = execFileSync(shell, ["-NoProfile", "-NonInteractive", "-Command", script], {
-        encoding: "utf8",
-        windowsHide: true,
-        timeout: timeoutMs,
-      }).trim();
-      cachedPowerShell = shell;
-      if (output) return output;
-    } catch {
-      /* try the other PowerShell executable */
-    }
-  }
-  return undefined;
-}
-
 export type ProcessIdentity = "match" | "mismatch" | "unknown";
-
-function readWindowsExecutablePath(pid: number): string | undefined {
-  const script = [
-    `$process = Get-Process -Id ${pid} -ErrorAction Stop`,
-    "if ($process.Path) { [Console]::Out.Write($process.Path) }",
-  ].join("; ");
-  return runPowerShell(script);
-}
 
 /**
  * Classify a Darwin `ps -o comm=` observation against the expected executable.
@@ -89,7 +56,10 @@ export function classifyDarwinComm(commOutput: string, expectedExe: string): Pro
  * A basename-only signal is useful for detecting a mismatch, but never enough to
  * authorize termination: another MiniCPA or unrelated process can share that name.
  */
-export function classifyProcessIdentity(pid: number, expectedExe: string): ProcessIdentity {
+export async function classifyProcessIdentity(
+  pid: number,
+  expectedExe: string,
+): Promise<ProcessIdentity> {
   const expected = expectedExe || "";
   if (!expected) return "unknown";
 
@@ -106,27 +76,17 @@ export function classifyProcessIdentity(pid: number, expectedExe: string): Proce
     }
 
     if (process.platform === "win32") {
-      const executable = readWindowsExecutablePath(pid);
-      if (executable) return exePathsMatch(executable, expected) ? "match" : "mismatch";
-
-      const out = execFileSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], {
-        encoding: "utf8",
-        windowsHide: true,
-        timeout: 3000,
-      }).trim();
-      const image = parseTasklistImageName(out);
-      if (!image) return "mismatch";
-      return imageMatchesExpectedExe(image, expected) ? "unknown" : "mismatch";
+      const { executable } = await readWindowsProcess(pid);
+      return executable ? (exePathsMatch(executable, expected) ? "match" : "mismatch") : "unknown";
     }
 
     if (process.platform === "darwin") {
       // -ww sets termwidth to unlimited; without it BSD ps truncates the last
       // column to the terminal width (79 columns when stdout is a pipe).
-      const out = execFileSync("ps", ["-ww", "-p", String(pid), "-o", "comm="], {
-        encoding: "utf8",
-        timeout: 3000,
+      const result = await runCommand("ps", ["-ww", "-p", String(pid), "-o", "comm="], {
+        timeoutMs: 3000,
       });
-      return classifyDarwinComm(out, expected);
+      return result.code === 0 ? classifyDarwinComm(result.stdout, expected) : "unknown";
     }
   } catch {
     return "unknown";
@@ -136,7 +96,7 @@ export function classifyProcessIdentity(pid: number, expectedExe: string): Proce
 }
 
 /** Stable process-creation marker used to detect PID reuse. */
-export function readProcessStartMarker(pid: number): string | undefined {
+export async function readProcessStartMarker(pid: number): Promise<string | undefined> {
   if (!Number.isInteger(pid) || pid <= 0) return undefined;
   try {
     if (process.platform === "linux") {
@@ -158,10 +118,7 @@ export function readProcessStartMarker(pid: number): string | undefined {
       return `${bootId}:${startTicks}`;
     }
     if (process.platform === "win32") {
-      return runPowerShell(
-        `$p = Get-Process -Id ${pid} -ErrorAction Stop; ` +
-          "[Console]::Out.Write($p.StartTime.ToUniversalTime().Ticks)",
-      );
+      return (await readWindowsProcess(pid)).startMarker;
     }
     if (process.platform === "darwin") {
       // `lstart` is rendered in the caller's timezone and LC_TIME locale, so the
@@ -169,12 +126,11 @@ export function readProcessStartMarker(pid: number): string | undefined {
       // or after a timezone change. Pin both, then convert the pinned text to a
       // tagged absolute instant here, at read time, so the stored marker carries
       // the timezone it was read in instead of leaving it to be guessed later.
-      const output = execFileSync("ps", ["-ww", "-p", String(pid), "-o", "lstart="], {
-        encoding: "utf8",
-        timeout: 3_000,
-        env: { ...process.env, TZ: "UTC", LC_ALL: "C", LC_TIME: "C" },
+      const result = await runCommand("ps", ["-ww", "-p", String(pid), "-o", "lstart="], {
+        timeoutMs: 3_000,
+        env: { TZ: "UTC", LC_ALL: "C", LC_TIME: "C" },
       });
-      return canonicalizeStartMarker(output) || undefined;
+      return result.code === 0 ? canonicalizeStartMarker(result.stdout) || undefined : undefined;
     }
   } catch {
     return undefined;
@@ -329,12 +285,14 @@ export type PidMarkerProbeResult = {
  * `readMarker` exists so tests can supply a marker shape from another platform;
  * production callers use the default probe.
  */
-export function probePidReuse(
+export async function probePidReuse(
   pid: number,
   recordedMarker?: string,
-  readMarker: (pid: number) => string | undefined = readProcessStartMarker,
-): PidMarkerProbeResult {
-  const currentMarker = readMarker(pid);
+  readMarker: (
+    pid: number,
+  ) => string | undefined | Promise<string | undefined> = readProcessStartMarker,
+): Promise<PidMarkerProbeResult> {
+  const currentMarker = await readMarker(pid);
   return {
     currentMarker,
     reused: startMarkersProveReuse(recordedMarker, currentMarker),
@@ -369,4 +327,31 @@ export function parseTasklistImageName(tasklistOutput: string): string | undefin
   if (quoted?.[1]) return quoted[1];
   const first = line.split(",")[0]?.replace(/^"|"$/g, "").trim();
   return first || undefined;
+}
+
+/** Snapshot scope is one inspection; destructive callers must always take a fresh snapshot. */
+export async function inspectProcessIdentity(
+  pid: number,
+  expectedExe: string,
+): Promise<{
+  currentMarker?: string;
+  identity: ProcessIdentity;
+}> {
+  if (process.platform === "win32") {
+    const facts = await readWindowsProcess(pid);
+    return {
+      currentMarker: facts.startMarker,
+      identity:
+        expectedExe && facts.executable
+          ? exePathsMatch(facts.executable, expectedExe)
+            ? "match"
+            : "mismatch"
+          : "unknown",
+    };
+  }
+  const [currentMarker, identity] = await Promise.all([
+    readProcessStartMarker(pid),
+    classifyProcessIdentity(pid, expectedExe),
+  ]);
+  return { currentMarker, identity };
 }

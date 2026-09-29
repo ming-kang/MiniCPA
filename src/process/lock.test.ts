@@ -69,6 +69,50 @@ function differentComparableStartMarker(marker: string): string {
 }
 
 describe("withMiniCpaLock", () => {
+  it("keeps ownership even if the diagnostic lock file disappears", async () => {
+    configureIsolatedAppRoot();
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const holding = withMiniCpaLock("first", async () => {
+      fs.unlinkSync(lockPath());
+      entered();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    await ready;
+    try {
+      await assert.rejects(() => withMiniCpaLock("second", async () => undefined), /lock lease/);
+    } finally {
+      release();
+      await holding;
+    }
+  });
+
+  it("does not treat unrelated concurrent tasks as reentrant owners", async () => {
+    configureIsolatedAppRoot();
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const holding = withMiniCpaLock("first", async () => {
+      entered();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    await ready;
+    try {
+      await assert.rejects(() => withMiniCpaLock("second", async () => undefined), /lock|running/i);
+    } finally {
+      release();
+      await holding;
+    }
+  });
   it("uses one global lock and releases it", async () => {
     configureIsolatedAppRoot();
     let ran = false;
@@ -195,7 +239,7 @@ describe("withMiniCpaLock", () => {
           resolve();
         }
       });
-      child.once("exit", () => {
+      child.once("exit", async () => {
         clearTimeout(timer);
         reject(new Error(`lock holder exited early. stderr: ${stderr}`));
       });
@@ -221,7 +265,7 @@ describe("withMiniCpaLock", () => {
     configureIsolatedAppRoot();
     const holderPid = spawnLiveHolder();
     // Only meaningful when the platform can produce markers for the holder.
-    const currentMarker = readProcessStartMarker(holderPid);
+    const currentMarker = await readProcessStartMarker(holderPid);
     if (!currentMarker) return;
 
     fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
@@ -289,7 +333,7 @@ function snapshotStateDir(): string {
 }
 
 describe("inspectMiniCpaLock", () => {
-  it("reports an absent lock without creating anything", () => {
+  it("reports an absent lock without creating anything", async () => {
     configureIsolatedAppRoot();
     const status = inspectMiniCpaLock();
     assert.equal(status.state, "absent");
@@ -299,7 +343,7 @@ describe("inspectMiniCpaLock", () => {
     assert.equal(fs.existsSync(path.dirname(lockPath())), false);
   });
 
-  it("reports a held lock and leaves the state directory untouched", () => {
+  it("reports a held lock and leaves the state directory untouched", async () => {
     configureIsolatedAppRoot();
     const acquiredAt = new Date(Date.now() - 5 * 60_000).toISOString();
     fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
@@ -322,7 +366,7 @@ describe("inspectMiniCpaLock", () => {
     assert.equal(after, before);
   });
 
-  it("reports a corrupt lock as unreadable", () => {
+  it("reports a corrupt lock as unreadable", async () => {
     configureIsolatedAppRoot();
     fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
     fs.writeFileSync(lockPath(), "not-json");
@@ -335,7 +379,7 @@ describe("inspectMiniCpaLock", () => {
 });
 
 describe("listLockPreemptResidue", () => {
-  it("finds orphaned preempt files beside the lock", () => {
+  it("finds orphaned preempt files beside the lock", async () => {
     configureIsolatedAppRoot();
     const stateDir = path.dirname(lockPath());
     fs.mkdirSync(stateDir, { recursive: true });
@@ -347,7 +391,7 @@ describe("listLockPreemptResidue", () => {
     assert.deepEqual(listLockPreemptResidue(), [residue]);
   });
 
-  it("returns an empty list when the state directory does not exist", () => {
+  it("returns an empty list when the state directory does not exist", async () => {
     configureIsolatedAppRoot();
     assert.deepEqual(listLockPreemptResidue(), []);
     assert.equal(fs.existsSync(path.dirname(lockPath())), false);
@@ -355,7 +399,28 @@ describe("listLockPreemptResidue", () => {
 });
 
 describe("preemptLock", () => {
-  it("restores the lock when content changed since the stale decision", () => {
+  it("never displaces a live replacement while examining stale content", async () => {
+    configureIsolatedAppRoot();
+    fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
+    fs.writeFileSync(lockPath(), "holder-B");
+    const originalRename = fs.renameSync;
+    let displaced = false;
+    fs.renameSync = (from, to) => {
+      originalRename(from, to);
+      if (String(from) === lockPath()) {
+        displaced = true;
+        fs.writeFileSync(lockPath(), "holder-C");
+      }
+    };
+    try {
+      assert.equal(preemptLock(lockPath(), { kind: "unreadable", raw: "stale-A" }), false);
+    } finally {
+      fs.renameSync = originalRename;
+    }
+    assert.equal(displaced, false);
+    assert.equal(fs.readFileSync(lockPath(), "utf8"), "holder-B");
+  });
+  it("restores the lock when content changed since the stale decision", async () => {
     configureIsolatedAppRoot();
     fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
     const liveContent = `${JSON.stringify({ pid: process.pid, command: "live" })}\n`;
@@ -372,7 +437,7 @@ describe("preemptLock", () => {
     assert.equal(fs.readFileSync(lockPath(), "utf8"), liveContent);
   });
 
-  it("deletes the lock when content matches the stale decision", () => {
+  it("deletes the lock when content matches the stale decision", async () => {
     configureIsolatedAppRoot();
     fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
     fs.writeFileSync(lockPath(), "stale");

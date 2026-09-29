@@ -130,18 +130,22 @@ function lastPairLineEnd(map: ParsedMap, source: string): number | undefined {
   return valueEnd === undefined ? undefined : lineBoundaryAfterValue(source, valueEnd);
 }
 
+type MergeContext = {
+  source: string;
+  patches: TextPatch[];
+  insertions: Map<number, string[]>;
+  addedPaths: string[];
+  overwrittenPaths: string[];
+  templateDocument: Document;
+};
+
 function mergeMap(
   templateMap: ParsedMap,
   existing: Record<string, unknown>,
-  source: string,
   path: string[],
-  patches: TextPatch[],
-  insertions: Map<number, string[]>,
-  addedPaths: string[],
-  overwrittenPaths: string[],
-  templateDocument: Document,
-  isRoot: boolean,
+  context: MergeContext,
 ): void {
+  const { source, patches, insertions, addedPaths, overwrittenPaths, templateDocument } = context;
   const templateKeys = new Set<string>();
 
   for (const pair of templateMap.items) {
@@ -187,18 +191,7 @@ function mergeMap(
           }
         }
       } else {
-        mergeMap(
-          templateValue,
-          existingValue,
-          source,
-          fieldPath,
-          patches,
-          insertions,
-          addedPaths,
-          overwrittenPaths,
-          templateDocument,
-          false,
-        );
+        mergeMap(templateValue, existingValue, fieldPath, context);
       }
       continue;
     }
@@ -212,7 +205,7 @@ function mergeMap(
   const extraEntries = Object.entries(existing).filter(([key]) => !templateKeys.has(key));
   if (extraEntries.length === 0) return;
 
-  if (isRoot) {
+  if (path.length === 0) {
     const separator = source.endsWith("\n\n") ? "" : source.endsWith("\n") ? "\n" : "\n\n";
     addInsertion(insertions, source.length, `${separator}${renderPairs(extraEntries, 0)}`);
     return;
@@ -276,18 +269,14 @@ export function mergeCpaConfigYaml(existingYaml: string, templateYaml: string): 
   const insertions = new Map<number, string[]>();
   const addedPaths: string[] = [];
   const overwrittenPaths: string[] = [];
-  mergeMap(
-    templateDocument.contents,
-    existing,
-    templateYaml,
-    [],
-    replacements,
+  mergeMap(templateDocument.contents, existing, [], {
+    source: templateYaml,
+    patches: replacements,
     insertions,
     addedPaths,
     overwrittenPaths,
     templateDocument,
-    true,
-  );
+  });
 
   const mergedYaml = applyPatches(templateYaml, replacements, insertions);
   const validation = YAML.parseDocument(mergedYaml);

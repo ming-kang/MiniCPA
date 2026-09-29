@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import spawn from "cross-spawn";
+import { runCommand } from "../process/runtime.js";
 import { buildCredentialSafeChildEnv } from "../process/child-env.js";
 import { MINICPA_PACKAGE_NAME } from "./minicpa-release.js";
 
@@ -167,22 +167,13 @@ async function defaultCapture(
   args: string[],
   options: CommandOptions,
 ): Promise<CapturedCommand> {
-  return await new Promise<CapturedCommand>((resolve, reject) => {
-    const child = spawn(command, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    child.stdout?.on("data", (chunk: Buffer | string) => stdout.push(Buffer.from(chunk)));
-    child.stderr?.on("data", (chunk: Buffer | string) => stderr.push(Buffer.from(chunk)));
-    child.once("error", reject);
-    child.once("close", (status, signal) => {
-      resolve({
-        status,
-        signal,
-        stdout: Buffer.concat(stdout).toString("utf8"),
-        stderr: Buffer.concat(stderr).toString("utf8"),
-      });
-    });
-  });
+  const result = await runCommand(command, args, { env: options.env, timeoutMs: 10_000 });
+  return {
+    status: result.signal ? null : result.code,
+    signal: result.signal ?? null,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
 }
 
 const defaultFileSystem: FileSystem = {

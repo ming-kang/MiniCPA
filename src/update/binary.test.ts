@@ -54,7 +54,7 @@ function fakeDeps(overrides?: DepsOverrides): BinaryUpdateDeps & { calls: string
       if (overrides?.startDaemon) return overrides.startDaemon(home, options);
       return { pid: 12345, exe: activeExecutablePath(home) };
     },
-    resolveRunning(home) {
+    async resolveRunning(home) {
       calls.push("resolveRunning");
       return overrides?.resolveRunning ? overrides.resolveRunning(home) : undefined;
     },
@@ -85,6 +85,116 @@ describe("checkBinaryUpdate", () => {
 });
 
 describe("installBinaryPhase", () => {
+  it("keeps a half-started binary and its backup intact when recovery cannot stop it", async () => {
+    const home = tempHome();
+    fs.writeFileSync(activeExecutablePath(home), "old");
+    let stops = 0;
+    let running = false;
+    const deps = fakeDeps({
+      stopDaemon: async () => {
+        if (++stops > 1) throw new Error("stop denied");
+        return true;
+      },
+      startDaemon: async () => {
+        running = true;
+        throw new Error("not ready");
+      },
+      resolveRunning: async () =>
+        running ? { pid: 12345, exe: activeExecutablePath(home) } : undefined,
+    });
+    await assert.rejects(
+      () =>
+        installBinaryPhase(
+          home,
+          {
+            version: "2.0.0",
+            extractedExe: stagedExe(home, "new"),
+            wasRunning: true,
+          },
+          deps,
+        ),
+      /stop denied/,
+    );
+    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "new");
+    assert.equal(fs.readFileSync(backupExecutablePath(home), "utf8"), "old");
+  });
+
+  it("restarts the previous binary even when install metadata stays unwritable", async () => {
+    const home = tempHome();
+    fs.writeFileSync(activeExecutablePath(home), "old");
+    writeInstallState(home, { runtimeVersion: "1.0.0" });
+    let running = true;
+    let starts = 0;
+    const deps = fakeDeps({
+      stopDaemon: async () => {
+        running = false;
+        return true;
+      },
+      startDaemon: async () => {
+        starts++;
+        running = true;
+        return { pid: 12345, exe: activeExecutablePath(home) };
+      },
+      resolveRunning: async () =>
+        running ? { pid: 12345, exe: activeExecutablePath(home) } : undefined,
+    });
+    const originalOpen = fs.openSync;
+    fs.openSync = (file, ...args) => {
+      if (String(file).includes(".install.json.") && String(file).endsWith(".tmp")) {
+        throw Object.assign(new Error("metadata denied"), { code: "EACCES" });
+      }
+      return originalOpen(file, ...args);
+    };
+    try {
+      await assert.rejects(
+        () =>
+          installBinaryPhase(
+            home,
+            {
+              version: "2.0.0",
+              extractedExe: stagedExe(home, "new"),
+              wasRunning: true,
+              currentVersion: "1.0.0",
+            },
+            deps,
+          ),
+        /metadata denied/,
+      );
+    } finally {
+      fs.openSync = originalOpen;
+    }
+    assert.equal(starts, 2);
+    assert.equal(running, true);
+    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "old");
+  });
+
+  it("does not restore a stale backup after a failure before replacement", async () => {
+    const home = tempHome();
+    fs.writeFileSync(activeExecutablePath(home), "v2");
+    fs.writeFileSync(backupExecutablePath(home), "v1");
+    writeInstallState(home, { runtimeVersion: "2.0.0" });
+    await assert.rejects(
+      () =>
+        installBinaryPhase(
+          home,
+          {
+            version: "3.0.0",
+            extractedExe: stagedExe(home, "v3"),
+            wasRunning: false,
+            currentVersion: "2.0.0",
+          },
+          fakeDeps({
+            waitForBinaryUnlocked: async () => {
+              throw new Error("locked");
+            },
+          }),
+        ),
+      /locked/,
+    );
+    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "v2");
+    assert.equal(readInstallState(home).runtimeVersion, "2.0.0");
+  });
+
   it("installs, records state, and clears the backup when CPA was not running", async () => {
     const home = tempHome();
     fs.writeFileSync(activeExecutablePath(home), "old-binary");

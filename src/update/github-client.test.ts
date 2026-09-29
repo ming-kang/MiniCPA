@@ -1,3 +1,5 @@
+import { downloadToFile } from "./download.js";
+import { fetchChecksums, parseChecksumsText } from "./checksum.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -13,16 +15,13 @@ import { NetworkError } from "../http.js";
 import {
   browserReleaseAssetUrl,
   checkGithubReachability,
-  downloadToFile,
   ensureReleaseTag,
-  fetchChecksums,
   fetchLatestReleaseViaApi,
   githubAuthToken,
   githubHeaders,
   isAllowedGithubDownloadUrl,
   isSafeReleaseTag,
   normalizeTagVersion,
-  parseChecksumsText,
   parseReleaseTagFromLocation,
   releaseAssetDownloadUrl,
   resolveLatestReleaseTag,

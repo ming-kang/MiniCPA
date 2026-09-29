@@ -1,3 +1,6 @@
+import { LINGER_HINT, lingerHint, systemdUnitContents } from "./autostart-linux.js";
+import { launchAgentContents } from "./autostart-macos.js";
+import { windowsVbsContents } from "./autostart-windows.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,12 +9,7 @@ import { afterEach, describe, it } from "node:test";
 import {
   type AutostartDependencies,
   inspectAutostartState,
-  LINGER_HINT,
-  lingerHint,
-  launchAgentContents,
   setAutostartEnabled,
-  systemdUnitContents,
-  windowsVbsContents,
 } from "./autostart.js";
 import type { CommandResult } from "./runtime.js";
 import { runCommand } from "./runtime.js";

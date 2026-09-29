@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import {
   describeProxyEnv,
+  describeDownloadRoute,
   formatNetworkError,
   hasProxyEnvConfigured,
   httpFetch,
@@ -17,6 +18,44 @@ import { withHttpFixture } from "./test-fixtures/http-server.js";
 // the first httpFetch call so the lazily created proxy agent honors it.
 process.env.NO_PROXY = "127.0.0.1";
 process.env.no_proxy = "127.0.0.1";
+
+describe("describeDownloadRoute", () => {
+  it("reports HTTPS precedence and HTTP fallback", () => {
+    assert.equal(describeDownloadRoute({}), "Direct");
+    assert.equal(
+      describeDownloadRoute({
+        HTTPS_PROXY: "http://127.0.0.1:7890",
+        HTTP_PROXY: "http://127.0.0.1:7891",
+      }),
+      "Environment Proxy · http://127.0.0.1:7890",
+    );
+    assert.equal(
+      describeDownloadRoute({ HTTP_PROXY: "http://127.0.0.1:7891" }),
+      "Environment Proxy · http://127.0.0.1:7891",
+    );
+    assert.equal(
+      describeDownloadRoute({ ALL_PROXY: "http://127.0.0.1:7892" }),
+      "Environment Proxy · http://127.0.0.1:7892",
+    );
+  });
+
+  it("redacts secrets and explains proxy exclusions", () => {
+    const summary = describeDownloadRoute({
+      HTTPS_PROXY: "http://user:secret@localhost:7890/?token=private",
+      NO_PROXY: "localhost",
+    });
+    assert.doesNotMatch(summary, /user|secret|private/);
+    assert.match(summary, /NO_PROXY rules apply/);
+    assert.equal(
+      describeDownloadRoute({ HTTPS_PROXY: "http://localhost:7890", NO_PROXY: "*" }),
+      "Direct · NO_PROXY=*",
+    );
+    assert.equal(
+      describeDownloadRoute({ ALL_PROXY: "socks5://localhost:7890" }),
+      "Direct · ALL_PROXY scheme not supported",
+    );
+  });
+});
 
 describe("hasProxyEnvConfigured", () => {
   it("detects upper and lower case proxy vars", () => {

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { openInBrowser } from "../browser.js";
 import { readCpaConfigWithWarnings } from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
+import { describeDownloadRoute } from "../http.js";
 import { tailFollowMany } from "./log-follow.js";
 import { recordMiniCpaEvent } from "../minicpa-log.js";
 import { inspectAutostartState, type AutostartState } from "../process/autostart.js";
@@ -98,10 +99,10 @@ export type StatusDependencies = {
   inspectAutostartState?: () => Promise<AutostartState>;
 };
 
-export async function runStatus(deps?: StatusDependencies): Promise<void> {
+export async function runStatus(cliVersion: string, deps?: StatusDependencies): Promise<void> {
   const ctx = createContext();
   // Read-only: an unlocked command must not repair (or race) the instance home.
-  const running = inspectRunning(ctx.home);
+  const running = await inspectRunning(ctx.home);
   const installed = inspectRuntimeInstallation(ctx.home);
   const version =
     installed.executable?.kind === "active" ? installed.state.runtimeVersion : undefined;
@@ -112,25 +113,42 @@ export async function runStatus(deps?: StatusDependencies): Promise<void> {
   } catch (err) {
     autostartWarning = err instanceof Error && err.message ? err.message : String(err);
   }
-  printHome(ctx);
-  console.log(`Version    ${version ?? (installed.executable ? "(unknown)" : "(not installed)")}`);
-  console.log(`Autostart  ${autostart}`);
+  const row = (label: string, value: string): void => console.log(`${label.padEnd(17)}${value}`);
+  const hasConfig = fs.existsSync(ctx.layout.configFile);
+  row("Source", hasConfig ? "Local File" : "Not initialized");
+  row("MiniCPA Version", cliVersion);
+  row("Core Version", version ?? (installed.executable ? "(unknown)" : "(not installed)"));
+  row("Download Via", describeDownloadRoute());
+  let configValid = hasConfig;
+  try {
+    row("Local API", hasConfig ? apiBaseUrl(ctx.home) : "(not configured)");
+    row("Web Panel", hasConfig ? managementUrl(ctx.home) : "(not configured)");
+  } catch (error) {
+    configValid = false;
+    row("Local API", "(invalid config)");
+    row("Web Panel", "(invalid config)");
+    console.error(`Warning: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  row("Core Config", ctx.layout.configFile);
+  row("Home", ctx.home);
+  row("Autostart", autostart);
   if (autostartWarning) {
     console.error(`Warning: could not inspect autostart: ${autostartWarning}`);
   }
   if (running) {
-    console.log(`Status     running (PID=${running.pid})`);
-    if (running.startedAt) console.log(`Started    ${running.startedAt}`);
-    console.log(`API        ${apiBaseUrl(ctx.home)}`);
-    console.log(`Web        ${managementUrl(ctx.home)}`);
-    const reachable = await waitForAnyHttpOk(readinessUrls(ctx.home), 2000);
-    console.log(`HTTP       ${reachable ? "ok" : "not reachable"}`);
+    row(
+      "Status",
+      `running (PID=${running.pid})${running.identityUnknown ? " · identity unverified" : ""}`,
+    );
+    if (running.startedAt) row("Started", running.startedAt);
+    const reachable = configValid && (await waitForAnyHttpOk(readinessUrls(ctx.home), 2000));
+    row("HTTP", reachable ? "ok" : "not reachable");
     if (!reachable) {
-      console.log("Hint       Try: cpa restart (or cpa logs --err)");
+      row("Hint", "Try: cpa restart (or cpa logs --err)");
     }
     process.exitCode = reachable ? 0 : 1;
   } else {
-    console.log("Status     stopped");
+    row("Status", "stopped");
     process.exitCode = 1;
   }
 }
@@ -261,7 +279,7 @@ export type TuiDeps = {
 export async function runTui(deps?: TuiDeps): Promise<void> {
   const ctx = createContext();
   const inspect = deps?.inspectRunning ?? inspectRunning;
-  const running = inspect(ctx.home);
+  const running = await inspect(ctx.home);
   if (!running) {
     throw new Error("CLIProxyAPI is not running. Run: cpa start");
   }

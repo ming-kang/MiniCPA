@@ -146,6 +146,22 @@ describe("inspectRunnableExecutable", () => {
 });
 
 describe("restoreRuntimeBinaryFromBackup", () => {
+  it("restores without allocating another executable-sized copy", () => {
+    const home = tempHome();
+    fs.writeFileSync(activeExecutablePath(home), "broken-new");
+    fs.writeFileSync(backupExecutablePath(home), "known-good");
+    const originalCopy = fs.copyFileSync;
+    fs.copyFileSync = () => {
+      throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+    };
+    try {
+      assert.equal(restoreRuntimeBinaryFromBackup(home), true);
+    } finally {
+      fs.copyFileSync = originalCopy;
+    }
+    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "known-good");
+  });
+
   it("returns false without a backup", () => {
     assert.equal(restoreRuntimeBinaryFromBackup(tempHome()), false);
   });

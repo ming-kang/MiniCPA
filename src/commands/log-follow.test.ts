@@ -42,6 +42,97 @@ describe("readLogChunk", () => {
 });
 
 describe("tailFollowMany", () => {
+  it("waits for slow output before reading more data", async () => {
+    const file = tempLog();
+    fs.writeFileSync(file, "");
+    let writes = 0;
+    let release!: () => void;
+    let firstWrite!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      firstWrite = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const followed = tailFollowMany([file], {
+      pollMs: 5,
+      write: async () => {
+        writes++;
+        firstWrite();
+        await blocked;
+      },
+    });
+    fs.appendFileSync(file, Buffer.alloc(1024 * 1024, "x"));
+    await ready;
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.equal(writes, 1);
+    } finally {
+      process.emit("SIGINT", "SIGINT");
+      release();
+      await followed;
+    }
+  });
+
+  it("streams an oversized unterminated line before its newline arrives", async () => {
+    const file = tempLog();
+    const err = path.join(path.dirname(file), "cpa.err.log");
+    fs.writeFileSync(file, "");
+    fs.writeFileSync(err, "");
+    const chunks: string[] = [];
+    let firstWrite!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      firstWrite = resolve;
+    });
+    const followed = tailFollowMany([file, err], {
+      pollMs: 5,
+      write: (chunk) => {
+        chunks.push(chunk.toString());
+        firstWrite();
+      },
+    });
+    fs.appendFileSync(file, "x".repeat(100000));
+    await ready;
+    process.emit("SIGINT", "SIGINT");
+    await followed;
+    assert.equal(chunks.join(""), `[out] ${"x".repeat(100000)}\n`);
+  });
+  it("rejects file access errors through its promise and cleans up listeners", async () => {
+    const file = tempLog();
+    fs.writeFileSync(file, "");
+    const before = process.listenerCount("SIGINT");
+    const originalOpen = fs.openSync;
+    const followed = tailFollowMany([file], { pollMs: 5, write: () => {} });
+    fs.openSync = (target, ...args) => {
+      if (String(target) === file)
+        throw Object.assign(new Error("access denied"), { code: "EACCES" });
+      return originalOpen(target, ...args);
+    };
+    try {
+      await assert.rejects(followed, /access denied/);
+    } finally {
+      fs.openSync = originalOpen;
+    }
+    assert.equal(process.listenerCount("SIGINT"), before);
+  });
+
+  it("follows a replacement larger than the previous file without skipping its beginning", async () => {
+    const file = tempLog();
+    fs.writeFileSync(file, "old\n");
+    const writes: string[] = [];
+    const followed = tailFollowMany([file], {
+      pollMs: 5,
+      write: (chunk) => {
+        writes.push(chunk.toString());
+      },
+    });
+    fs.renameSync(file, `${file}.1`);
+    fs.writeFileSync(file, "replacement\n");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    process.emit("SIGINT", "SIGINT");
+    await followed;
+    assert.equal(writes.join(""), "replacement\n");
+  });
   it("preserves partial lines and split UTF-8 characters across polling chunks", async () => {
     const outFile = tempLog();
     const errFile = path.join(path.dirname(outFile), "cpa.err.log");
