@@ -73,9 +73,7 @@ jobs:
       - name: Verify source
         run: |
           npm run audit:prod
-          npm run lint
-          npm test
-          npm run build
+          npm run check
 
       - name: Pack package
         id: pack

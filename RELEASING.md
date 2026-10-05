@@ -29,9 +29,8 @@ The workflow is manually dispatched from `main`, verifies the source and packed 
    ```bash
    npm ci
    npm run audit:prod
-   npm run lint
-   npm test
-   npm run build
+   npm run check
+   npm run verify:package
    ```
 
 4. Commit and push the release change to `main`, then wait for CI to pass.

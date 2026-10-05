@@ -14,17 +14,19 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "clean:build": "node scripts/clean-build.mjs",
-    "build": "npm run clean:build && tsc -p tsconfig.build.json",
+    "hooks:install": "git config --local core.hooksPath .githooks",
     "dev": "tsx src/cli.ts",
-    "typecheck": "tsc --noEmit",
+    "check": "npm run lint && npm test && npm run build",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "verify:package-install": "node scripts/verify-package-install.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && node scripts/run-tests.mjs",
+    "clean:build": "node scripts/clean-build.mjs",
+    "build": "npm run clean:build && tsc -p tsconfig.build.json",
     "verify:package": "node scripts/verify-package.mjs",
+    "verify:package-install": "node scripts/verify-package-install.mjs",
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
-    "test": "tsc --noEmit && node scripts/run-tests.mjs",
-    "prepublishOnly": "npm run audit:prod && npm test && npm run build"
+    "prepublishOnly": "npm run audit:prod && npm run check"
   },
   "engines": {
     "node": ">=24"

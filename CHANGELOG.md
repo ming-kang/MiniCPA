@@ -4,6 +4,10 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+### Changed
+
+- Unify contributor checks under `npm run check`, shared by a lightweight pre-commit hook, CI, and release verification; document test filtering and development commands.
+
 ## [0.4.3] - 2026-09-29
 
 ### Fixed

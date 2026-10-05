@@ -171,13 +171,25 @@ See [docs/cpa-reference.md](docs/cpa-reference.md) for detailed lifecycle, locki
 ```bash
 git clone https://github.com/ming-kang/MiniCPA.git
 cd MiniCPA
-npm install
-npm run lint
-npm test
-npm run build
-npm run verify:package
-npm link   # optional: expose the local build as cpa
+npm ci
+npm run hooks:install
+npm run dev -- --help
 ```
+
+| Command | Purpose |
+|---------|---------|
+| `npm run check` | Lint, type-check, run all tests, and build; also used by pre-commit and CI |
+| `npm test` | Type-check and run all tests |
+| `npm test -- lifecycle` | Type-check and run test files whose paths contain `lifecycle`; multiple filters match any |
+| `npm run typecheck` | Check TypeScript without emitting files |
+| `npm run lint` / `npm run lint:fix` | Check formatting and lint rules, or apply fixes |
+| `npm run build` | Clean and rebuild `dist/` |
+| `npm run verify:package` | Pack the current build and verify installation in a temporary project; requires network access |
+| `npm run audit:prod` | Audit production dependencies; requires network access |
+
+`hooks:install` enables the repository's pre-commit hook for this clone. The hook checks staged whitespace and runs `npm run check` without formatting or staging source files. Package installation checks and dependency audits run separately in CI and release verification. Follow [RELEASING.md](RELEASING.md) for releases.
+
+The CLI entry point is `src/cli.ts`; commands, process management, and updates live in `src/commands/`, `src/process/`, and `src/update/`. Keep `*.test.ts` beside the module under test, with shared fixtures in `src/test-fixtures/`. Tests use `node:test` through `tsx` and should use temporary directories and local HTTP fixtures. `docs/` contains user references and the bundled config template; `dist/` is generated. After building, `npm link` optionally exposes the local CLI as `cpa`.
 
 ## License
 
