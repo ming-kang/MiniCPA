@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import YAML from "yaml";
+import { readTextFileBounded } from "./util.js";
 
 export type CpaConfig = {
   host?: string;
@@ -12,6 +13,7 @@ export type CpaConfig = {
   };
   "auth-dir"?: string;
   "api-keys"?: string[];
+  "logging-to-file"?: boolean;
   "remote-management"?: {
     "secret-key"?: string;
     "disable-control-panel"?: boolean;
@@ -25,10 +27,22 @@ const DEFAULT_PORT = 8317;
 /** Well-known default from older MiniCPA templates — doctor warns if still present. */
 export const LEGACY_DEFAULT_API_KEY = "sk-cliproxyapi";
 
-const DEFAULT_CONFIG_TEMPLATE = fs.readFileSync(
-  new URL("../docs/config.example.yaml", import.meta.url),
-  "utf8",
-);
+export const MAX_CONFIG_BYTES = 4 * 1024 * 1024;
+let defaultConfigTemplate: string | undefined;
+
+function configTemplate(): string {
+  if (defaultConfigTemplate === undefined) {
+    defaultConfigTemplate = fs.readFileSync(
+      new URL("../docs/config.example.yaml", import.meta.url),
+      "utf8",
+    );
+  }
+  return defaultConfigTemplate;
+}
+
+export function readConfigYaml(configPath: string): string {
+  return readTextFileBounded(configPath, MAX_CONFIG_BYTES);
+}
 const DEFAULT_API_KEY_LINE = `  - "${LEGACY_DEFAULT_API_KEY}"`;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -113,6 +127,9 @@ export function normalizeCpaConfigWithWarnings(doc: unknown): {
     port: port ?? DEFAULT_PORT,
   };
 
+  if (typeof doc["logging-to-file"] === "boolean") {
+    config["logging-to-file"] = doc["logging-to-file"];
+  }
   if (typeof doc["auth-dir"] === "string") {
     config["auth-dir"] = doc["auth-dir"];
   }
@@ -160,7 +177,7 @@ export function readCpaConfigWithWarnings(configPath: string): {
   if (!fs.existsSync(configPath)) {
     return { config: { host: DEFAULT_HOST, port: DEFAULT_PORT }, warnings: [] };
   }
-  const text = fs.readFileSync(configPath, "utf8");
+  const text = readConfigYaml(configPath);
   let doc: unknown;
   try {
     doc = YAML.parse(text);
@@ -190,9 +207,10 @@ export function generateApiKey(): string {
 }
 
 export function defaultConfigYaml(apiKey: string = LEGACY_DEFAULT_API_KEY): string {
-  if (!DEFAULT_CONFIG_TEMPLATE.includes(DEFAULT_API_KEY_LINE)) {
+  const template = configTemplate();
+  if (!template.includes(DEFAULT_API_KEY_LINE)) {
     throw new Error("The bundled config template is missing its API-key placeholder");
   }
   const encodedApiKey = YAML.stringify(apiKey).trimEnd();
-  return DEFAULT_CONFIG_TEMPLATE.replace(DEFAULT_API_KEY_LINE, `  - ${encodedApiKey}`);
+  return template.replace(DEFAULT_API_KEY_LINE, `  - ${encodedApiKey}`);
 }

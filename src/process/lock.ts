@@ -15,7 +15,7 @@ export type MiniCpaLockRecord = {
 };
 
 type LockOwner = { key: string; active: boolean };
-const ownership = new AsyncLocalStorage<LockOwner>();
+const ownership = new AsyncLocalStorage<readonly LockOwner[]>();
 
 /** A freshly created lock may still be between open("wx") and write. */
 const EMPTY_LOCK_GRACE_MS = 2_000;
@@ -24,12 +24,9 @@ const ACQUIRE_TIMEOUT_MS = EMPTY_LOCK_GRACE_MS + 1_000;
 const ACQUIRE_RETRY_MIN_MS = 50;
 const ACQUIRE_RETRY_JITTER_MS = 100;
 
-function resolveLockPath(): string {
-  return path.join(miniCpaRoot(), "state", "cpa.lock");
-}
-
-function homeKey(): string {
-  return path.resolve(resolveLockPath());
+function resolveLockPath(scope: "lifecycle" | "update" = "lifecycle"): string {
+  const state = path.join(miniCpaRoot(), "state");
+  return scope === "update" ? path.join(state, "update", "cpa.lock") : path.join(state, "cpa.lock");
 }
 
 export type LockInspection =
@@ -221,10 +218,10 @@ export type MiniCpaLockStatus = {
  * Never writes, renames or unlinks anything, and never throws: a wedged lock is
  * exactly the situation where the user needs the report to still come out.
  */
-export function inspectMiniCpaLock(): MiniCpaLockStatus {
+export function inspectMiniCpaLock(scope: "lifecycle" | "update" = "lifecycle"): MiniCpaLockStatus {
   let lockPath = "";
   try {
-    lockPath = resolveLockPath();
+    lockPath = resolveLockPath(scope);
   } catch {
     return { path: lockPath, state: "unreadable" };
   }
@@ -268,15 +265,28 @@ export function listLockPreemptResidue(): string[] {
   }
 }
 
-/** Exclusive global lock for the one managed CPA instance. */
-export async function withMiniCpaLock<T>(command: string, fn: () => Promise<T>): Promise<T> {
-  const key = homeKey();
-  const inherited = ownership.getStore();
-  if (inherited?.active && inherited.key === key) return fn();
+/** Exclusive lifecycle/commit lock for the one managed CPA instance. */
+export function withMiniCpaLock<T>(command: string, fn: () => Promise<T>): Promise<T> {
+  return withLock("lifecycle", command, fn);
+}
+
+/** Serialize update preparation and temp cleanup without blocking start/stop. */
+export function withMiniCpaUpdateLock<T>(command: string, fn: () => Promise<T>): Promise<T> {
+  return withLock("update", command, fn);
+}
+
+async function withLock<T>(
+  scope: "lifecycle" | "update",
+  command: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const key = path.resolve(resolveLockPath(scope));
+  const inherited = ownership.getStore() ?? [];
+  if (inherited.some((owner) => owner.active && owner.key === key)) return fn();
   ensureDir(path.dirname(key));
   let releaseLease: () => Promise<void>;
   try {
-    releaseLease = await acquireLockLease(key);
+    releaseLease = await acquireLockLease(key, scope);
   } catch (error) {
     const holder = inspectLock(key);
     if (holder.kind === "record") {
@@ -292,7 +302,7 @@ export async function withMiniCpaLock<T>(command: string, fn: () => Promise<T>):
   try {
     await tryAcquireLock(command, key);
     try {
-      return await ownership.run(owner, fn);
+      return await ownership.run([...inherited, owner], fn);
     } finally {
       owner.active = false;
       releaseLock(key);

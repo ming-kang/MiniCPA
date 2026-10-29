@@ -6,6 +6,7 @@ import {
   getListenAddress,
   LEGACY_DEFAULT_API_KEY,
   readCpaConfigWithWarnings,
+  type CpaConfig,
 } from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
 import { writeFileAtomic } from "../fs-atomic.js";
@@ -23,7 +24,8 @@ import { inspectRunning } from "../process/lifecycle.js";
 import { inspectMiniCpaLock, listLockPreemptResidue } from "../process/lock.js";
 import { inspectRuntimeInstallation } from "../process/runtime.js";
 import { checkGithubReachability, type GithubReachability } from "../update/github-client.js";
-import { DEFAULT_LOG_ROTATE_BYTES, directorySizeBytes, formatBytes } from "../util.js";
+import { runtimeLogDirectory, runtimeLogFile } from "../runtime-logs.js";
+import { directorySizeBytes, formatBytes } from "../util.js";
 
 /** Transient file used to prove the home is writable on Windows. */
 const WRITE_PROBE_NAME = ".minicpa-write-probe";
@@ -135,10 +137,12 @@ export type DoctorDeps = {
   lastStartEvent?: () => MiniCpaEvent | undefined;
 };
 
-export async function runDoctor(deps?: DoctorDeps): Promise<void> {
+export async function runDoctor(deps?: DoctorDeps, options?: { deep?: boolean }): Promise<void> {
   const ctx = createContext();
   printHome(ctx);
   let ok = true;
+  let config: CpaConfig | undefined;
+  let configError: string | undefined;
 
   // Layout / write access
   if (!reportHomeWritable(ctx.home)) {
@@ -151,12 +155,18 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
   } else {
     try {
       const { config: cfg, warnings } = readCpaConfigWithWarnings(ctx.layout.configFile);
+      config = cfg;
       const { host, port } = getListenAddress(cfg);
       console.log("[ ok ] config.yaml");
       for (const warning of warnings) {
         console.log(`[warn] ${warning}`);
       }
       console.log(`[info] listen ${host}:${port}`);
+      if (cfg["logging-to-file"] === false) {
+        console.log(
+          "[warn] logging-to-file disabled — detached stdout/stderr are not captured; enable native file logging",
+        );
+      }
       const apiKeys = cfg["api-keys"] ?? [];
       const hasLegacyApiKey = apiKeys.includes(LEGACY_DEFAULT_API_KEY);
       if (hasLegacyApiKey) {
@@ -176,7 +186,8 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
         console.log("[info] Web panel managed and updated by CLIProxyAPI");
       }
     } catch (err) {
-      console.log(`[fail] config.yaml parse error: ${formatCliError(err)}`);
+      configError = formatCliError(err);
+      console.log(`[fail] config.yaml parse error: ${configError}`);
       ok = false;
     }
   }
@@ -230,6 +241,8 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
       ctx.layout.pidFile,
       ctx.layout.logFile,
       ctx.layout.errLogFile,
+      ctx.layout.runtimeLogFile,
+      ctx.layout.minicpaLogFile,
     ]) {
       if (!fs.existsSync(target)) continue;
       try {
@@ -252,16 +265,25 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
     if (!fs.existsSync(file)) continue;
     try {
       const size = fs.statSync(file).size;
-      if (size >= DEFAULT_LOG_ROTATE_BYTES) {
+      if (size > 0) {
         console.log(
-          `[warn] ${label} is ${formatBytes(size)} — will rotate on next cpa start (≥ ${formatBytes(DEFAULT_LOG_ROTATE_BYTES)})`,
+          `[info] legacy ${label} ${formatBytes(size)} — read with cpa logs --legacy; new starts do not append here`,
         );
-      } else if (size > 0) {
-        console.log(`[info] ${label} ${formatBytes(size)}`);
       }
     } catch {
       /* ignore */
     }
+  }
+
+  console.log(
+    `[info] CLIProxyAPI native logs ${runtimeLogDirectory(ctx.home)} (rotation owned by CLIProxyAPI)`,
+  );
+  try {
+    if (fs.existsSync(runtimeLogFile(ctx.home))) {
+      console.log(`[info] main.log ${formatBytes(fs.statSync(runtimeLogFile(ctx.home)).size)}`);
+    }
+  } catch {
+    /* best-effort native log diagnostic */
   }
 
   const bak = backupExecutablePath(ctx.home);
@@ -291,27 +313,35 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
   }
 
   const tempRoot = miniCpaTempRoot();
-  const tempSize = directorySizeBytes(tempRoot);
-  if (tempSize > 10 * 1024 * 1024) {
-    console.log(`[warn] temp ${formatBytes(tempSize)} under ${tempRoot} — run: cpa clean`);
-  } else if (tempSize > 0) {
-    console.log(`[info] temp ${formatBytes(tempSize)} (${tempRoot})`);
+  if (options?.deep) {
+    const tempSize = directorySizeBytes(tempRoot);
+    const label = tempSize > 10 * 1024 * 1024 ? "warn" : "info";
+    console.log(`[${label}] temp ${formatBytes(tempSize)} under ${tempRoot} — run: cpa clean`);
   } else {
-    console.log(`[info] temp empty (${tempRoot})`);
+    console.log(
+      fs.existsSync(tempRoot)
+        ? `[info] temp ${tempRoot} (size not scanned; use cpa doctor --deep or cpa clean)`
+        : `[info] temp empty (${tempRoot})`,
+    );
   }
 
-  // A held lock is normal while another command runs, so it never fails the
-  // report — but it is the only way a user can see what is blocking them.
-  const lock = inspectMiniCpaLock();
-  if (lock.state === "held") {
-    const holderGone =
-      lock.holderAlive === false ? " (holder process is NOT alive — safe to delete this file)" : "";
-    console.log(
-      `[warn] MiniCPA lock held by PID=${lock.pid} (cpa ${lock.command}) since ` +
-        `${lock.acquiredAt || "unknown"} — ${lock.path}${holderGone}`,
-    );
-  } else if (lock.state === "unreadable") {
-    console.log(`[warn] MiniCPA lock file unreadable: ${lock.path}`);
+  // Both leases are diagnostics only; preparation need not block start/stop.
+  for (const [scope, label] of [
+    ["lifecycle", "MiniCPA"],
+    ["update", "Update preparation"],
+  ] as const) {
+    const lock = inspectMiniCpaLock(scope);
+    if (lock.state === "held") {
+      const holderGone =
+        lock.holderAlive === false
+          ? " (holder process is NOT alive — safe to delete this file)"
+          : "";
+      console.log(
+        `[warn] ${label} lock held by PID=${lock.pid} (cpa ${lock.command}) since ${lock.acquiredAt || "unknown"} — ${lock.path}${holderGone}`,
+      );
+    } else if (lock.state === "unreadable") {
+      console.log(`[warn] ${label} lock file unreadable: ${lock.path}`);
+    }
   }
   for (const residue of listLockPreemptResidue()) {
     console.log(
@@ -329,7 +359,8 @@ export async function runDoctor(deps?: DoctorDeps): Promise<void> {
       console.log(`[ ok ] CLIProxyAPI running (PID=${running.pid})`);
     }
     try {
-      const urls = readinessUrls(ctx.home);
+      if (!config) throw new Error(configError ?? "config.yaml missing");
+      const urls = readinessUrls(ctx.home, config);
       const reachableUrl = await waitForFirstHttpOk(urls, 3000);
       if (!reachableUrl) {
         console.log(`[fail] HTTP not reachable (tried ${urls.join(", ")})`);

@@ -1,3 +1,5 @@
+import { ReadableStream } from "node:stream/web";
+import { Response } from "undici";
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import {
@@ -6,6 +8,7 @@ import {
   formatNetworkError,
   hasProxyEnvConfigured,
   httpFetch,
+  readHttpTextBounded,
   isRetryableHttpStatus,
   isRetryableNetworkError,
   NetworkError,
@@ -289,6 +292,30 @@ describe("httpFetch", () => {
         }),
       (err: unknown) => err instanceof NetworkError,
     );
+  });
+});
+
+describe("readHttpTextBounded", () => {
+  it("reads exact UTF-8 byte budgets and releases the reader", async () => {
+    const response = new Response("世界");
+    assert.equal(await readHttpTextBounded(response, 6, "fixture"), "世界");
+    assert.equal(response.body?.locked, false);
+  });
+
+  it("checks streamed bytes rather than a misleading Content-Length and cancels on overflow", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(Buffer.from("too large"));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const response = new Response(body, { headers: { "content-length": "2" } });
+    await assert.rejects(() => readHttpTextBounded(response, 4, "fixture"), /size limit/);
+    assert.equal(cancelled, true);
+    assert.equal(response.body?.locked, false);
   });
 });
 

@@ -10,7 +10,13 @@ import YAML, {
   type YAMLMap,
   type YAMLSeq,
 } from "yaml";
-import { defaultConfigYaml, generateApiKey } from "./config-yaml.js";
+import { backupConfigYaml } from "./config-backup.js";
+import {
+  defaultConfigYaml,
+  generateApiKey,
+  MAX_CONFIG_BYTES,
+  readConfigYaml,
+} from "./config-yaml.js";
 import { writeFileAtomic } from "./fs-atomic.js";
 
 type ParsedMap = YAMLMap<ParsedNode, ParsedNode | null>;
@@ -32,6 +38,8 @@ export type ConfigSyncResult = {
   addedPaths: string[];
   overwrittenPaths: string[];
   backupPath?: string;
+  /** Restore only this write, refusing to overwrite a later external config edit. */
+  rollback?: () => void;
 };
 
 /** Values that belong to one machine rather than to the canonical operational policy. */
@@ -286,28 +294,16 @@ export function mergeCpaConfigYaml(existingYaml: string, templateYaml: string): 
   return { yaml: mergedYaml, addedPaths, overwrittenPaths };
 }
 
-function createBackup(configPath: string, at: Date): string {
-  const stamp = at.toISOString().replace(/[:.]/g, "-");
-  const base = `${configPath}.bak.${stamp}`;
-  let backupPath = base;
-  for (let suffix = 1; fs.existsSync(backupPath); suffix++) {
-    backupPath = `${base}.${suffix}`;
-  }
-  fs.copyFileSync(configPath, backupPath, fs.constants.COPYFILE_EXCL);
-  if (process.platform !== "win32") fs.chmodSync(backupPath, 0o600);
-  return backupPath;
-}
-
 /** Synchronize an existing config; a missing file remains the responsibility of `cpa init`. */
 export function syncCpaConfigDefaults(
   configPath: string,
-  options?: { apiKey?: string; now?: Date; templateYaml?: string },
+  options?: { apiKey?: string; templateYaml?: string },
 ): ConfigSyncResult {
   if (!fs.existsSync(configPath)) {
     return { changed: false, addedPaths: [], overwrittenPaths: [] };
   }
 
-  const existingYaml = fs.readFileSync(configPath, "utf8");
+  const existingYaml = readConfigYaml(configPath);
   const templateYaml =
     options?.templateYaml ?? defaultConfigYaml(options?.apiKey ?? generateApiKey());
   let merged: ConfigMergeResult;
@@ -326,12 +322,29 @@ export function syncCpaConfigDefaults(
     };
   }
 
-  const backupPath = createBackup(configPath, options?.now ?? new Date());
+  if (Buffer.byteLength(merged.yaml) > MAX_CONFIG_BYTES) {
+    throw new Error(`Synchronized ${configPath} exceeds the 4 MiB size limit`);
+  }
+  const valuesChanged = merged.addedPaths.length > 0 || merged.overwrittenPaths.length > 0;
+  const backupPath = valuesChanged ? backupConfigYaml(configPath, existingYaml) : undefined;
+  // Backups/fsync may take time while CPA's management API edits the config.
+  // Compare text only; do not publish a merge based on an already obsolete file.
+  if (readConfigYaml(configPath) !== existingYaml) {
+    throw new Error(`Config changed during synchronization; refusing to overwrite ${configPath}`);
+  }
   writeFileAtomic(configPath, merged.yaml);
   return {
     changed: true,
     addedPaths: merged.addedPaths,
     overwrittenPaths: merged.overwrittenPaths,
     backupPath,
+    rollback: () => {
+      if (readConfigYaml(configPath) !== merged.yaml) {
+        throw new Error(
+          `Config changed after synchronization; refusing to overwrite ${configPath}`,
+        );
+      }
+      writeFileAtomic(configPath, existingYaml);
+    },
   };
 }

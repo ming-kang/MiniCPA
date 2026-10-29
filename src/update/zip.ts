@@ -5,7 +5,7 @@ import { pipeline } from "node:stream/promises";
 import { open, type Entry, type ZipFile } from "yauzl";
 
 /** Select lazily so even an archive with many entries does not accumulate metadata. */
-function selectEntry(zip: ZipFile, name: string): Promise<Entry> {
+function selectEntry(zip: ZipFile, name: string, maxPathDepth: number): Promise<Entry> {
   return new Promise((resolve, reject) => {
     zip.once("error", (error: Error) =>
       reject(
@@ -14,7 +14,9 @@ function selectEntry(zip: ZipFile, name: string): Promise<Entry> {
     );
     zip.once("end", () => reject(new Error(`${name} not found in zip archive`)));
     zip.on("entry", (entry: Entry) => {
-      if (path.posix.basename(entry.fileName) === name) resolve(entry);
+      if (entry.fileName.split("/").filter(Boolean).length > maxPathDepth) {
+        reject(new Error("Archive exceeds path depth limit"));
+      } else if (path.posix.basename(entry.fileName) === name) resolve(entry);
       else zip.readEntry();
     });
     zip.readEntry();
@@ -27,6 +29,7 @@ export async function extractZipExecutable(
   directory: string,
   name: string,
   maxBytes: number,
+  options?: { maxEntries: number; maxPathDepth: number },
 ): Promise<string> {
   const zip = await new Promise<ZipFile>((resolve, reject) => {
     open(
@@ -40,7 +43,10 @@ export async function extractZipExecutable(
   let outputCreated = false;
   let stream: Readable | undefined;
   try {
-    const entry = await selectEntry(zip, name);
+    if (zip.entryCount > (options?.maxEntries ?? 10_000)) {
+      throw new Error("Archive exceeds entry count limit");
+    }
+    const entry = await selectEntry(zip, name, options?.maxPathDepth ?? 32);
     if (entry.uncompressedSize > maxBytes) throw new Error(`${name} exceeds extraction size limit`);
     const unixType = (entry.externalFileAttributes >>> 16) & 0o170000;
     if (unixType !== 0 && unixType !== 0o100000)

@@ -226,6 +226,31 @@ function installFakeRuntime(home: string, pidMarker: string): void {
 }
 
 describe("startDaemon", () => {
+  it("leaves old captures untouched and does not append detached stdout/stderr", async () => {
+    const home = tempHome();
+    const layout = cpaLayout(home);
+    ensureDir(layout.logsDir);
+    fs.writeFileSync(layout.configFile, "port: 8317\n");
+    fs.writeFileSync(layout.logFile, "old stdout\n");
+    fs.writeFileSync(layout.errLogFile, "old stderr\n");
+    if (process.platform === "win32") installFakeRuntime(home, path.join(home, "pid-marker"));
+    else {
+      fs.writeFileSync(
+        activeExecutablePath(home),
+        "#!/bin/sh\necho console-output\necho console-error >&2\nexec sleep 30\n",
+      );
+      fs.chmodSync(activeExecutablePath(home), 0o755);
+    }
+    try {
+      const running = await startDaemon(home, { noWait: true });
+      childPids.push(running.pid);
+    } catch (error) {
+      assert.match(String(error), /exited immediately/);
+    }
+    assert.equal(fs.readFileSync(layout.logFile, "utf8"), "old stdout\n");
+    assert.equal(fs.readFileSync(layout.errLogFile, "utf8"), "old stderr\n");
+  });
+
   it("terminates the new process when its PID record cannot be written", async () => {
     const home = tempHome();
     const layout = cpaLayout(home);

@@ -8,6 +8,7 @@ import {
   directorySizeBytes,
   formatBytes,
   rotateFileIfLarge,
+  readTextFileBounded,
   tailFile,
 } from "./util.js";
 
@@ -30,6 +31,44 @@ describe("formatBytes", () => {
     assert.equal(formatBytes(500), "500 B");
     assert.equal(formatBytes(2048), "2.0 KB");
     assert.equal(formatBytes(3 * 1024 * 1024), "3.0 MB");
+  });
+});
+
+describe("readTextFileBounded", () => {
+  it("handles empty input and exact UTF-8 byte boundaries", () => {
+    const file = path.join(tempDir(), "config.yaml");
+    fs.writeFileSync(file, "");
+    assert.equal(readTextFileBounded(file, 6), "");
+    fs.writeFileSync(file, "世界");
+    assert.equal(readTextFileBounded(file, 6), "世界");
+    assert.throws(() => readTextFileBounded(file, 5), /size limit/);
+  });
+
+  it("enforces bytes actually read when a file grows during the read", () => {
+    const file = path.join(tempDir(), "config.yaml");
+    fs.writeFileSync(file, "abc");
+    const originalRead = fs.readSync;
+    let grew = false;
+    fs.readSync = ((
+      fd: number,
+      buffer: NodeJS.ArrayBufferView,
+      offset: number,
+      length: number,
+      position: number | null,
+    ): number => {
+      const count = originalRead(fd, buffer, offset, length, position);
+      if (!grew && count > 0) {
+        grew = true;
+        fs.appendFileSync(file, "def");
+      }
+      return count;
+    }) as typeof fs.readSync;
+    try {
+      assert.throws(() => readTextFileBounded(file, 5), /size limit/);
+    } finally {
+      fs.readSync = originalRead;
+    }
+    assert.equal(grew, true);
   });
 });
 
@@ -145,6 +184,21 @@ describe("appendPrivateLogLine", () => {
     appendPrivateLogLine(file, "new-record", { maxBytes: 4 });
     assert.equal(fs.readFileSync(file, "utf8"), "new-record\n");
     assert.equal(fs.readFileSync(`${file}.1`, "utf8"), "old-record\n");
+  });
+
+  it("does not append indefinitely when event-log rotation fails", () => {
+    const file = path.join(tempDir(), "minicpa.log");
+    fs.writeFileSync(file, "old-record\n");
+    const originalRename = fs.renameSync;
+    fs.renameSync = () => {
+      throw new Error("rotation denied");
+    };
+    try {
+      assert.equal(appendPrivateLogLine(file, "new-record", { maxBytes: 4 }), false);
+    } finally {
+      fs.renameSync = originalRename;
+    }
+    assert.equal(fs.readFileSync(file, "utf8"), "old-record\n");
   });
 
   it("keeps the log private on POSIX", { skip: process.platform === "win32" }, () => {

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import { readCpaConfig, type CpaConfig } from "../config-yaml.js";
 import {
   activeExecutablePath,
   cpaLayout,
@@ -7,8 +8,9 @@ import {
   hardenCpaPermissions,
   unlockProbePath,
 } from "../paths.js";
+import { recentRuntimeLogs as dumpRecentLogs, runtimeLogFile } from "../runtime-logs.js";
 import { clearPid, readPidRecord, writePidRecord } from "../state.js";
-import { rotateFileIfLarge, sleep, tailFile } from "../util.js";
+import { sleep } from "../util.js";
 import { isProcessAlive } from "./alive.js";
 import { buildCredentialSafeChildEnv } from "./child-env.js";
 import { readinessUrls, waitForAnyHttpOk } from "./health.js";
@@ -104,30 +106,8 @@ export async function inspectRunning(home: string): Promise<RunningInfo | undefi
   return evaluateRunning(home, false);
 }
 
-function openPrivateAppendLog(file: string): number {
-  const fd = fs.openSync(file, "a", 0o600);
-  try {
-    if (process.platform !== "win32") fs.chmodSync(file, 0o600);
-    return fd;
-  } catch (err) {
-    fs.closeSync(fd);
-    throw err;
-  }
-}
-
 function logPathsHint(home: string): string {
-  const layout = cpaLayout(home);
-  return `Check logs:\n  ${layout.logFile}\n  ${layout.errLogFile}`;
-}
-
-function dumpRecentLogs(home: string): string {
-  const layout = cpaLayout(home);
-  const parts: string[] = [];
-  const err = tailFile(layout.errLogFile, 30);
-  const out = tailFile(layout.logFile, 20);
-  if (err) parts.push(`--- cpa.err.log (tail) ---\n${err}`);
-  if (out) parts.push(`--- cpa.log (tail) ---\n${out}`);
-  return parts.length ? `\n${parts.join("\n")}` : "";
+  return `Check logs:\n  ${runtimeLogFile(home)}\n  ${cpaLayout(home).minicpaLogFile}`;
 }
 
 /** Resolves true when taskkill reported success (exit code 0). */
@@ -216,16 +196,20 @@ export type StartOptions = {
   noWait?: boolean;
   /** Max ms to wait for HTTP (default 15000). */
   readyTimeoutMs?: number;
+  /** A command's already parsed config; never cached across commands. */
+  config?: CpaConfig;
 };
 
 export async function startDaemon(home: string, options?: StartOptions): Promise<RunningInfo> {
   recoverUnlockProbeBinary(home);
+  const layout = cpaLayout(home);
+  const config = options?.config ?? readCpaConfig(layout.configFile);
 
   const existing = await resolveRunning(home);
   if (existing) {
     if (!options?.noWait) {
       const ready = await waitForAnyHttpOk(
-        readinessUrls(home),
+        readinessUrls(home, config),
         options?.readyTimeoutMs ?? DEFAULT_READY_MS,
       );
       if (!ready) {
@@ -237,7 +221,6 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
     return existing;
   }
 
-  const layout = cpaLayout(home);
   ensureDir(layout.logsDir);
   ensureDir(layout.stateDir);
   ensureDir(layout.authsDir);
@@ -249,22 +232,12 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
   }
 
   const exe = resolveRunnableExecutable(home);
-  // Rotate oversized logs only when starting a new process (fd not yet held).
-  rotateFileIfLarge(layout.logFile);
-  rotateFileIfLarge(layout.errLogFile);
-  const out = openPrivateAppendLog(layout.logFile);
-  let err: number;
-  try {
-    err = openPrivateAppendLog(layout.errLogFile);
-  } catch (error) {
-    fs.closeSync(out);
-    throw error;
-  }
-
+  // CPA owns continuous log rotation. A detached child must not keep growing
+  // another pair of stdout/stderr files after the MiniCPA command has exited.
   const child = spawn(exe, ["-config", layout.configFile], {
     cwd: home,
     detached: true,
-    stdio: ["ignore", out, err],
+    stdio: "ignore",
     windowsHide: true,
     env: buildCredentialSafeChildEnv(),
   });
@@ -274,12 +247,6 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
   });
 
   child.unref();
-  try {
-    fs.closeSync(out);
-    fs.closeSync(err);
-  } catch {
-    /* ignore */
-  }
 
   if (!child.pid) {
     throw new Error("Failed to start the CLIProxyAPI process");
@@ -316,7 +283,7 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
 
   if (!options?.noWait) {
     const readyMs = options?.readyTimeoutMs ?? DEFAULT_READY_MS;
-    const ready = await waitForAnyHttpOk(readinessUrls(home), readyMs);
+    const ready = await waitForAnyHttpOk(readinessUrls(home, config), readyMs);
     if (!ready) {
       if (!isProcessAlive(child.pid)) {
         clearPid(home);

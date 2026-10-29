@@ -44,6 +44,7 @@ export async function downloadToFile(
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) {
+    await res.body?.cancel().catch(() => {});
     const hint =
       res.status === 404
         ? " (release or asset not found — check version/tag)"
@@ -58,6 +59,7 @@ export async function downloadToFile(
   const total = Number.isFinite(contentLength) && contentLength > 0 ? contentLength : 0;
   const maxBytes = options?.maxBytes;
   if (maxBytes !== undefined && (!Number.isSafeInteger(maxBytes) || maxBytes < 1)) {
+    await res.body.cancel().catch(() => {});
     throw new Error(`Invalid maximum download size for ${label}`);
   }
   if (maxBytes !== undefined && total > maxBytes) {
@@ -69,7 +71,12 @@ export async function downloadToFile(
     throw new Error(`Download exceeds ${formatBytes(maxBytes)} limit: ${label}`);
   }
 
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  try {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+  } catch (error) {
+    await res.body.cancel().catch(() => {});
+    throw error;
+  }
   let received = 0;
   const onProgress = options?.onProgress;
 

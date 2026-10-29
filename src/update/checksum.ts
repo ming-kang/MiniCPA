@@ -1,4 +1,4 @@
-import { httpFetch } from "../http.js";
+import { httpFetch, readHttpTextBounded } from "../http.js";
 import {
   browserReleaseAssetUrl,
   githubHeaders,
@@ -8,6 +8,7 @@ import {
 } from "./github-client.js";
 
 const API_TIMEOUT_MS = 30_000;
+export const MAX_CHECKSUM_BYTES = 256 * 1024;
 
 /** Parse GitHub checksums.txt body into map of filename → sha256. */
 export function parseChecksumsText(text: string): Map<string, string> {
@@ -39,11 +40,14 @@ export async function fetchChecksums(
     signal: AbortSignal.timeout(API_TIMEOUT_MS),
   });
   if (!res.ok) {
+    await res.body?.cancel().catch(() => {});
     throw new Error(
       `Failed to download checksums.txt (HTTP ${res.status}). Use --insecure to skip integrity check.`,
     );
   }
-  const map = parseChecksumsText(await res.text());
+  const map = parseChecksumsText(
+    await readHttpTextBounded(res, MAX_CHECKSUM_BYTES, "checksums.txt"),
+  );
   if (map.size === 0) {
     throw new Error(
       `checksums.txt for ${release.tag_name} is empty or unparseable (use --insecure to skip)`,

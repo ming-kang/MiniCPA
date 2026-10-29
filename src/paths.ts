@@ -40,20 +40,11 @@ export function miniCpaTempRoot(): string {
   return path.join(miniCpaRoot(), "temp");
 }
 
-export function miniCpaTempDownloadsDir(): string {
-  return path.join(miniCpaTempRoot(), "downloads");
-}
-
-/** Unique per-operation download directory. */
-export function miniCpaTempDownloadDir(prefix = "download-"): string {
-  const downloads = miniCpaTempDownloadsDir();
-  ensureDir(downloads);
-  return fs.mkdtempSync(path.join(downloads, prefix));
-}
-
-export function miniCpaTempExtractDir(prefix = "extract-"): string {
-  ensureDir(miniCpaTempRoot());
-  return fs.mkdtempSync(path.join(miniCpaTempRoot(), prefix));
+/** Download and extraction files share one bounded-lifetime operation directory. */
+export function miniCpaTempOperationDir(): string {
+  const operations = path.join(miniCpaTempRoot(), "operations");
+  ensureDir(operations);
+  return fs.mkdtempSync(path.join(operations, "update-"));
 }
 
 export function resolveCpaHome(): string {
@@ -77,7 +68,9 @@ export type CpaLayout = {
   installStateFile: string;
   logFile: string;
   errLogFile: string;
-  /** MiniCPA's own event log, distinct from the CPA child's stdout/stderr logs. */
+  /** CLIProxyAPI's native, continuously rotated application log. */
+  runtimeLogFile: string;
+  /** MiniCPA's own bounded start event log. */
   minicpaLogFile: string;
 };
 
@@ -94,12 +87,13 @@ export function cpaLayout(home: string): CpaLayout {
     installStateFile: path.join(home, "state", "install.json"),
     logFile: path.join(home, "logs", "cpa.log"),
     errLogFile: path.join(home, "logs", "cpa.err.log"),
-    minicpaLogFile: path.join(home, "logs", "minicpa.log"),
+    runtimeLogFile: path.join(home, "logs", "main.log"),
+    minicpaLogFile: path.join(home, "state", "minicpa.log"),
   };
 }
 
-/** Tighten permissions for an existing installation without following symlinks. */
-export function hardenCpaPermissions(home: string): void {
+/** Fixed-cost hardening on start; `cpa init` explicitly repairs the existing tree. */
+export function hardenCpaPermissions(home: string, options?: { deep?: boolean }): void {
   if (process.platform === "win32" || !fs.existsSync(home)) return;
 
   const chmodPrivate = (target: string, recursive: boolean): void => {
@@ -131,9 +125,28 @@ export function hardenCpaPermissions(home: string): void {
   chmodPrivate(home, false);
   chmodPrivate(layout.configFile, false);
   chmodPrivate(layout.envFile, false);
-  for (const directory of [layout.authsDir, layout.logsDir, layout.stateDir, layout.staticDir]) {
-    chmodPrivate(directory, true);
+  for (const directory of [
+    layout.authsDir,
+    layout.logsDir,
+    layout.stateDir,
+    layout.staticDir,
+    path.join(home, "backups"),
+    path.join(home, "backups", "config"),
+  ]) {
+    chmodPrivate(directory, options?.deep === true);
   }
+  for (const file of [
+    layout.pidFile,
+    layout.installStateFile,
+    layout.runtimeLogFile,
+    layout.minicpaLogFile,
+    layout.logFile,
+    layout.errLogFile,
+    ...[1, 2, 3].map((slot) => path.join(home, "backups", "config", `config.${slot}.yaml`)),
+  ]) {
+    chmodPrivate(file, false);
+  }
+  if (!options?.deep) return;
   try {
     for (const entry of fs.readdirSync(home)) {
       if (entry.startsWith("config.yaml.bak.")) {

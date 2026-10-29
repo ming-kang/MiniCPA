@@ -11,8 +11,7 @@ import {
   hardenCpaPermissions,
   MINICPA_DIR_NAME,
   miniCpaRoot,
-  miniCpaTempDownloadDir,
-  miniCpaTempDownloadsDir,
+  miniCpaTempOperationDir,
   miniCpaTempRoot,
   resolveCpaHome,
 } from "./paths.js";
@@ -116,7 +115,8 @@ describe("cpaLayout", () => {
     assert.equal(layout.configFile, path.join(home, "config.yaml"));
     assert.equal(layout.staticDir, path.join(home, "static"));
     assert.equal(layout.pidFile, path.join(home, "state", "cpa.pid"));
-    assert.equal(layout.minicpaLogFile, path.join(home, "logs", "minicpa.log"));
+    assert.equal(layout.minicpaLogFile, path.join(home, "state", "minicpa.log"));
+    assert.equal(layout.runtimeLogFile, path.join(home, "logs", "main.log"));
     assert.notEqual(layout.minicpaLogFile, layout.errLogFile);
     assert.ok(!("runtimeDir" in layout));
   });
@@ -140,6 +140,28 @@ describe("cpaHome", () => {
 });
 
 describe("hardenCpaPermissions", () => {
+  it("has fixed startup cost without scanning private subtrees", {
+    skip: process.platform === "win32",
+  }, () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-permissions-"));
+    temps.push(home);
+    const layout = cpaLayout(home);
+    fs.mkdirSync(layout.authsDir);
+    for (let index = 0; index < 1000; index++)
+      fs.writeFileSync(path.join(layout.authsDir, `${index}.json`), "private");
+    const originalReadDir = fs.readdirSync;
+    fs.readdirSync = (() => {
+      throw new Error("startup must not enumerate files");
+    }) as typeof fs.readdirSync;
+    try {
+      hardenCpaPermissions(home);
+    } finally {
+      fs.readdirSync = originalReadDir;
+    }
+    assert.equal(fs.statSync(home).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(layout.authsDir).mode & 0o777, 0o700);
+  });
+
   it("tightens private data without removing the runtime execute bit", {
     skip: process.platform === "win32",
   }, () => {
@@ -167,7 +189,7 @@ describe("hardenCpaPermissions", () => {
     fs.writeFileSync(executable, "bin", { mode: 0o755 });
     fs.chmodSync(executable, 0o755);
 
-    hardenCpaPermissions(home);
+    hardenCpaPermissions(home, { deep: true });
 
     assert.equal(fs.statSync(home).mode & 0o777, 0o700);
     for (const dir of [layout.authsDir, layout.logsDir, layout.stateDir, layout.staticDir]) {
@@ -180,17 +202,17 @@ describe("hardenCpaPermissions", () => {
   });
 });
 
-describe("miniCpaTempDownloadDir", () => {
+describe("miniCpaTempOperationDir", () => {
   it("creates distinct staging directories below private app data", () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-paths-"));
     temps.push(base);
     setAppDataRoot(base);
 
-    const first = miniCpaTempDownloadDir("test-download-");
-    const second = miniCpaTempDownloadDir("test-download-");
+    const first = miniCpaTempOperationDir();
+    const second = miniCpaTempOperationDir();
     assert.notEqual(first, second);
-    assert.equal(path.dirname(first), miniCpaTempDownloadsDir());
-    assert.equal(path.dirname(second), miniCpaTempDownloadsDir());
+    assert.equal(path.dirname(first), path.join(miniCpaTempRoot(), "operations"));
+    assert.equal(path.dirname(second), path.join(miniCpaTempRoot(), "operations"));
     assert.ok(first.startsWith(miniCpaTempRoot()));
     assert.ok(second.startsWith(miniCpaTempRoot()));
   });

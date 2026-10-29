@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import YAML from "yaml";
+import { configBackupPaths } from "./config-backup.js";
 import { mergeCpaConfigYaml, syncCpaConfigDefaults } from "./config-sync.js";
-import { defaultConfigYaml } from "./config-yaml.js";
+import { defaultConfigYaml, MAX_CONFIG_BYTES } from "./config-yaml.js";
 
 const temps: string[] = [];
 
@@ -184,11 +185,9 @@ describe("syncCpaConfigDefaults", () => {
     temps.push(dir);
     const configPath = path.join(dir, "config.yaml");
     fs.writeFileSync(configPath, EXISTING);
-    const now = new Date("2026-09-15T12:34:56.789Z");
+    const result = syncCpaConfigDefaults(configPath, { templateYaml: TEMPLATE });
 
-    const result = syncCpaConfigDefaults(configPath, { templateYaml: TEMPLATE, now });
-
-    const expectedBackup = `${configPath}.bak.2026-09-15T12-34-56-789Z`;
+    const expectedBackup = configBackupPaths(configPath)[0]!;
     assert.equal(result.changed, true);
     assert.equal(result.backupPath, expectedBackup);
     assert.deepEqual(result.addedPaths, ["nested.enabled"]);
@@ -213,6 +212,100 @@ describe("syncCpaConfigDefaults", () => {
     fs.writeFileSync(configPath, synchronized);
     const result = syncCpaConfigDefaults(configPath, { templateYaml: TEMPLATE });
     assert.deepEqual(result, { changed: false, addedPaths: [], overwrittenPaths: [] });
+    assert.deepEqual(fs.readdirSync(dir), ["config.yaml"]);
+  });
+
+  it("refreshes comments without occupying a configuration recovery slot", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-config-sync-"));
+    temps.push(dir);
+    const configPath = path.join(dir, "config.yaml");
+    const old = '# old comment\nhost: "127.0.0.1"\n';
+    const template = '# new comment\nhost: "127.0.0.1"\n';
+    fs.writeFileSync(configPath, old);
+    const result = syncCpaConfigDefaults(configPath, { templateYaml: template });
+    assert.equal(result.changed, true);
+    assert.equal(result.backupPath, undefined);
+    assert.deepEqual(fs.readdirSync(dir), ["config.yaml"]);
+    result.rollback?.();
+    assert.equal(fs.readFileSync(configPath, "utf8"), old);
+  });
+
+  it("refuses to roll back over an external config edit", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-config-sync-"));
+    temps.push(dir);
+    const configPath = path.join(dir, "config.yaml");
+    fs.writeFileSync(configPath, EXISTING);
+    const result = syncCpaConfigDefaults(configPath, { templateYaml: TEMPLATE });
+    fs.writeFileSync(configPath, "port: 12345\n# external edit\n");
+    assert.throws(() => result.rollback?.(), /refusing to overwrite/);
+    assert.equal(fs.readFileSync(configPath, "utf8"), "port: 12345\n# external edit\n");
+  });
+
+  it("refuses an obsolete merge if config changes while its snapshot is being saved", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-config-sync-"));
+    temps.push(dir);
+    const configPath = path.join(dir, "config.yaml");
+    fs.writeFileSync(configPath, EXISTING);
+    const originalOpen = fs.openSync;
+    const originalSync = fs.fsyncSync;
+    let backupFd: number | undefined;
+    fs.openSync = (file, ...args) => {
+      const fd = originalOpen(file, ...args);
+      if (String(file).includes(".config.1.yaml.") && String(file).endsWith(".tmp")) backupFd = fd;
+      return fd;
+    };
+    fs.fsyncSync = (fd) => {
+      if (fd === backupFd) {
+        backupFd = undefined;
+        fs.writeFileSync(configPath, "port: 12345\n# external edit\n");
+      }
+      originalSync(fd);
+    };
+    try {
+      assert.throws(
+        () => syncCpaConfigDefaults(configPath, { templateYaml: TEMPLATE }),
+        /changed during synchronization/,
+      );
+    } finally {
+      fs.openSync = originalOpen;
+      fs.fsyncSync = originalSync;
+    }
+    assert.equal(fs.readFileSync(configPath, "utf8"), "port: 12345\n# external edit\n");
+  });
+
+  it("aborts before overwriting if a backup cannot be created", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-config-sync-"));
+    temps.push(dir);
+    const configPath = path.join(dir, "config.yaml");
+    fs.writeFileSync(configPath, EXISTING);
+    const originalOpen = fs.openSync;
+    fs.openSync = (file, ...args) => {
+      if (String(file).includes(".config.1.yaml.") && String(file).endsWith(".tmp"))
+        throw new Error("backup denied");
+      return originalOpen(file, ...args);
+    };
+    try {
+      assert.throws(
+        () => syncCpaConfigDefaults(configPath, { templateYaml: TEMPLATE }),
+        /backup denied/,
+      );
+    } finally {
+      fs.openSync = originalOpen;
+    }
+    assert.equal(fs.readFileSync(configPath, "utf8"), EXISTING);
+  });
+
+  it("rejects oversized synchronized output without writing config or a backup", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-config-sync-"));
+    temps.push(dir);
+    const configPath = path.join(dir, "config.yaml");
+    const old = `custom: ${"x".repeat(MAX_CONFIG_BYTES - 32)}\n`;
+    fs.writeFileSync(configPath, old);
+    assert.throws(
+      () => syncCpaConfigDefaults(configPath, { templateYaml: TEMPLATE }),
+      /4 MiB size limit/,
+    );
+    assert.equal(fs.readFileSync(configPath, "utf8"), old);
     assert.deepEqual(fs.readdirSync(dir), ["config.yaml"]);
   });
 

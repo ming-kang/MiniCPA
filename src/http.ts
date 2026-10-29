@@ -6,7 +6,7 @@ import {
   type RequestInit as UndiciRequestInit,
   type Response as UndiciResponse,
 } from "undici";
-import { sleep } from "./util.js";
+import { formatBytes, sleep } from "./util.js";
 
 const PROXY_ENV_KEYS = [
   "HTTP_PROXY",
@@ -125,6 +125,32 @@ export function redactProxyUrl(proxyUrl: string): string {
 }
 
 export type HttpFetchInit = UndiciRequestInit;
+
+/** Read actual response bytes with a budget; neither Content-Length nor JSON shape is trusted. */
+export async function readHttpTextBounded(
+  response: Pick<UndiciResponse, "body">,
+  maxBytes: number,
+  label: string,
+): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes)
+        throw new Error(`${label} exceeds the ${formatBytes(maxBytes)} size limit`);
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks, bytes).toString("utf8");
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
 
 export type HttpRetryOptions = {
   /** Extra attempts after the first try (default 3 → up to 4 total). */

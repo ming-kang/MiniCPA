@@ -15,6 +15,7 @@ import {
   recoverUnlockProbeBinary,
   resolveRunnableExecutable,
   restoreRuntimeBinaryFromBackup,
+  RuntimeBinaryTransaction,
 } from "./runtime.js";
 
 const temps: string[] = [];
@@ -80,6 +81,40 @@ describe("installRuntimeBinary", () => {
     }
     assert.ok(synced.length >= 1, "expected installRuntimeBinary to fsync the staged binary");
     assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "durable-binary");
+  });
+});
+
+describe("RuntimeBinaryTransaction preparation", () => {
+  it("stages before publishing and commits without another copy", () => {
+    const home = tempHome();
+    fs.writeFileSync(activeExecutablePath(home), "old");
+    const transaction = new RuntimeBinaryTransaction(home);
+    transaction.prepare(writeSourceExe(home, "new"));
+    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "old");
+    assert.equal(fs.readFileSync(`${activeExecutablePath(home)}.new`, "utf8"), "new");
+    const originalCopy = fs.copyFileSync;
+    fs.copyFileSync = () => {
+      throw new Error("commit must not copy");
+    };
+    try {
+      transaction.install();
+    } finally {
+      fs.copyFileSync = originalCopy;
+    }
+    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "new");
+    assert.equal(fs.readFileSync(backupExecutablePath(home), "utf8"), "old");
+    transaction.commit();
+  });
+
+  it("backs up a binary recovered after preparation began", () => {
+    const home = tempHome();
+    const transaction = new RuntimeBinaryTransaction(home);
+    transaction.prepare(writeSourceExe(home, "new"));
+    fs.writeFileSync(activeExecutablePath(home), "recovered-during-download");
+    transaction.install();
+    assert.equal(fs.readFileSync(backupExecutablePath(home), "utf8"), "recovered-during-download");
+    transaction.rollback();
+    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "recovered-during-download");
   });
 });
 

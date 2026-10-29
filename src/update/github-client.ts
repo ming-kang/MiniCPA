@@ -1,4 +1,4 @@
-import { httpFetch } from "../http.js";
+import { httpFetch, readHttpTextBounded } from "../http.js";
 
 export type GhAsset = {
   id?: number;
@@ -15,6 +15,7 @@ export type GhRelease = {
 };
 
 const API_TIMEOUT_MS = 30_000;
+export const MAX_GITHUB_METADATA_BYTES = 1024 * 1024;
 const GITHUB_API_BASE_URL = "https://api.github.com";
 
 /** Auth for remaining API fallback paths. Prefers GITHUB_TOKEN, then GH_TOKEN (gh CLI). */
@@ -176,6 +177,7 @@ export async function resolveLatestReleaseTag(
     signal: AbortSignal.timeout(API_TIMEOUT_MS),
   });
 
+  await res.body?.cancel().catch(() => {});
   const location = res.headers.get("location");
   if (location) {
     const tag = parseReleaseTagFromLocation(location);
@@ -268,9 +270,13 @@ export async function fetchLatestReleaseViaApi(
     signal: AbortSignal.timeout(API_TIMEOUT_MS),
   });
   if (!res.ok) {
+    await res.body?.cancel().catch(() => {});
     throw new Error(formatGitHubApiError(res.status, repo, "releases/latest"));
   }
-  return validateReleaseMetadata(repo, (await res.json()) as unknown);
+  return validateReleaseMetadata(
+    repo,
+    JSON.parse(await readHttpTextBounded(res, MAX_GITHUB_METADATA_BYTES, "GitHub metadata")),
+  );
 }
 
 /** Release metadata for a specific tag via the REST API. */
@@ -286,10 +292,14 @@ export async function fetchReleaseByTagViaApi(
     },
   );
   if (!res.ok) {
+    await res.body?.cancel().catch(() => {});
     if (res.status === 404) throw new Error(`Release not found: ${normalizedTag}`);
     throw new Error(formatGitHubApiError(res.status, repo, `releases/tags/${normalizedTag}`));
   }
-  return validateReleaseMetadata(repo, (await res.json()) as unknown);
+  return validateReleaseMetadata(
+    repo,
+    JSON.parse(await readHttpTextBounded(res, MAX_GITHUB_METADATA_BYTES, "GitHub metadata")),
+  );
 }
 
 /**
@@ -338,6 +348,7 @@ export type GithubReachability = {
  */
 export async function checkGithubReachability(
   apiBaseUrl = GITHUB_API_BASE_URL,
+  timeoutMs = 3000,
 ): Promise<GithubReachability> {
   // Same predicate githubHeaders() uses, so a blank token never reads as authenticated.
   const authenticated = githubAuthToken() !== undefined;
@@ -345,9 +356,9 @@ export async function checkGithubReachability(
     `${apiBaseUrl}/rate_limit`,
     {
       headers: githubHeaders("json"),
-      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     },
-    { retries: 1, minDelayMs: 200, maxDelayMs: 1_000 },
+    { retries: 0 },
   );
   const result: GithubReachability = { ok: res.ok, status: res.status, authenticated };
   if (!res.ok) {
@@ -359,7 +370,9 @@ export async function checkGithubReachability(
     return result;
   }
   try {
-    const body = (await res.json()) as { resources?: { core?: { remaining?: unknown } } };
+    const body = JSON.parse(
+      await readHttpTextBounded(res, MAX_GITHUB_METADATA_BYTES, "GitHub rate limit"),
+    ) as { resources?: { core?: { remaining?: unknown } } };
     const remaining = body?.resources?.core?.remaining;
     if (typeof remaining === "number" && Number.isFinite(remaining)) {
       result.remaining = remaining;

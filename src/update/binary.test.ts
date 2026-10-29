@@ -441,42 +441,37 @@ describe("installBinaryPhase", () => {
     assert.equal(readInstallState(home).runtimeVersion, undefined);
   });
 
-  it("restarts CPA when installRuntimeBinary fails before touching the active binary", async () => {
+  it("fails preparation without stopping CPA or changing the active binary/state", async () => {
     const home = tempHome();
-    // Steady state again: an intact binary and NO .bak. This time the file lock
-    // clears and the failure happens INSIDE installRuntimeBinary, while it is
-    // still only staging (ENOSPC/EACCES on the copy, an AV lock on the fsync
-    // open). The active binary is never moved aside, so no .bak is created.
     fs.writeFileSync(activeExecutablePath(home), "old-binary");
     writeInstallState(home, { runtimeVersion: "7.2.65" });
     const deps = fakeDeps();
-
     await assert.rejects(
       () =>
         installBinaryPhase(
           home,
           {
             version: "7.2.66",
-            // Never created: copyFileSync into the staging name throws ENOENT.
-            extractedExe: path.join(home, "extracted-exe-that-does-not-exist"),
+            extractedExe: path.join(home, "missing-extracted-exe"),
             wasRunning: true,
             currentVersion: "7.2.65",
           },
           deps,
           silentUpdateReporter,
         ),
-      (err: unknown) => {
-        assert.ok(err instanceof BinaryUpdateError);
-        assert.equal(err.previousRestarted, true);
-        assert.equal(err.previousRestored, false);
-        assert.match(err.message, /existing CLIProxyAPI version was restarted/i);
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.ok(
+          !(error instanceof BinaryUpdateError),
+          "nothing stopped, so no restart/rollback claim",
+        );
         return true;
       },
     );
-
-    assert.ok(deps.calls.includes("start"), "CPA must be brought back up");
+    assert.deepEqual(deps.calls, []);
     assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "old-binary");
     assert.equal(fs.existsSync(backupExecutablePath(home)), false);
+    assert.equal(fs.existsSync(`${activeExecutablePath(home)}.new`), false);
     assert.equal(readInstallState(home).runtimeVersion, "7.2.65");
   });
 });

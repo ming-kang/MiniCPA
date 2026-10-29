@@ -16,14 +16,8 @@ import type { RunningInfo } from "../process/lifecycle.js";
 import { writeInstallState, writePidRecord } from "../state.js";
 import { withHttpFixture, withHttpsFixture } from "../test-fixtures/http-server.js";
 import { captureConsole } from "../test-fixtures/test-env.js";
-import {
-  parseLogLineCount,
-  runLogs,
-  runOpen,
-  runStart,
-  runStatus,
-  runTui,
-} from "./lifecycle-cmd.js";
+import { runOpen, runStart, runStatus, runTui } from "./lifecycle-cmd.js";
+import { parseLogLineCount, runLogs } from "./logs.js";
 
 const originalLocalAppData = process.env.LOCALAPPDATA;
 const originalXdgDataHome = process.env.XDG_DATA_HOME;
@@ -147,6 +141,45 @@ describe("runStart", () => {
     fs.mkdirSync(cpaLayout(home).minicpaLogFile, { recursive: true });
 
     await assert.rejects(() => runStart({ noWait: true }), /Missing config/);
+  });
+});
+
+describe("command config snapshots", () => {
+  it("shares one read between warnings, startup and endpoint reporting", async () => {
+    useTempRoot();
+    await withHttpFixture(
+      {
+        "/": (_req, res) => {
+          res.end("ok");
+        },
+      },
+      async (baseUrl) => {
+        const home = writeHomeForBase(baseUrl);
+        const file = cpaLayout(home).configFile;
+        writePidRecord(home, {
+          pid: process.pid,
+          exe: process.execPath,
+          startedAt: new Date().toISOString(),
+        });
+        const originalOpen = fs.openSync;
+        let reads = 0;
+        fs.openSync = (target, ...args) => {
+          if (String(target) === file) reads++;
+          return originalOpen(target, ...args);
+        };
+        try {
+          await captureConsole(() => runStart({ noWait: true }));
+          assert.equal(reads, 1);
+          reads = 0;
+          await captureConsole(() =>
+            runStatus("0.4.3", { inspectAutostartState: async () => "off" }),
+          );
+          assert.equal(reads, 1);
+        } finally {
+          fs.openSync = originalOpen;
+        }
+      },
+    );
   });
 });
 

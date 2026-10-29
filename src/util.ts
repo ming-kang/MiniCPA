@@ -12,6 +12,27 @@ export function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** Read at most one bounded private text file; reject growth beyond the budget as well. */
+export function readTextFileBounded(file: string, maxBytes: number): string {
+  const fd = fs.openSync(file, "r");
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes - total + 1));
+      const count = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (count === 0) break;
+      total += count;
+      if (total > maxBytes)
+        throw new Error(`${file} exceeds the ${formatBytes(maxBytes)} size limit`);
+      chunks.push(chunk.subarray(0, count));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return Buffer.concat(chunks, total).toString("utf8");
+}
+
 /** Recursive size of files under dir (symlinks ignored / best-effort). */
 export function directorySizeBytes(dir: string): number {
   if (!fs.existsSync(dir)) return 0;
@@ -37,19 +58,7 @@ export function directorySizeBytes(dir: string): number {
   return total;
 }
 
-/** Default CPA log rotate threshold (50 MiB). */
-export const DEFAULT_LOG_ROTATE_BYTES = 50 * 1024 * 1024;
-
-/** Keep this many rotated siblings (file.1 .. file.N). */
-export const DEFAULT_LOG_ROTATE_KEEP = 2;
-
-/**
- * Rotate threshold for MiniCPA's own event log (1 MiB).
- *
- * Deliberately far below DEFAULT_LOG_ROTATE_BYTES: that budget is sized for the
- * CPA child's request logging, while this file holds one condensed line per
- * MiniCPA event and must stay small enough to read in full.
- */
+/** One small event-log budget; permanent CPA output is handled by upstream rotation. */
 export const MINICPA_LOG_ROTATE_BYTES = 1024 * 1024;
 
 /** Matches exact semver versions (major.minor.patch[-prerelease][+build]) without ranges or prefixes. */
@@ -68,8 +77,8 @@ export function rotateFileIfLarge(
   file: string,
   options?: { maxBytes?: number; keep?: number },
 ): boolean {
-  const maxBytes = options?.maxBytes ?? DEFAULT_LOG_ROTATE_BYTES;
-  const keep = options?.keep ?? DEFAULT_LOG_ROTATE_KEEP;
+  const maxBytes = options?.maxBytes ?? MINICPA_LOG_ROTATE_BYTES;
+  const keep = options?.keep ?? 1;
   if (keep < 1 || maxBytes < 1) return false;
   if (!fs.existsSync(file)) return false;
 
@@ -121,10 +130,13 @@ export function appendPrivateLogLine(
 ): boolean {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    rotateFileIfLarge(file, {
-      maxBytes: options?.maxBytes ?? MINICPA_LOG_ROTATE_BYTES,
-      keep: options?.keep ?? 1,
-    });
+    const maxBytes = options?.maxBytes ?? MINICPA_LOG_ROTATE_BYTES;
+    const rotated = rotateFileIfLarge(file, { maxBytes, keep: options?.keep ?? 1 });
+    if (!rotated && fs.existsSync(file) && fs.statSync(file).size >= maxBytes) {
+      // A blocked rename must not turn best-effort event logging into an
+      // unlimited append-only file. Keep the old record and drop this one.
+      return false;
+    }
     const fd = fs.openSync(file, "a", 0o600);
     try {
       fs.writeFileSync(fd, `${line}\n`);

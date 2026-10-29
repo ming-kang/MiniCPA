@@ -1,112 +1,194 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { miniCpaTempRoot } from "../paths.js";
+import { cpaHome, miniCpaRoot, miniCpaTempRoot } from "../paths.js";
+import { withMiniCpaLock, withMiniCpaUpdateLock } from "../process/lock.js";
+import { cleanupPreviousUpdateOperations, cleanupTempFiles } from "../temp-files.js";
+import { captureConsole, createIsolatedTestEnv } from "../test-fixtures/test-env.js";
 import { runClean } from "./clean.js";
 
-const originalLocalAppData = process.env.LOCALAPPDATA;
-const originalXdgDataHome = process.env.XDG_DATA_HOME;
-const originalHome = process.env.HOME;
-const originalExitCode = process.exitCode;
-const temps: string[] = [];
-
-function setAppDataRoot(base: string): void {
-  process.env.LOCALAPPDATA = base;
-  process.env.XDG_DATA_HOME = base;
-  process.env.HOME = base;
+let env: ReturnType<typeof createIsolatedTestEnv> | undefined;
+afterEach(() => {
+  env?.cleanup();
+  env = undefined;
+});
+function isolate(): void {
+  env = createIsolatedTestEnv("minicpa-clean-");
+}
+function operation(name: string, group = "operations", old = true): string {
+  const directory = path.join(miniCpaTempRoot(), group, name);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, "payload"), "fixture");
+  if (old) {
+    const date = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(directory, date, date);
+  }
+  return directory;
 }
 
-afterEach(() => {
-  for (const dir of temps.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-  if (originalLocalAppData === undefined) delete process.env.LOCALAPPDATA;
-  else process.env.LOCALAPPDATA = originalLocalAppData;
-  if (originalXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
-  else process.env.XDG_DATA_HOME = originalXdgDataHome;
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  process.exitCode = originalExitCode;
-});
-
 describe("runClean", () => {
-  it("removes only the private MiniCPA staging tree", async () => {
-    const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-clean-base-"));
-    temps.push(base);
-    setAppDataRoot(base);
-
-    const miniTemp = miniCpaTempRoot();
-    fs.mkdirSync(path.join(miniTemp, "downloads"), { recursive: true });
-    fs.writeFileSync(path.join(miniTemp, "downloads", "x.zip"), "payload");
-    const old = new Date(Date.now() - 1_000);
-    fs.utimesSync(path.join(miniTemp, "downloads"), old, old);
-
-    const sibling = path.join(base, "instance-config.yaml");
-    fs.writeFileSync(sibling, "keep-me");
-
-    await runClean({ minAgeMs: 0 });
-
-    assert.equal(fs.existsSync(miniTemp), false);
-    assert.equal(fs.readFileSync(sibling, "utf8"), "keep-me");
+  it("removes only private staging and never instance config/auths", async () => {
+    isolate();
+    operation("update-old");
+    const config = path.join(cpaHome(), "config.yaml");
+    fs.mkdirSync(cpaHome(), { recursive: true });
+    fs.writeFileSync(config, "keep");
+    await captureConsole(() => runClean({ minAgeMs: 0 }));
+    assert.equal(fs.existsSync(miniCpaTempRoot()), false);
+    assert.equal(fs.readFileSync(config, "utf8"), "keep");
   });
 
-  it("reports and fails when an entry cannot be removed", async () => {
-    const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-clean-base-"));
-    temps.push(base);
-    setAppDataRoot(base);
+  it("cleans stale downloads even when their shared parent contains a new download", async () => {
+    isolate();
+    const stale = operation("binary-old", "downloads");
+    const fresh = operation("binary-fresh", "downloads", false);
+    const now = new Date();
+    fs.utimesSync(path.dirname(fresh), now, now);
+    await captureConsole(() => runClean());
+    assert.equal(fs.existsSync(stale), false);
+    assert.equal(fs.existsSync(fresh), true);
+  });
 
-    const miniTemp = miniCpaTempRoot();
-    const locked = path.join(miniTemp, "downloads");
-    fs.mkdirSync(locked, { recursive: true });
-    fs.writeFileSync(path.join(locked, "x.zip"), "payload");
-
-    const lines: string[] = [];
-    const originalLog = console.log;
-    const originalRmSync = fs.rmSync;
-    console.log = (...args: unknown[]): void => {
-      lines.push(args.map((arg) => String(arg)).join(" "));
+  it("reports a failed removal, keeps the residue, and exits nonzero", async () => {
+    isolate();
+    const locked = operation("update-locked");
+    const originalRm = fs.promises.rm;
+    fs.promises.rm = async (file, options) => {
+      if (String(file) === locked)
+        throw Object.assign(new Error("resource locked"), { code: "EBUSY" });
+      return originalRm(file, options);
     };
-    fs.rmSync = ((target: fs.PathLike, options?: fs.RmOptions): void => {
-      if (String(target) === locked) {
-        const err: NodeJS.ErrnoException = new Error("EBUSY: resource busy or locked");
-        err.code = "EBUSY";
-        throw err;
-      }
-      originalRmSync(target, options);
-    }) as typeof fs.rmSync;
+    let output: Awaited<ReturnType<typeof captureConsole>>;
     try {
-      await runClean({ minAgeMs: 0 });
+      output = await captureConsole(() => runClean({ minAgeMs: 0 }));
     } finally {
-      fs.rmSync = originalRmSync;
-      console.log = originalLog;
+      fs.promises.rm = originalRm;
     }
-
-    assert.ok(
-      lines.some((line) => line.includes("could not remove")),
-      lines.join("\n"),
-    );
-    assert.ok(
-      lines.some((line) => line.includes("1 could not be removed")),
-      lines.join("\n"),
-    );
+    assert.match(output.stdout.join("\n"), /could not remove.*resource locked/);
+    assert.match(output.stdout.join("\n"), /1 could not be removed/);
     assert.equal(process.exitCode, 1);
     assert.equal(fs.existsSync(locked), true);
   });
 
-  it("keeps recent staging entries by default", async () => {
-    const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-clean-base-"));
-    temps.push(base);
-    setAppDataRoot(base);
+  it("cannot delete an active operation, even if its directory is very old", async () => {
+    isolate();
+    let entered!: () => void;
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let active = "";
+    const holding = withMiniCpaUpdateLock("update", async () => {
+      active = operation("update-active");
+      entered();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    await ready;
+    try {
+      await assert.rejects(() => runClean({ minAgeMs: 0 }), /lock|running/i);
+      assert.equal(fs.existsSync(active), true);
+      await withMiniCpaLock("start", async () => {});
+    } finally {
+      release();
+      await holding;
+    }
+  });
 
-    const miniTemp = miniCpaTempRoot();
-    fs.mkdirSync(path.join(miniTemp, "downloads"), { recursive: true });
-    const fresh = path.join(miniTemp, "downloads", "fresh.zip");
-    fs.writeFileSync(fresh, "payload");
+  it("does not block lifecycle commands or pre-scan sizes while deleting a tree", async () => {
+    isolate();
+    const old = operation("update-old");
+    let entered!: () => void;
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const originalRm = fs.promises.rm;
+    const originalReadDir = fs.readdirSync;
+    fs.promises.rm = async (file, options) => {
+      if (String(file) === old) {
+        entered();
+        await blocked;
+      }
+      return originalRm(file, options);
+    };
+    fs.readdirSync = ((..._args: unknown[]) => {
+      throw new Error("unnecessary size walk");
+    }) as typeof fs.readdirSync;
+    const cleaning = captureConsole(() => runClean());
+    try {
+      await ready;
+      assert.equal(fs.existsSync(path.join(miniCpaRoot(), "state", "cpa.lock")), false);
+      await withMiniCpaLock("stop", async () => {});
+    } finally {
+      release();
+      try {
+        await cleaning;
+      } finally {
+        fs.promises.rm = originalRm;
+        fs.readdirSync = originalReadDir;
+      }
+    }
+    assert.equal(fs.existsSync(old), false);
+  });
 
-    await runClean();
+  it("removes a staging symlink/junction without deleting its destination", async () => {
+    isolate();
+    const outside = path.join(env!.baseDir, "outside");
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "secret"), "keep");
+    fs.mkdirSync(miniCpaTempRoot(), { recursive: true });
+    const link = path.join(miniCpaTempRoot(), "extract-link");
+    fs.symlinkSync(outside, link, process.platform === "win32" ? "junction" : "dir");
+    await captureConsole(() => runClean({ minAgeMs: 0 }));
+    assert.equal(fs.existsSync(link), false);
+    assert.equal(fs.readFileSync(path.join(outside, "secret"), "utf8"), "keep");
+  });
 
-    assert.equal(fs.existsSync(fresh), true);
+  it("refuses a symlinked temp root rather than cleaning unrelated data", async () => {
+    isolate();
+    const outside = path.join(env!.baseDir, "outside");
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "secret"), "keep");
+    fs.mkdirSync(miniCpaRoot(), { recursive: true });
+    fs.symlinkSync(outside, miniCpaTempRoot(), process.platform === "win32" ? "junction" : "dir");
+    await assert.rejects(() => runClean({ minAgeMs: 0 }), /Refusing symlinked MiniCPA temp root/);
+    assert.equal(fs.readFileSync(path.join(outside, "secret"), "utf8"), "keep");
+  });
+
+  it("never follows an operations-directory symlink during orphan cleanup", async () => {
+    isolate();
+    const outside = path.join(env!.baseDir, "outside");
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "secret"), "keep");
+    fs.mkdirSync(miniCpaTempRoot(), { recursive: true });
+    fs.symlinkSync(
+      outside,
+      path.join(miniCpaTempRoot(), "operations"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await withMiniCpaUpdateLock("update", async () => {
+      await assert.rejects(
+        () => cleanupPreviousUpdateOperations(),
+        /Refusing symlinked update operations directory/,
+      );
+    });
+    assert.equal(fs.readFileSync(path.join(outside, "secret"), "utf8"), "keep");
+  });
+
+  it("bounds automatic maintenance but leaves explicit clean able to finish", async () => {
+    isolate();
+    for (let index = 0; index < 5; index++) operation(`update-${index}`);
+    await withMiniCpaUpdateLock("update", async () => {
+      assert.equal((await cleanupTempFiles({ maxEntries: 2 })).removed, 2);
+    });
+    assert.equal(fs.readdirSync(path.join(miniCpaTempRoot(), "operations")).length, 3);
+    await captureConsole(() => runClean());
+    assert.equal(fs.existsSync(miniCpaTempRoot()), false);
   });
 });

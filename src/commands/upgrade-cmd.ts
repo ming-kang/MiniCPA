@@ -1,4 +1,4 @@
-import { withMiniCpaLock } from "../process/lock.js";
+import { withMiniCpaLock, withMiniCpaUpdateLock } from "../process/lock.js";
 import {
   compareMinicpaVersions,
   fetchLatestMinicpaVersion,
@@ -17,6 +17,7 @@ export type UpgradeDeps = UpgradeCheckDeps & {
   installMinicpaVersion: typeof installMinicpaVersion;
   updateMinicpaVersion: typeof updateMinicpaVersion;
   withMiniCpaLock: typeof withMiniCpaLock;
+  withMiniCpaUpdateLock: typeof withMiniCpaUpdateLock;
 };
 
 const realUpgradeCheckDeps: UpgradeCheckDeps = {
@@ -30,6 +31,7 @@ const realUpgradeDeps: UpgradeDeps = {
   installMinicpaVersion,
   updateMinicpaVersion,
   withMiniCpaLock,
+  withMiniCpaUpdateLock,
 };
 
 function printVersionStatus(
@@ -86,27 +88,30 @@ export async function runUpgrade(
     printVersionStatus(opts.currentVersion, latestVersion, status);
   }
 
-  await deps.withMiniCpaLock("upgrade", async () => {
-    const detection = await deps.detectNpmGlobalInstall(opts.packageRoot);
-    if (!detection.supported) {
-      throw new Error(
-        [
-          "MiniCPA cannot upgrade this installation automatically.",
-          detection.message,
-          "Upgrade manually with:",
-          "npm install -g @astralyn/minicpa@latest",
-        ].join("\n"),
-      );
-    }
+  // Do not replace package modules/templates while a binary update is preparing.
+  await deps.withMiniCpaUpdateLock("upgrade", () =>
+    deps.withMiniCpaLock("upgrade", async () => {
+      const detection = await deps.detectNpmGlobalInstall(opts.packageRoot);
+      if (!detection.supported) {
+        throw new Error(
+          [
+            "MiniCPA cannot upgrade this installation automatically.",
+            detection.message,
+            "Upgrade manually with:",
+            "npm install -g @astralyn/minicpa@latest",
+          ].join("\n"),
+        );
+      }
 
-    if (opts.force) {
-      console.log(`Reinstalling MiniCPA ${latestVersion} with npm…`);
-      await deps.installMinicpaVersion(detection, latestVersion);
-    } else {
-      console.log("Upgrading MiniCPA with npm…");
-      await deps.updateMinicpaVersion(detection, latestVersion);
-    }
-  });
+      if (opts.force) {
+        console.log(`Reinstalling MiniCPA ${latestVersion} with npm…`);
+        await deps.installMinicpaVersion(detection, latestVersion);
+      } else {
+        console.log("Upgrading MiniCPA with npm…");
+        await deps.updateMinicpaVersion(detection, latestVersion);
+      }
+    }),
+  );
 
   console.log(
     opts.force

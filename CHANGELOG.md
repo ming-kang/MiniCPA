@@ -7,6 +7,15 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 ### Changed
 
 - Unify contributor checks under `npm run check`, shared by a lightweight pre-commit hook, CI, and release verification; document test filtering and development commands.
+- Bound config history to three private fixed slots, deduplicate by direct text comparison, and avoid snapshots for comment/order-only refreshes. The next `cpa update` deletes generated legacy timestamped config backups without touching binary/atomic recovery files.
+- Separate update preparation and temp cleanup from the lifecycle lock. Download, extract, and copy/fsync before downtime; re-read process state at commit so user start/stop operations during preparation are respected. Synchronize config only after preparation and recover this config write on commit failure without overwriting external edits.
+- Use CLIProxyAPI's native application/request-error logs and continuous rotation instead of permanent duplicate stdout/stderr captures. Add `cpa logs --legacy`, discover new error filenames while following, and move bounded MiniCPA start events to `state/minicpa.log` with read-only fallback to old history.
+- Make startup permission hardening fixed-cost, reuse command config snapshots, and reserve recursive temp statistics for `cpa doctor --deep`. Limit the optional GitHub diagnostic to one attempt and three seconds.
+- Bound config text to 4 MiB, GitHub metadata to 1 MiB, checksums to 256 KiB, and archive entry/path/decompression work; cancel unused response bodies while retaining existing download integrity checks.
+
+### Fixed
+
+- Clean each old download by its own age rather than the shared parent's time, remove temp trees asynchronously without a preliminary size walk, and refuse new update workspaces when prior operation cleanup remains blocked. Reject symlink/junction directory escapes and stop event-log appends when rotation fails rather than allowing unlimited growth.
 
 ## [0.4.3] - 2026-09-29
 

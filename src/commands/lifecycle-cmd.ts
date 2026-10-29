@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import { openInBrowser } from "../browser.js";
-import { readCpaConfigWithWarnings } from "../config-yaml.js";
+import { readCpaConfigWithWarnings, type CpaConfig } from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
 import { describeDownloadRoute } from "../http.js";
-import { tailFollowMany } from "./log-follow.js";
 import { recordMiniCpaEvent } from "../minicpa-log.js";
 import { inspectAutostartState, type AutostartState } from "../process/autostart.js";
 import {
@@ -20,24 +19,15 @@ import {
   inspectRuntimeInstallation,
   runRuntimeAttached,
 } from "../process/runtime.js";
-import { tailFile } from "../util.js";
-
-export function parseLogLineCount(value: string): number {
-  if (!/^[1-9]\d*$/.test(value)) {
-    throw new Error("--lines must be a positive whole number");
-  }
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed)) {
-    throw new Error("--lines must be a positive whole number");
-  }
-  return parsed;
-}
-
-function printRunningSummary(ctx: ReturnType<typeof createContext>, pid: number): void {
+function printRunningSummary(
+  ctx: ReturnType<typeof createContext>,
+  pid: number,
+  config: CpaConfig,
+): void {
   printHome(ctx);
   console.log(`Status     running (PID=${pid})`);
-  console.log(`API        ${apiBaseUrl(ctx.home)}`);
-  console.log(`Web        ${managementUrl(ctx.home)}`);
+  console.log(`API        ${apiBaseUrl(ctx.home, config)}`);
+  console.log(`Web        ${managementUrl(ctx.home, config)}`);
 }
 
 /**
@@ -52,10 +42,14 @@ function printRunningSummary(ctx: ReturnType<typeof createContext>, pid: number)
  */
 export async function runStart(opts: { noWait?: boolean }): Promise<void> {
   const ctx = createContext();
-  printConfigWarnings(ctx.layout.configFile);
-  let running: RunningInfo;
+  let started: { running: RunningInfo; config: CpaConfig };
   try {
-    running = await withMiniCpaLock("start", () => startDaemon(ctx.home, { noWait: opts.noWait }));
+    started = await withMiniCpaLock("start", async () => {
+      const { config, warnings } = readCpaConfigWithWarnings(ctx.layout.configFile);
+      printConfigWarnings(warnings, config);
+      const running = await startDaemon(ctx.home, { noWait: opts.noWait, config });
+      return { running, config };
+    });
   } catch (err) {
     recordMiniCpaEvent(
       ctx.home,
@@ -64,18 +58,17 @@ export async function runStart(opts: { noWait?: boolean }): Promise<void> {
     );
     throw err;
   }
-  recordMiniCpaEvent(ctx.home, "info", `start ok pid=${running.pid}`);
-  printRunningSummary(ctx, running.pid);
+  recordMiniCpaEvent(ctx.home, "info", `start ok pid=${started.running.pid}`);
+  printRunningSummary(ctx, started.running.pid, started.config);
 }
 
 /** Non-fatal: CPA is the authority on its config, but probes may target the wrong port. */
-function printConfigWarnings(configFile: string): void {
-  try {
-    for (const warning of readCpaConfigWithWarnings(configFile).warnings) {
-      console.error(`Warning: ${warning}`);
-    }
-  } catch {
-    /* startDaemon will surface config errors with better context */
+function printConfigWarnings(warnings: string[], config: CpaConfig): void {
+  for (const warning of warnings) console.error(`Warning: ${warning}`);
+  if (config["logging-to-file"] === false) {
+    console.error(
+      "Warning: logging-to-file is disabled; detached stdout/stderr are not saved. Enable native logging in config.yaml.",
+    );
   }
 }
 
@@ -88,11 +81,13 @@ export async function runStop(): Promise<void> {
 
 export async function runRestart(opts: { noWait?: boolean }): Promise<void> {
   const ctx = createContext();
-  const running = await withMiniCpaLock("restart", async () => {
+  const { running, config } = await withMiniCpaLock("restart", async () => {
+    const { config, warnings } = readCpaConfigWithWarnings(ctx.layout.configFile);
+    printConfigWarnings(warnings, config);
     await stopDaemon(ctx.home);
-    return startDaemon(ctx.home, { noWait: opts.noWait });
+    return { running: await startDaemon(ctx.home, { noWait: opts.noWait, config }), config };
   });
-  printRunningSummary(ctx, running.pid);
+  printRunningSummary(ctx, running.pid, config);
 }
 
 export type StatusDependencies = {
@@ -119,12 +114,12 @@ export async function runStatus(cliVersion: string, deps?: StatusDependencies): 
   row("MiniCPA Version", cliVersion);
   row("Core Version", version ?? (installed.executable ? "(unknown)" : "(not installed)"));
   row("Download Via", describeDownloadRoute());
-  let configValid = hasConfig;
+  let config: CpaConfig | undefined;
   try {
-    row("Local API", hasConfig ? apiBaseUrl(ctx.home) : "(not configured)");
-    row("Web Panel", hasConfig ? managementUrl(ctx.home) : "(not configured)");
+    if (hasConfig) config = readCpaConfigWithWarnings(ctx.layout.configFile).config;
+    row("Local API", config ? apiBaseUrl(ctx.home, config) : "(not configured)");
+    row("Web Panel", config ? managementUrl(ctx.home, config) : "(not configured)");
   } catch (error) {
-    configValid = false;
     row("Local API", "(invalid config)");
     row("Web Panel", "(invalid config)");
     console.error(`Warning: ${error instanceof Error ? error.message : String(error)}`);
@@ -141,10 +136,10 @@ export async function runStatus(cliVersion: string, deps?: StatusDependencies): 
       `running (PID=${running.pid})${running.identityUnknown ? " · identity unverified" : ""}`,
     );
     if (running.startedAt) row("Started", running.startedAt);
-    const reachable = configValid && (await waitForAnyHttpOk(readinessUrls(ctx.home), 2000));
+    const reachable = !!config && (await waitForAnyHttpOk(readinessUrls(ctx.home, config), 2000));
     row("HTTP", reachable ? "ok" : "not reachable");
     if (!reachable) {
-      row("Hint", "Try: cpa restart (or cpa logs --err)");
+      row("Hint", "Try: cpa restart (or cpa logs)");
     }
     process.exitCode = reachable ? 0 : 1;
   } else {
@@ -184,20 +179,23 @@ export async function runOpen(deps?: {
     );
   }
 
-  const url = managementUrl(ctx.home);
+  const url = managementUrl(ctx.home, config);
   let ok = await waitForHttpOk(url, deps?.initialPanelWaitMs ?? 3000);
   if (!ok) {
     // The first request can trigger CLIProxyAPI's own management.html download,
     // which current upstream detaches from the client request. Distinguish an
     // offline server quickly, then give that download its full HTTP budget.
-    const serverUp = await waitForHttpOk(`${apiBaseUrl(ctx.home)}/`, deps?.serverWaitMs ?? 2000);
+    const serverUp = await waitForHttpOk(
+      `${apiBaseUrl(ctx.home, config)}/`,
+      deps?.serverWaitMs ?? 2000,
+    );
     if (!serverUp) {
       throw new Error(`CLIProxyAPI is not reachable at ${url}. Run: cpa start`);
     }
     ok = await waitForHttpOk(url, deps?.panelBootstrapWaitMs ?? 35_000);
     if (!ok) {
       throw new Error(
-        `Web management panel is unavailable at ${url}. CLIProxyAPI manages this asset; check: cpa logs --err`,
+        `Web management panel is unavailable at ${url}. CLIProxyAPI manages this asset; check: cpa logs`,
       );
     }
   }
@@ -213,54 +211,6 @@ export async function runOpen(deps?: {
     console.error(`Warning: could not open a browser (${missing} not found)`);
     console.error("Open the URL above manually.");
   }
-}
-
-export async function runLogs(opts: {
-  follow?: boolean;
-  lines?: number;
-  errOnly?: boolean;
-}): Promise<void> {
-  const ctx = createContext();
-  const outFile = ctx.layout.logFile;
-  const errFile = ctx.layout.errLogFile;
-  const n = opts.lines ?? 80;
-
-  if (opts.follow) {
-    const files = (opts.errOnly ? [errFile] : [outFile, errFile]).filter((f) => fs.existsSync(f));
-    if (files.length === 0) {
-      throw new Error(`No log files yet under ${ctx.layout.logsDir}`);
-    }
-    await tailFollowMany(files);
-    return;
-  }
-
-  if (opts.errOnly) {
-    if (!fs.existsSync(errFile)) {
-      throw new Error(`Log not found: ${errFile}`);
-    }
-    printTail(errFile, n);
-    return;
-  }
-
-  const hasOut = fs.existsSync(outFile);
-  const hasErr = fs.existsSync(errFile);
-  if (!hasOut && !hasErr) {
-    throw new Error(`No log files yet under ${ctx.layout.logsDir}`);
-  }
-
-  if (hasOut) {
-    console.log(`=== ${outFile} ===`);
-    printTail(outFile, n);
-  }
-  if (hasErr) {
-    if (hasOut) console.log("");
-    console.log(`=== ${errFile} ===`);
-    printTail(errFile, n);
-  }
-}
-
-function printTail(file: string, n: number): void {
-  console.log(tailFile(file, n));
 }
 
 export type TuiDeps = {

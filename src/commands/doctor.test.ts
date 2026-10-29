@@ -16,7 +16,7 @@ import {
 import { writeInstallState, writePidRecord } from "../state.js";
 import { withHttpFixture, withHttpsFixture } from "../test-fixtures/http-server.js";
 import type { GithubReachability } from "../update/github-client.js";
-import { DEFAULT_LOG_ROTATE_BYTES } from "../util.js";
+import { miniCpaTempRoot } from "../paths.js";
 import type { AutostartState } from "../process/autostart.js";
 import { runDoctor, type DoctorDeps } from "./doctor.js";
 
@@ -63,19 +63,25 @@ const ANONYMOUS_REACHABILITY: GithubReachability = {
  * Run doctor with stubbed probes (never touches the network, the registry, or
  * systemctl) and collect stdout. Pass overrides to exercise specific checks.
  */
-async function runDoctorCapturing(deps: Partial<DoctorDeps> = {}): Promise<string[]> {
+async function runDoctorCapturing(
+  deps: Partial<DoctorDeps> = {},
+  options?: { deep?: boolean },
+): Promise<string[]> {
   const lines: string[] = [];
   const originalLog = console.log;
   console.log = (...args: unknown[]): void => {
     lines.push(args.map((arg) => String(arg)).join(" "));
   };
   try {
-    await runDoctor({
-      checkGithubReachability: async () => ANONYMOUS_REACHABILITY,
-      inspectAutostartState: async () => "off",
-      lingerHint: async () => undefined,
-      ...deps,
-    });
+    await runDoctor(
+      {
+        checkGithubReachability: async () => ANONYMOUS_REACHABILITY,
+        inspectAutostartState: async () => "off",
+        lingerHint: async () => undefined,
+        ...deps,
+      },
+      options,
+    );
   } finally {
     console.log = originalLog;
   }
@@ -233,21 +239,57 @@ describe("runDoctor", () => {
     );
   });
 
-  it("warns about a log file that has reached the rotation threshold", async () => {
+  it("reports old captures as read-only history instead of promising future rotation", async () => {
     useTempRoot();
     const home = resolveCpaHome();
     const layout = cpaLayout(home);
     ensureDir(layout.logsDir);
     fs.writeFileSync(layout.configFile, "port: 8317\n");
     fs.writeFileSync(layout.logFile, "");
-    fs.truncateSync(layout.logFile, DEFAULT_LOG_ROTATE_BYTES);
+    fs.truncateSync(layout.logFile, 50 * 1024 * 1024);
 
     const lines = await runDoctorCapturing();
 
     assert.ok(
-      hasLine(lines, "cpa.log is 50.0 MB — will rotate on next cpa start"),
+      hasLine(
+        lines,
+        "legacy cpa.log 50.0 MB — read with cpa logs --legacy; new starts do not append here",
+      ),
       lines.join("\n"),
     );
+  });
+
+  it("reads config once and skips recursive temp statistics unless --deep is requested", async () => {
+    useTempRoot();
+    const home = resolveCpaHome();
+    ensureDir(home);
+    const file = cpaLayout(home).configFile;
+    fs.writeFileSync(file, "port: 8317\n");
+    const temp = path.join(miniCpaTempRoot(), "operations", "orphan");
+    fs.mkdirSync(temp, { recursive: true });
+    fs.writeFileSync(path.join(temp, "data"), "payload");
+    let reads = 0;
+    let scans = 0;
+    const originalOpen = fs.openSync;
+    const originalReadDir = fs.readdirSync;
+    fs.openSync = (target, ...args) => {
+      if (String(target) === file) reads++;
+      return originalOpen(target, ...args);
+    };
+    fs.readdirSync = ((target: fs.PathLike, ...args: unknown[]) => {
+      if (String(target).startsWith(miniCpaTempRoot())) scans++;
+      return (originalReadDir as (...args: unknown[]) => unknown)(target, ...args);
+    }) as typeof fs.readdirSync;
+    try {
+      await runDoctorCapturing();
+      assert.equal(reads, 1);
+      assert.equal(scans, 0);
+      await runDoctorCapturing({}, { deep: true });
+      assert.ok(scans > 0);
+    } finally {
+      fs.openSync = originalOpen;
+      fs.readdirSync = originalReadDir;
+    }
   });
 
   it("reports a home that only has the backup binary without repairing it", async () => {

@@ -3,7 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { configBackupPaths } from "../config-backup.js";
 import { cpaLayout, miniCpaRoot, resolveCpaHome } from "../paths.js";
+import { withMiniCpaLock } from "../process/lock.js";
 import type { BinaryUpdateResult } from "../update/binary.js";
 import {
   runUpdate,
@@ -95,7 +97,7 @@ describe("runUpdate reporting", () => {
     assert.equal(process.exitCode, undefined);
   });
 
-  it("synchronizes an existing config before updating the binary", async () => {
+  it("synchronizes the latest config only in commit after binary preparation succeeds", async () => {
     isolateMiniCpaRoot();
     const home = resolveCpaHome();
     const layout = cpaLayout(home);
@@ -109,16 +111,25 @@ describe("runUpdate reporting", () => {
       runUpdate(
         {},
         {
-          updateBinary: async () => {
-            const configText = fs.readFileSync(layout.configFile, "utf8");
-            assert.match(configText, /^# CLIProxyAPI 中文配置示例/);
-            assert.match(configText, /pprof:\n {2}enable: false/);
-            assert.match(configText, /host: 0\.0\.0\.0/);
-            assert.match(configText, /port: 9000/);
-            assert.match(configText, /- sk-existing/);
-            assert.match(configText, /logging-to-file: true/);
-            assert.ok(fs.existsSync(path.join(miniCpaRoot(), "state", "cpa.lock")));
-            inspectedSynchronizedConfig = true;
+          updateBinary: async (_home, options) => {
+            assert.equal(
+              fs.readFileSync(layout.configFile, "utf8"),
+              existing,
+              "preparation leaves config alone",
+            );
+            assert.equal(fs.existsSync(path.join(miniCpaRoot(), "state", "cpa.lock")), false);
+            await withMiniCpaLock("update", async () => {
+              options?.beforeInstall?.();
+              const configText = fs.readFileSync(layout.configFile, "utf8");
+              assert.match(configText, /^# CLIProxyAPI 中文配置示例/);
+              assert.match(configText, /pprof:\n {2}enable: false/);
+              assert.match(configText, /host: 0\.0\.0\.0/);
+              assert.match(configText, /port: 9000/);
+              assert.match(configText, /- sk-existing/);
+              assert.match(configText, /logging-to-file: true/);
+              assert.ok(fs.existsSync(path.join(miniCpaRoot(), "state", "cpa.lock")));
+              inspectedSynchronizedConfig = true;
+            });
             return { version: "7.2.92", skipped: true, restarted: false };
           },
         },
@@ -132,11 +143,68 @@ describe("runUpdate reporting", () => {
     );
     assert.match(stdout, /Config backup:/);
     assert.match(stdout, /Config changes apply on the next cpa start\/restart\./);
-    const backups = fs.readdirSync(home).filter((entry) => entry.startsWith("config.yaml.bak."));
+    const backups = configBackupPaths(layout.configFile).filter((file) => fs.existsSync(file));
     assert.equal(backups.length, 1);
-    const backup = backups[0];
-    assert.ok(backup);
-    assert.equal(fs.readFileSync(path.join(home, backup), "utf8"), existing);
+    assert.equal(fs.readFileSync(backups[0]!, "utf8"), existing);
+  });
+
+  it("clears legacy backups on the next update but never rewrites config on download failure", async () => {
+    isolateMiniCpaRoot();
+    const home = resolveCpaHome();
+    const layout = cpaLayout(home);
+    fs.mkdirSync(home, { recursive: true });
+    const old = "port: 9000\nlogging-to-file: false\n";
+    fs.writeFileSync(layout.configFile, old);
+    const legacy = `${layout.configFile}.bak.2026-10-01T12-34-56-789Z`;
+    fs.writeFileSync(legacy, "old snapshot");
+    await assert.rejects(
+      () =>
+        captureOutput(() =>
+          runUpdate(
+            {},
+            {
+              updateBinary: async () => {
+                throw new Error("download failed");
+              },
+            },
+          ),
+        ),
+      /download failed/,
+    );
+    assert.equal(fs.existsSync(legacy), false);
+    assert.equal(fs.readFileSync(layout.configFile, "utf8"), old);
+    assert.equal(
+      configBackupPaths(layout.configFile).some((file) => fs.existsSync(file)),
+      false,
+    );
+  });
+
+  it("retains edits made during preparation rather than merging an obsolete snapshot", async () => {
+    isolateMiniCpaRoot();
+    const home = resolveCpaHome();
+    const layout = cpaLayout(home);
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(layout.configFile, "port: 9000\n");
+    await captureOutput(() =>
+      runUpdate(
+        {},
+        {
+          updateBinary: async (_home, options) => {
+            fs.writeFileSync(layout.configFile, "port: 12345\napi-keys: [sk-during-download]\n");
+            await withMiniCpaLock("update", async () => {
+              options?.beforeInstall?.();
+            });
+            return { version: "7.2.92", skipped: true, restarted: false };
+          },
+        },
+      ),
+    );
+    assert.match(fs.readFileSync(layout.configFile, "utf8"), /port: 12345/);
+    assert.match(fs.readFileSync(layout.configFile, "utf8"), /sk-during-download/);
+    assert.equal(
+      fs.readFileSync(configBackupPaths(layout.configFile)[0]!, "utf8"),
+      "port: 12345\napi-keys: [sk-during-download]\n",
+    );
   });
 
   it("distinguishes install, reinstall, and explicit version changes", async () => {

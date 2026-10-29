@@ -57,6 +57,18 @@ describe("recordMiniCpaEvent / readLastMiniCpaEvent", () => {
     });
   });
 
+  it("reads old event history until the first record at the new state path", () => {
+    const home = tempHome();
+    const legacy = path.join(home, "logs", "minicpa.log");
+    fs.mkdirSync(path.dirname(legacy), { recursive: true });
+    fs.writeFileSync(legacy, "2026-08-26T03:04:05.000Z error start failed: legacy\n");
+    assert.equal(readLastMiniCpaEvent(home)?.message, "start failed: legacy");
+    recordMiniCpaEvent(home, "info", "start ok pid=42");
+    assert.equal(readLastMiniCpaEvent(home)?.message, "start ok pid=42");
+    assert.equal(fs.existsSync(cpaLayout(home).minicpaLogFile), true);
+    assert.match(fs.readFileSync(legacy, "utf8"), /start failed: legacy/);
+  });
+
   it("reports the newest record, so a later success clears an earlier failure", () => {
     const home = tempHome();
     recordMiniCpaEvent(home, "error", "start failed: Missing config", new Date(1000));

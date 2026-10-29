@@ -38,7 +38,7 @@ program.on("option:V", () => {
 program
   .command("init")
   .description("Initialize configuration and install the latest CLIProxyAPI binary")
-  .option("--force", "Overwrite config.yaml (backs up to config.yaml.bak.<timestamp>)")
+  .option("--force", "Overwrite config.yaml (keeps up to 3 snapshots under backups/config)")
   .action(
     withCliErrors(async (opts: { force?: boolean }) => {
       const { runInit } = await import("./commands/init.js");
@@ -123,19 +123,23 @@ program
 
 program
   .command("logs")
-  .description("Show CLIProxyAPI logs (stdout and stderr by default)")
+  .description("Show CLIProxyAPI native application or request-error logs")
   .option("-f, --follow", "Follow log output")
   .option("-n, --lines <n>", "Number of lines per file", "80")
-  .option("--err", "Show error log only")
+  .option("--err", "Show native request-error logs")
+  .option("--legacy", "Read old stdout/stderr captures (no longer written on new starts)")
   .action(
-    withCliErrors(async (opts: { follow?: boolean; lines: string; err?: boolean }) => {
-      const { runLogs, parseLogLineCount } = await import("./commands/lifecycle-cmd.js");
-      await runLogs({
-        follow: opts.follow,
-        lines: parseLogLineCount(opts.lines),
-        errOnly: opts.err,
-      });
-    }),
+    withCliErrors(
+      async (opts: { follow?: boolean; lines: string; err?: boolean; legacy?: boolean }) => {
+        const { runLogs, parseLogLineCount } = await import("./commands/logs.js");
+        await runLogs({
+          follow: opts.follow,
+          lines: parseLogLineCount(opts.lines),
+          errOnly: opts.err,
+          legacy: opts.legacy,
+        });
+      },
+    ),
   );
 
 program
@@ -206,7 +210,8 @@ updateCmd.addHelpText(
   "after",
   [
     "",
-    "An existing config is synchronized from MiniCPA's bundled template first.",
+    "An existing config is synchronized after binary preparation succeeds.",
+    "Config history keeps 3 snapshots; old timestamped config backups are deleted.",
     "CLIProxyAPI provisions and updates its Web panel itself.",
     "A running instance is restarted only when its CLIProxyAPI binary is replaced.",
     "To upgrade MiniCPA itself, run cpa upgrade.",
@@ -253,10 +258,11 @@ upgradeCmd
 program
   .command("doctor")
   .description("Diagnose CLIProxyAPI installation and runtime problems")
+  .option("--deep", "Include recursive temporary-file size statistics")
   .action(
-    withCliErrors(async () => {
+    withCliErrors(async (opts: { deep?: boolean }) => {
       const { runDoctor } = await import("./commands/doctor.js");
-      await runDoctor();
+      await runDoctor(undefined, { deep: opts.deep });
     }),
   );
 

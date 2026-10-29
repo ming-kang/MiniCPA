@@ -118,36 +118,54 @@ export async function readCurrentRuntimeVersion(home: string): Promise<string | 
 /** A replacement owns its backup only after the old active file has been moved. */
 export class RuntimeBinaryTransaction {
   private phase: "prepared" | "backed-up" | "published" = "prepared";
-  private readonly hadPrevious: boolean;
+  private hadPrevious: boolean;
   private readonly target: string;
   private readonly backup: string;
+  private readonly staging: string;
 
   constructor(private readonly home: string) {
     this.target = activeExecutablePath(home);
     this.backup = backupExecutablePath(home);
+    this.staging = `${this.target}.new`;
     this.hadPrevious = fs.existsSync(this.target);
   }
 
-  install(source: string): void {
+  /** Copy across volumes and fsync before stopping CPA or taking the lifecycle lock. */
+  prepare(source: string): void {
     ensureDir(this.home);
-    const staging = `${this.target}.new`;
     try {
-      stageBinary(source, staging);
+      stageBinary(source, this.staging);
+    } catch (error) {
+      this.discard();
+      throw error;
+    }
+  }
+
+  /** Commit only renames an already prepared, same-directory binary. */
+  install(source?: string): void {
+    if (source !== undefined) this.prepare(source);
+    this.hadPrevious = fs.existsSync(this.target);
+    try {
       if (this.hadPrevious) {
         // Failure here leaves the active version untouched and owns no backup.
         fs.rmSync(this.backup, { force: true });
         renameWithWindowsRetry(this.target, this.backup);
         this.phase = "backed-up";
       }
-      renameWithWindowsRetry(staging, this.target);
+      renameWithWindowsRetry(this.staging, this.target);
       this.phase = "published";
       syncDirectory(this.home);
     } finally {
-      try {
-        fs.rmSync(staging, { force: true });
-      } catch {
-        /* preserve install result */
-      }
+      this.discard();
+    }
+  }
+
+  /** Never touches the active binary or any rollback/recovery file. */
+  discard(): void {
+    try {
+      fs.rmSync(this.staging, { force: true });
+    } catch {
+      /* At most one deterministic staging residue; the next preparation replaces it. */
     }
   }
 

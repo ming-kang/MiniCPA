@@ -1,5 +1,5 @@
 import { Agent, fetch as undiciFetch } from "undici";
-import { getListenAddress, isTlsEnabled, readCpaConfig } from "../config-yaml.js";
+import { getListenAddress, isTlsEnabled, readCpaConfig, type CpaConfig } from "../config-yaml.js";
 import { cpaLayout } from "../paths.js";
 import { sleep } from "../util.js";
 
@@ -112,25 +112,23 @@ export async function waitForFirstHttpOk(
 }
 
 /** Single source of truth for the configured CPA HTTP/HTTPS base (one config read). */
-function resolveBase(home: string): string {
-  const layout = cpaLayout(home);
-  const cfg = readCpaConfig(layout.configFile);
+function resolveBase(home: string, config?: CpaConfig): string {
+  const cfg = config ?? readCpaConfig(cpaLayout(home).configFile);
   const { host, port } = getListenAddress(cfg);
   return formatHttpBase(host, port, isTlsEnabled(cfg));
 }
 
-export function managementUrl(home: string): string {
-  return `${resolveBase(home)}${PANEL_PATH}`;
+export function managementUrl(home: string, config?: CpaConfig): string {
+  return `${resolveBase(home, config)}${PANEL_PATH}`;
 }
 
-export function apiBaseUrl(home: string): string {
-  return resolveBase(home);
+export function apiBaseUrl(home: string, config?: CpaConfig): string {
+  return resolveBase(home, config);
 }
 
-/** Prefer the API root; the panel route is only a compatibility fallback. */
-export function readinessUrls(home: string): string[] {
-  const layout = cpaLayout(home);
-  const cfg = readCpaConfig(layout.configFile);
+/** Prefer the API root; callers reuse their command's single config snapshot. */
+export function readinessUrls(home: string, config?: CpaConfig): string[] {
+  const cfg = config ?? readCpaConfig(cpaLayout(home).configFile);
   const { host, port } = getListenAddress(cfg);
   const tls = isTlsEnabled(cfg);
   const primaryBase = formatHttpBase(host, port, tls);

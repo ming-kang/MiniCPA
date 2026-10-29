@@ -96,6 +96,24 @@ describe("extractArchive (zip)", () => {
     assert.equal(fs.readFileSync(out, "utf8"), "binary-bytes");
   });
 
+  it("bounds the zip entry count and path depth", async () => {
+    const dir = tempDir("minicpa-zip-");
+    const file = path.join(dir, "many.zip");
+    const zip = new AdmZip();
+    zip.addFile("a-note.txt", Buffer.from("note"));
+    zip.addFile(executableName(), Buffer.from("binary"));
+    zip.writeZip(file);
+    await assert.rejects(
+      () => extractArchive(file, tempDir("minicpa-extract-"), { maxEntries: 1 }),
+      /entry count limit/,
+    );
+    const deep = writeZip(`a/b/${executableName()}`, "binary");
+    await assert.rejects(
+      () => extractArchive(deep, tempDir("minicpa-extract-"), { maxPathDepth: 2 }),
+      /path depth limit/,
+    );
+  });
+
   it("rejects a zip entry with path traversal", async () => {
     const archive = craftStoredZip(`../${executableName()}`, Buffer.from("evil"));
     const dest = tempDir("minicpa-extract-");
@@ -148,6 +166,36 @@ describe("extractArchive (tar)", () => {
     // The symlink entry is filtered out, so no executable is found at all.
     await assert.rejects(() => extractArchive(archive, dest), /not found/);
     assert.equal(fs.existsSync(path.join(dest, executableName())), false);
+  });
+
+  it("bounds tar entry count and bytes decompressed even for ignored files", async () => {
+    const fixture = tempDir("minicpa-tar-src-");
+    fs.writeFileSync(path.join(fixture, "ignored"), "x".repeat(16 * 1024));
+    fs.writeFileSync(path.join(fixture, executableName()), "binary");
+    const archive = path.join(tempDir("minicpa-tar-"), "payload.tar.gz");
+    await tar.c({ gzip: true, file: archive, cwd: fixture }, ["ignored", executableName()]);
+    await assert.rejects(
+      () => extractArchive(archive, tempDir("minicpa-extract-"), { maxEntries: 1 }),
+      /entry count limit/,
+    );
+    await assert.rejects(
+      () => extractArchive(archive, tempDir("minicpa-extract-"), { maxUnpackedBytes: 4096 }),
+      /decompressed size limit/,
+    );
+  });
+
+  it("bounds total executable bytes across several matching tar entries", async () => {
+    const fixture = tempDir("minicpa-tar-src-");
+    for (const directory of ["a", "b"]) {
+      fs.mkdirSync(path.join(fixture, directory));
+      fs.writeFileSync(path.join(fixture, directory, executableName()), "12345678");
+    }
+    const archive = path.join(tempDir("minicpa-tar-"), "payload.tar.gz");
+    await tar.c({ gzip: true, file: archive, cwd: fixture }, ["a", "b"]);
+    await assert.rejects(
+      () => extractArchive(archive, tempDir("minicpa-extract-"), { maxExtractedBytes: 12 }),
+      /extraction size limit/,
+    );
   });
 
   it("extracts a nested tar layout", async () => {

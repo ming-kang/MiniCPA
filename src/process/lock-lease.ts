@@ -9,17 +9,25 @@ import path from "node:path";
  * macOS uses an exclusive loopback listener because its Unix sockets leave stale
  * filesystem entries. A busy endpoint always fails closed; nothing is stolen.
  */
-export async function acquireLockLease(lockPath: string): Promise<() => Promise<void>> {
-  const directory = fs.realpathSync.native(path.dirname(lockPath));
+export async function acquireLockLease(
+  lockPath: string,
+  scope: "lifecycle" | "update" = "lifecycle",
+): Promise<() => Promise<void>> {
+  const stateDirectory =
+    scope === "update" ? path.dirname(path.dirname(lockPath)) : path.dirname(lockPath);
+  const directory = fs.realpathSync.native(stateDirectory);
   const key = process.platform === "win32" ? directory.toLowerCase() : directory;
   const digest = createHash("sha256").update(key).digest();
-  const name = `minicpa-${digest.toString("hex")}`;
+  // Reuse the existing root identity, not another hash scheme. Adjacent ports
+  // keep our two macOS leases from ever colliding with each other.
+  const name = `minicpa-${digest.toString("hex")}${scope === "update" ? "-update" : ""}`;
+  const port = 1024 + ((digest.readUInt32BE(0) + (scope === "update" ? 1 : 0)) % 64512);
   const endpoint: net.ListenOptions =
     process.platform === "win32"
       ? { path: `\\\\.\\pipe\\${name}` }
       : process.platform === "linux"
         ? { path: `\0${name}` }
-        : { host: "127.0.0.1", port: 1024 + (digest.readUInt32BE(0) % 64512), exclusive: true };
+        : { host: "127.0.0.1", port, exclusive: true };
   const label = "port" in endpoint ? `127.0.0.1:${endpoint.port}` : name;
   const server = net.createServer((socket) => socket.destroy());
   await new Promise<void>((resolve, reject) => {

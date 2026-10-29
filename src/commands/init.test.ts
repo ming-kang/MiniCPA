@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { configBackupPaths } from "../config-backup.js";
 import { cpaHome, cpaLayout, miniCpaRoot } from "../paths.js";
 import type { UpdateDeps } from "./update-cmd.js";
 import { runInit } from "./init.js";
@@ -78,7 +79,12 @@ describe("runInit", () => {
         assert.equal(options?.version, undefined);
         assert.equal(options?.force, undefined);
         assert.equal(options?.insecure, undefined);
-        assert.ok(fs.existsSync(lockPath), "binary install must run while init owns the lock");
+        assert.equal(
+          fs.existsSync(lockPath),
+          false,
+          "download preparation must not hold the lifecycle lock",
+        );
+        assert.ok(fs.existsSync(path.join(miniCpaRoot(), "state", "update", "cpa.lock")));
         calls.push("binary");
         return { version: "7.2.92", skipped: false, restarted: false };
       },
@@ -139,11 +145,9 @@ describe("runInit", () => {
 
     assert.equal(error, undefined);
     assert.deepEqual(componentForces, [undefined]);
-    const backups = fs.readdirSync(home).filter((entry) => entry.startsWith("config.yaml.bak."));
+    const backups = configBackupPaths(layout.configFile).filter((file) => fs.existsSync(file));
     assert.equal(backups.length, 1);
-    const [backup] = backups;
-    assert.ok(backup);
-    assert.equal(fs.readFileSync(path.join(home, backup), "utf8"), "port: 9000\n");
+    assert.equal(fs.readFileSync(backups[0]!, "utf8"), "port: 9000\n");
     assert.notEqual(fs.readFileSync(layout.configFile, "utf8"), "port: 9000\n");
   });
 

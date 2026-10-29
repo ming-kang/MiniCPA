@@ -174,6 +174,41 @@ describe("tailFollowMany", () => {
     assert.equal(writes.join(""), "[out] partial 世界\n[out] next\n");
   });
 
+  it("discovers new error-log files and keeps UTF-8/prefix state as the set changes", async () => {
+    const first = tempLog("error-first.log");
+    const second = path.join(path.dirname(first), "error-second.log");
+    fs.writeFileSync(first, "old history\n");
+    const writes: string[] = [];
+    const followed = tailFollowMany(
+      () => fs.readdirSync(path.dirname(first)).map((name) => path.join(path.dirname(first), name)),
+      {
+        pollMs: 5,
+        write: (chunk) => {
+          writes.push(chunk.toString());
+        },
+      },
+    );
+    try {
+      const encoded = Buffer.from("世界\n");
+      fs.appendFileSync(first, encoded.subarray(0, 1));
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      fs.writeFileSync(second, "new request\n");
+      fs.appendFileSync(first, encoded.subarray(1));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      fs.unlinkSync(first);
+      fs.appendFileSync(second, "later\n");
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    } finally {
+      process.emit("SIGINT", "SIGINT");
+      await followed;
+    }
+    const output = writes.join("");
+    assert.doesNotMatch(output, /old history|�/);
+    assert.match(output, /\[error-first.log\] 世界\n/);
+    assert.match(output, /\[error-second.log\] new request\n/);
+    assert.match(output, /\[error-second.log\] later\n/);
+  });
+
   it("returns on SIGINT with exit code 130 instead of killing the process", async () => {
     const file = tempLog();
     fs.writeFileSync(file, "line\n");

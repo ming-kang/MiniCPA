@@ -1,9 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
 import { cpaLayout } from "./paths.js";
 import { appendPrivateLogLine, tailFile } from "./util.js";
 
 /**
- * MiniCPA's own event log at `<home>/logs/minicpa.log`, kept separate from the
- * CPA child's stdout/stderr logs because it records what MiniCPA itself did.
+ * MiniCPA's own event log at `<home>/state/minicpa.log`, outside CLIProxyAPI's
+ * native log directory so its log cleaner cannot delete our start diagnostics.
  *
  * It exists for the autostart path. At login the Windows launcher runs
  * `wscript.exe` with the window hidden and discards this process's stdout and
@@ -89,7 +91,9 @@ export function recordMiniCpaEvent(
 export function readLastMiniCpaEvent(home: string): MiniCpaEvent | undefined {
   let tail: string;
   try {
-    tail = tailFile(cpaLayout(home).minicpaLogFile, SCAN_LINES);
+    const current = cpaLayout(home).minicpaLogFile;
+    const file = fs.existsSync(current) ? current : path.join(home, "logs", "minicpa.log");
+    tail = tailFile(file, SCAN_LINES);
   } catch {
     return undefined;
   }

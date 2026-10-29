@@ -1,5 +1,5 @@
 import { downloadToFile } from "./download.js";
-import { fetchChecksums, parseChecksumsText } from "./checksum.js";
+import { fetchChecksums, MAX_CHECKSUM_BYTES, parseChecksumsText } from "./checksum.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -22,6 +22,7 @@ import {
   isAllowedGithubDownloadUrl,
   isSafeReleaseTag,
   normalizeTagVersion,
+  MAX_GITHUB_METADATA_BYTES,
   parseReleaseTagFromLocation,
   releaseAssetDownloadUrl,
   resolveLatestReleaseTag,
@@ -186,6 +187,23 @@ describe("fetchLatestReleaseViaApi", () => {
     }
   });
 
+  it("bounds actual streamed GitHub metadata bytes before JSON parsing", async () => {
+    await withHttpFixture(
+      {
+        "/repos/owner/repo/releases/latest": (_req, res) => {
+          res.write(" ".repeat(MAX_GITHUB_METADATA_BYTES));
+          res.end("{}");
+        },
+      },
+      async (baseUrl) => {
+        await assert.rejects(
+          () => fetchLatestReleaseViaApi("owner/repo", baseUrl),
+          /GitHub metadata.*size limit/,
+        );
+      },
+    );
+  });
+
   it("accepts a well-formed release", async () => {
     await withHttpFixture(
       {
@@ -283,6 +301,27 @@ describe("checkGithubReachability", () => {
           authenticated: true,
         });
         assert.equal(seenAuth, "Bearer ghp_probe");
+      },
+    );
+  });
+
+  it("has one short total diagnostic budget, including a stalled response body", async () => {
+    clearTokens();
+    let hits = 0;
+    await withHttpFixture(
+      {
+        "/rate_limit": (_req, res) => {
+          hits++;
+          res.flushHeaders();
+        },
+      },
+      async (baseUrl) => {
+        const started = Date.now();
+        const result = await checkGithubReachability(baseUrl, 75);
+        assert.equal(result.ok, true);
+        assert.equal(result.remaining, undefined);
+        assert.equal(hits, 1);
+        assert.ok(Date.now() - started < 1500, "doctor must not inherit a 30s update/retry budget");
       },
     );
   });
@@ -400,6 +439,21 @@ describe("resolveLatestReleaseTag", () => {
     );
   });
 
+  it("cancels the unused redirect body instead of waiting for it", async () => {
+    await withHttpFixture(
+      {
+        "/owner/repo/releases/latest": (_req, res) => {
+          res.statusCode = 302;
+          res.setHeader("location", "/owner/repo/releases/tag/v7.2.92");
+          res.flushHeaders();
+        },
+      },
+      async (baseUrl) => {
+        assert.equal(await resolveLatestReleaseTag("owner/repo", baseUrl), "v7.2.92");
+      },
+    );
+  });
+
   it("fails clearly when no usable Location is present", async () => {
     await withHttpFixture(
       {
@@ -461,6 +515,23 @@ describe("fetchChecksums", () => {
           "owner/repo",
         );
         assert.equal(map.get("CLIProxyAPI_7.0.0_windows_amd64.zip"), sum);
+      },
+    );
+  });
+
+  it("bounds actual checksum response bytes", async () => {
+    await withHttpFixture(
+      {
+        "/checksums.txt": (_req, res) => {
+          res.write(" ".repeat(MAX_CHECKSUM_BYTES));
+          res.end(`${"a".repeat(64)}  archive.zip\n`);
+        },
+      },
+      async (baseUrl) => {
+        await assert.rejects(
+          () => fetchChecksums(releaseWithChecksums(`${baseUrl}/checksums.txt`), "owner/repo"),
+          /checksums.txt.*size limit/,
+        );
       },
     );
   });

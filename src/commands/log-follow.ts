@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -36,7 +37,7 @@ function identity(stat: fs.Stats): string {
   return `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
 }
 
-function initialState(file: string): FollowFileState {
+function initialState(file: string, fromStart = false): FollowFileState {
   let stat: fs.Stats | undefined;
   try {
     stat = fs.statSync(file);
@@ -44,7 +45,7 @@ function initialState(file: string): FollowFileState {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   return {
-    position: stat?.size ?? 0,
+    position: fromStart ? 0 : (stat?.size ?? 0),
     identity: stat ? identity(stat) : undefined,
     decoder: new StringDecoder("utf8"),
     pendingLine: "",
@@ -52,7 +53,9 @@ function initialState(file: string): FollowFileState {
 }
 
 function prefixFor(file: string, count: number): string {
-  return count > 1 ? `[${file.endsWith(".err.log") ? "err" : "out"}] ` : "";
+  if (count <= 1) return "";
+  if (path.basename(file).startsWith("error-")) return `[${path.basename(file)}] `;
+  return `[${file.endsWith(".err.log") ? "err" : "out"}] `;
 }
 
 /** Preserve normal lines; split oversized lines into bounded prefixed fragments. */
@@ -85,8 +88,17 @@ async function flush(state: FollowFileState, prefix: string, write: FollowWriter
 }
 
 /** Poll with bounded buffers and await output, so slow consumers exert backpressure. */
-export async function tailFollowMany(files: string[], deps?: TailFollowDeps): Promise<void> {
-  const states = new Map(files.map((file) => [file, initialState(file)]));
+export async function tailFollowMany(
+  files: string[] | (() => string[]),
+  deps?: TailFollowDeps,
+): Promise<void> {
+  const listFiles = typeof files === "function" ? files : () => files;
+  const initialFiles = listFiles();
+  const states = new Map(initialFiles.map((file) => [file, initialState(file)]));
+  // Dynamic error-log sets always use stable filename prefixes, even with one
+  // file. Changing prefix mode mid-UTF-8 sequence would lose decoder state.
+  const filePrefix = (file: string): string =>
+    prefixFor(file, typeof files === "function" ? 2 : states.size);
   const write: FollowWriter =
     deps?.write ??
     ((chunk) =>
@@ -99,7 +111,7 @@ export async function tailFollowMany(files: string[], deps?: TailFollowDeps): Pr
     controller.abort();
   };
   process.once("SIGINT", onSigint);
-  console.log(`Following ${files.join(" + ")} (Ctrl+C to exit)`);
+  console.log(`Following ${initialFiles.join(" + ") || "new error log files"} (Ctrl+C to exit)`);
   try {
     let backlog = false;
     while (!controller.signal.aborted) {
@@ -110,9 +122,21 @@ export async function tailFollowMany(files: string[], deps?: TailFollowDeps): Pr
         throw error;
       }
       backlog = false;
+      if (typeof files === "function") {
+        const currentFiles = new Set(listFiles());
+        for (const [file, state] of states) {
+          if (!currentFiles.has(file)) {
+            await flush(state, filePrefix(file), write);
+            states.delete(file);
+          }
+        }
+        for (const file of currentFiles) {
+          if (!states.has(file)) states.set(file, initialState(file, true));
+        }
+      }
       for (const [file, state] of states) {
         if (controller.signal.aborted) break;
-        const prefix = prefixFor(file, files.length);
+        const prefix = filePrefix(file);
         let fd: number;
         try {
           fd = fs.openSync(file, "r");
@@ -146,7 +170,7 @@ export async function tailFollowMany(files: string[], deps?: TailFollowDeps): Pr
       }
     }
     for (const [file, state] of states) {
-      const prefix = prefixFor(file, files.length);
+      const prefix = filePrefix(file);
       if (prefix) await flush(state, prefix, write);
     }
   } finally {

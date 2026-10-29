@@ -28,6 +28,7 @@ function upgradeDeps(overrides: Partial<UpgradeDeps> = {}): UpgradeDeps {
     installMinicpaVersion: async () => undefined,
     updateMinicpaVersion: async () => undefined,
     withMiniCpaLock: async <T>(_command: string, fn: () => Promise<T>) => await fn(),
+    withMiniCpaUpdateLock: async <T>(_command: string, fn: () => Promise<T>) => await fn(),
     ...overrides,
   };
 }
@@ -99,6 +100,12 @@ describe("runUpgrade", () => {
         events.push("update");
       },
       installMinicpaVersion: async () => assert.fail("normal upgrades must use npm update"),
+      withMiniCpaUpdateLock: async <T>(_command: string, fn: () => Promise<T>) => {
+        events.push("prepare-enter");
+        const result = await fn();
+        events.push("prepare-exit");
+        return result;
+      },
       withMiniCpaLock: async <T>(command: string, fn: () => Promise<T>) => {
         assert.equal(command, "upgrade");
         events.push("lock-enter");
@@ -112,7 +119,15 @@ describe("runUpgrade", () => {
       runUpgrade({ currentVersion: "1.0.0", packageRoot: "/package" }, deps),
     );
 
-    assert.deepEqual(events, ["fetch", "lock-enter", "detect", "update", "lock-exit"]);
+    assert.deepEqual(events, [
+      "fetch",
+      "prepare-enter",
+      "lock-enter",
+      "detect",
+      "update",
+      "lock-exit",
+      "prepare-exit",
+    ]);
     assert.equal(
       stdout,
       [

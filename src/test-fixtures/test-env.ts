@@ -40,11 +40,15 @@ export function createIsolatedTestEnv(prefix = "minicpa-test-"): {
   const origHome = process.env.HOME;
   const origCpaHome = process.env.CPA_HOME;
   const origExitCode = process.exitCode;
+  const origWritable = process.env.WRITABLE_PATH;
+  const origWritableLower = process.env.writable_path;
 
   process.env.LOCALAPPDATA = baseDir;
   process.env.XDG_DATA_HOME = baseDir;
   process.env.HOME = baseDir;
   delete process.env.CPA_HOME;
+  delete process.env.WRITABLE_PATH;
+  delete process.env.writable_path;
 
   const cleanup = (): void => {
     // Restore environment first so failures during file cleanup never contaminate subsequent tests.
@@ -58,6 +62,10 @@ export function createIsolatedTestEnv(prefix = "minicpa-test-"): {
       if (origCpaHome === undefined) delete process.env.CPA_HOME;
       else process.env.CPA_HOME = origCpaHome;
       process.exitCode = origExitCode;
+      delete process.env.WRITABLE_PATH;
+      delete process.env.writable_path;
+      if (origWritable !== undefined) process.env.WRITABLE_PATH = origWritable;
+      if (origWritableLower !== undefined) process.env.writable_path = origWritableLower;
     } finally {
       try {
         fs.rmSync(baseDir, { recursive: true, force: true });
