@@ -4,6 +4,8 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-10-29
+
 ### Changed
 
 - Unify contributor checks under `npm run check`, shared by a lightweight pre-commit hook, CI, and release verification; document test filtering and development commands.
@@ -21,6 +23,7 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ### Fixed
 
+- Upgrade `undici` to 7.30.1 to address current network-client security advisories without a major-version change.
 - Clean each old download by its own age rather than the shared parent's time, remove temp trees asynchronously without a preliminary size walk, and refuse new update workspaces when prior operation cleanup remains blocked. Reject symlink/junction escapes at temp boundaries and stop event-log appends when rotation fails rather than allowing unlimited growth.
 
 ## [0.4.3] - 2026-09-29
