@@ -7,15 +7,21 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 ### Changed
 
 - Unify contributor checks under `npm run check`, shared by a lightweight pre-commit hook, CI, and release verification; document test filtering and development commands.
-- Bound config history to three private fixed slots, deduplicate by direct text comparison, and avoid snapshots for comment/order-only refreshes. The next `cpa update` deletes generated legacy timestamped config backups without touching binary/atomic recovery files.
-- Separate update preparation and temp cleanup from the lifecycle lock. Download, extract, and copy/fsync before downtime; re-read process state at commit so user start/stop operations during preparation are respected. Synchronize config only after preparation and recover this config write on commit failure without overwriting external edits.
-- Use CLIProxyAPI's native application/request-error logs and continuous rotation instead of permanent duplicate stdout/stderr captures. Add `cpa logs --legacy`, discover new error filenames while following, and move bounded MiniCPA start events to `state/minicpa.log` with read-only fallback to old history.
-- Make startup permission hardening fixed-cost, reuse command config snapshots, and reserve recursive temp statistics for `cpa doctor --deep`. Limit the optional GitHub diagnostic to one attempt and three seconds.
-- Bound config text to 4 MiB, GitHub metadata to 1 MiB, checksums to 256 KiB, and archive entry/path/decompression work; cancel unused response bodies while retaining existing download integrity checks.
+- Make `cpa init` a one-time minimal bootstrap with loopback listening, local authentication and management, and the requested fixed initial keys/panel repository. Preserve all existing configuration, including empty or malformed files; retries never reset user edits. Do not create `.env` or repair permissions on existing CPA files.
+- Treat CPA configuration as opaque after bootstrap. Updates never read, synchronize, back up, clean up, or roll it back; all existing configuration snapshots and legacy backups remain untouched. Configuration ownership, validation, defaults and migrations belong to CLIProxyAPI.
+- Add an explicit MiniCPA connection target through global `--api-url` or `MINICPA_API_URL`, defaulting to `http://127.0.0.1:8317`, instead of inferring listener/TLS/panel settings from YAML. The native TUI reads its own configuration.
+- Separate update preparation and temp cleanup from the lifecycle lock. Download, extract, and copy/fsync before downtime; re-read process state at commit so user start/stop operations during preparation are respected. Binary recovery preserves native configuration changes and still attempts restart when install-metadata repair fails.
+- Use CLIProxyAPI's native application/request-error logs and continuous rotation instead of permanent duplicate stdout/stderr captures. Add `cpa logs --legacy`, discover new error filenames while following, and move bounded MiniCPA start events to `state/minicpa.log`. The minimal bootstrap does not enable application file logging; users configure that in CPA.
+- Reserve recursive temp statistics for `cpa doctor --deep`, limit its optional GitHub diagnostic to one attempt and three seconds, and keep MiniCPA's own files private without traversing CPA data.
+- Bound GitHub metadata to 1 MiB, checksums to 256 KiB, and archive entry/path/decompression work; cancel unused response bodies while retaining existing download integrity checks.
+
+### Removed
+
+- Remove the bundled `config.example.yaml`, YAML parser dependency and configuration-field parsing/normalization, automatic synchronization/history/legacy cleanup, configuration rollback, recursive CPA permission repair, `.env` creation and `cpa init --force`.
 
 ### Fixed
 
-- Clean each old download by its own age rather than the shared parent's time, remove temp trees asynchronously without a preliminary size walk, and refuse new update workspaces when prior operation cleanup remains blocked. Reject symlink/junction directory escapes and stop event-log appends when rotation fails rather than allowing unlimited growth.
+- Clean each old download by its own age rather than the shared parent's time, remove temp trees asynchronously without a preliminary size walk, and refuse new update workspaces when prior operation cleanup remains blocked. Reject symlink/junction escapes at temp boundaries and stop event-log appends when rotation fails rather than allowing unlimited growth.
 
 ## [0.4.3] - 2026-09-29
 

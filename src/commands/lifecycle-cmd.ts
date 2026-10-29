@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { openInBrowser } from "../browser.js";
-import { readCpaConfigWithWarnings, type CpaConfig } from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
 import { describeDownloadRoute } from "../http.js";
 import { recordMiniCpaEvent } from "../minicpa-log.js";
@@ -19,15 +18,11 @@ import {
   inspectRuntimeInstallation,
   runRuntimeAttached,
 } from "../process/runtime.js";
-function printRunningSummary(
-  ctx: ReturnType<typeof createContext>,
-  pid: number,
-  config: CpaConfig,
-): void {
+function printRunningSummary(ctx: ReturnType<typeof createContext>, pid: number): void {
   printHome(ctx);
   console.log(`Status     running (PID=${pid})`);
-  console.log(`API        ${apiBaseUrl(ctx.home, config)}`);
-  console.log(`Web        ${managementUrl(ctx.home, config)}`);
+  console.log(`API        ${apiBaseUrl()}`);
+  console.log(`Web        ${managementUrl()}`);
 }
 
 /**
@@ -42,14 +37,10 @@ function printRunningSummary(
  */
 export async function runStart(opts: { noWait?: boolean }): Promise<void> {
   const ctx = createContext();
-  let started: { running: RunningInfo; config: CpaConfig };
+  let running: RunningInfo;
   try {
-    started = await withMiniCpaLock("start", async () => {
-      const { config, warnings } = readCpaConfigWithWarnings(ctx.layout.configFile);
-      printConfigWarnings(warnings, config);
-      const running = await startDaemon(ctx.home, { noWait: opts.noWait, config });
-      return { running, config };
-    });
+    apiBaseUrl();
+    running = await withMiniCpaLock("start", () => startDaemon(ctx.home, { noWait: opts.noWait }));
   } catch (err) {
     recordMiniCpaEvent(
       ctx.home,
@@ -58,18 +49,8 @@ export async function runStart(opts: { noWait?: boolean }): Promise<void> {
     );
     throw err;
   }
-  recordMiniCpaEvent(ctx.home, "info", `start ok pid=${started.running.pid}`);
-  printRunningSummary(ctx, started.running.pid, started.config);
-}
-
-/** Non-fatal: CPA is the authority on its config, but probes may target the wrong port. */
-function printConfigWarnings(warnings: string[], config: CpaConfig): void {
-  for (const warning of warnings) console.error(`Warning: ${warning}`);
-  if (config["logging-to-file"] === false) {
-    console.error(
-      "Warning: logging-to-file is disabled; detached stdout/stderr are not saved. Enable native logging in config.yaml.",
-    );
-  }
+  recordMiniCpaEvent(ctx.home, "info", `start ok pid=${running.pid}`);
+  printRunningSummary(ctx, running.pid);
 }
 
 export async function runStop(): Promise<void> {
@@ -81,13 +62,12 @@ export async function runStop(): Promise<void> {
 
 export async function runRestart(opts: { noWait?: boolean }): Promise<void> {
   const ctx = createContext();
-  const { running, config } = await withMiniCpaLock("restart", async () => {
-    const { config, warnings } = readCpaConfigWithWarnings(ctx.layout.configFile);
-    printConfigWarnings(warnings, config);
+  apiBaseUrl();
+  const running = await withMiniCpaLock("restart", async () => {
     await stopDaemon(ctx.home);
-    return { running: await startDaemon(ctx.home, { noWait: opts.noWait, config }), config };
+    return startDaemon(ctx.home, { noWait: opts.noWait });
   });
-  printRunningSummary(ctx, running.pid, config);
+  printRunningSummary(ctx, running.pid);
 }
 
 export type StatusDependencies = {
@@ -114,16 +94,8 @@ export async function runStatus(cliVersion: string, deps?: StatusDependencies): 
   row("MiniCPA Version", cliVersion);
   row("Core Version", version ?? (installed.executable ? "(unknown)" : "(not installed)"));
   row("Download Via", describeDownloadRoute());
-  let config: CpaConfig | undefined;
-  try {
-    if (hasConfig) config = readCpaConfigWithWarnings(ctx.layout.configFile).config;
-    row("Local API", config ? apiBaseUrl(ctx.home, config) : "(not configured)");
-    row("Web Panel", config ? managementUrl(ctx.home, config) : "(not configured)");
-  } catch (error) {
-    row("Local API", "(invalid config)");
-    row("Web Panel", "(invalid config)");
-    console.error(`Warning: ${error instanceof Error ? error.message : String(error)}`);
-  }
+  row("Local API", apiBaseUrl());
+  row("Web Panel", managementUrl());
   row("Core Config", ctx.layout.configFile);
   row("Home", ctx.home);
   row("Autostart", autostart);
@@ -136,7 +108,7 @@ export async function runStatus(cliVersion: string, deps?: StatusDependencies): 
       `running (PID=${running.pid})${running.identityUnknown ? " · identity unverified" : ""}`,
     );
     if (running.startedAt) row("Started", running.startedAt);
-    const reachable = !!config && (await waitForAnyHttpOk(readinessUrls(ctx.home, config), 2000));
+    const reachable = await waitForAnyHttpOk(readinessUrls(), 2000);
     row("HTTP", reachable ? "ok" : "not reachable");
     if (!reachable) {
       row("Hint", "Try: cpa restart (or cpa logs)");
@@ -171,24 +143,14 @@ export async function runOpen(deps?: {
   serverWaitMs?: number;
   panelBootstrapWaitMs?: number;
 }): Promise<void> {
-  const ctx = createContext();
-  const config = readCpaConfigWithWarnings(ctx.layout.configFile).config;
-  if (config["remote-management"]?.["disable-control-panel"] === true) {
-    throw new Error(
-      "Web management panel is disabled by remote-management.disable-control-panel in config.yaml",
-    );
-  }
-
-  const url = managementUrl(ctx.home, config);
+  createContext();
+  const url = managementUrl();
   let ok = await waitForHttpOk(url, deps?.initialPanelWaitMs ?? 3000);
   if (!ok) {
     // The first request can trigger CLIProxyAPI's own management.html download,
     // which current upstream detaches from the client request. Distinguish an
     // offline server quickly, then give that download its full HTTP budget.
-    const serverUp = await waitForHttpOk(
-      `${apiBaseUrl(ctx.home, config)}/`,
-      deps?.serverWaitMs ?? 2000,
-    );
+    const serverUp = await waitForHttpOk(`${apiBaseUrl()}/`, deps?.serverWaitMs ?? 2000);
     if (!serverUp) {
       throw new Error(`CLIProxyAPI is not reachable at ${url}. Run: cpa start`);
     }

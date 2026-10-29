@@ -39,6 +39,7 @@ export function createIsolatedTestEnv(prefix = "minicpa-test-"): {
   const origXdgDataHome = process.env.XDG_DATA_HOME;
   const origHome = process.env.HOME;
   const origCpaHome = process.env.CPA_HOME;
+  const origApiUrl = process.env.MINICPA_API_URL;
   const origExitCode = process.exitCode;
   const origWritable = process.env.WRITABLE_PATH;
   const origWritableLower = process.env.writable_path;
@@ -47,6 +48,8 @@ export function createIsolatedTestEnv(prefix = "minicpa-test-"): {
   process.env.XDG_DATA_HOME = baseDir;
   process.env.HOME = baseDir;
   delete process.env.CPA_HOME;
+  // A test that needs a live API must supply its own fixture URL, never real CPA.
+  process.env.MINICPA_API_URL = "http://127.0.0.1:1";
   delete process.env.WRITABLE_PATH;
   delete process.env.writable_path;
 
@@ -61,6 +64,8 @@ export function createIsolatedTestEnv(prefix = "minicpa-test-"): {
       else process.env.HOME = origHome;
       if (origCpaHome === undefined) delete process.env.CPA_HOME;
       else process.env.CPA_HOME = origCpaHome;
+      if (origApiUrl === undefined) delete process.env.MINICPA_API_URL;
+      else process.env.MINICPA_API_URL = origApiUrl;
       process.exitCode = origExitCode;
       delete process.env.WRITABLE_PATH;
       delete process.env.writable_path;

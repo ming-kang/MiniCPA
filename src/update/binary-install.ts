@@ -11,9 +11,6 @@ import { patchInstallState, readInstallState } from "../state.js";
 import { BinaryUpdateError } from "./binary-error.js";
 import { silentUpdateReporter, type UpdateReporter } from "./reporter.js";
 
-/** Apply config during commit and return the rollback for precisely that write. */
-export type BinaryCommitHook = () => (() => void) | undefined;
-
 /** Process-lifecycle seam: failure tests never launch or stop real CPA processes. */
 export type BinaryUpdateDeps = {
   stopDaemon(home: string): Promise<boolean>;
@@ -38,7 +35,6 @@ export async function installBinaryPhase(
     wasRunning: boolean;
     currentVersion?: string;
     transaction?: RuntimeBinaryTransaction;
-    beforeInstall?: BinaryCommitHook;
   },
   deps: BinaryUpdateDeps = defaultBinaryUpdateDeps,
   reporter: UpdateReporter = silentUpdateReporter,
@@ -48,21 +44,9 @@ export async function installBinaryPhase(
   const recordedCurrentVersion = readInstallState(home).runtimeVersion;
   try {
     if (!args.transaction) transaction.prepare(args.extractedExe);
-    const rollbackConfig = args.beforeInstall?.();
     if (wasRunning) {
       reporter.info("Stopping CLIProxyAPI to install the update…");
-      try {
-        await deps.stopDaemon(home);
-      } catch (error) {
-        try {
-          rollbackConfig?.();
-        } catch (configError) {
-          throw new Error(`${String(error)}\nCould not restore config: ${String(configError)}`, {
-            cause: error,
-          });
-        }
-        throw error;
-      }
+      await deps.stopDaemon(home);
     }
 
     try {
@@ -81,8 +65,8 @@ export async function installBinaryPhase(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       reporter.warn("CLIProxyAPI update failed; recovering the previous installation…");
-      // Do not change either the binary or config under a half-started process
-      // that cannot be safely stopped. Keep both recovery files for the user.
+      // Do not replace a binary under a half-started process that cannot be
+      // safely stopped. CLIProxyAPI owns its configuration, including migrations.
       try {
         if (await deps.resolveRunning(home)) await deps.stopDaemon(home);
       } catch (stopError) {
@@ -93,11 +77,6 @@ export async function installBinaryPhase(
       }
       const { restored, previousAvailable } = transaction.rollback();
       const recoveryErrors: string[] = [];
-      try {
-        rollbackConfig?.();
-      } catch (configError) {
-        recoveryErrors.push(`Could not restore config: ${String(configError)}`);
-      }
       try {
         patchInstallState(home, {
           runtimeVersion: previousAvailable

@@ -200,22 +200,34 @@ try {
   assertEqual(installedPackage.version, expectedVersion, "installed package version");
   assertEqual(installedPackage.bin?.cpa, "dist/cli.js", "installed cpa binary target");
   assertEqual(installedPackage.engines?.node, ">=24", "installed Node.js engine requirement");
+  assertEqual(installedPackage.dependencies?.yaml, undefined, "removed YAML parser dependency");
 
   for (const relativePath of [
     "CHANGELOG.md",
     "LICENSE",
     "README.md",
     "dist/cli.js",
+    "dist/api-url.js",
+    "dist/commands/init.js",
     "dist/commands/upgrade-cmd.js",
     "dist/update/minicpa-release.js",
     "dist/update/self-upgrade.js",
-    "docs/config.example.yaml",
     "docs/cpa-reference.md",
   ]) {
     assertFile(relativePath);
   }
 
-  const forbiddenExactPaths = ["src", ".github", "scripts", "RELEASING.md", ".npmrc"];
+  const forbiddenExactPaths = [
+    "src",
+    ".github",
+    "scripts",
+    "RELEASING.md",
+    ".npmrc",
+    "docs/config.example.yaml",
+    "dist/config-yaml.js",
+    "dist/config-sync.js",
+    "dist/config-backup.js",
+  ];
   for (const relativePath of forbiddenExactPaths) {
     if (existsSync(join(packageDirectory, ...relativePath.split("/")))) {
       throw new Error(

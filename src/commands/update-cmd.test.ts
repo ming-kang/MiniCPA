@@ -1,19 +1,31 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { configBackupPaths } from "../config-backup.js";
-import { cpaLayout, miniCpaRoot, resolveCpaHome } from "../paths.js";
-import { withMiniCpaLock } from "../process/lock.js";
+import { cpaHome, cpaLayout } from "../paths.js";
+import { captureConsole, createIsolatedTestEnv } from "../test-fixtures/test-env.js";
 import type { BinaryUpdateResult } from "../update/binary.js";
-import {
-  runUpdate,
-  runUpdateCheck,
-  updateCheckExitCode,
-  type UpdateCheckDeps,
-  type UpdateDeps,
-} from "./update-cmd.js";
+import { runUpdate, runUpdateCheck, updateCheckExitCode } from "./update-cmd.js";
+
+let env: ReturnType<typeof createIsolatedTestEnv> | undefined;
+afterEach(() => {
+  env?.cleanup();
+  env = undefined;
+});
+
+function setup(): ReturnType<typeof cpaLayout> {
+  env = createIsolatedTestEnv("minicpa-update-cmd-");
+  const layout = cpaLayout(cpaHome());
+  fs.mkdirSync(layout.home, { recursive: true });
+  return layout;
+}
+
+const UPDATED: BinaryUpdateResult = {
+  version: "8.0.47",
+  previousVersion: "8.0.46",
+  skipped: false,
+  restarted: true,
+};
 
 describe("updateCheckExitCode", () => {
   it("exits 0 only when the binary is current and the check succeeded", () => {
@@ -24,142 +36,65 @@ describe("updateCheckExitCode", () => {
   });
 });
 
-const savedEnv = {
-  LOCALAPPDATA: process.env.LOCALAPPDATA,
-  XDG_DATA_HOME: process.env.XDG_DATA_HOME,
-  HOME: process.env.HOME,
-  CPA_HOME: process.env.CPA_HOME,
-};
-const savedExitCode = process.exitCode;
-const temps: string[] = [];
-
-function isolateMiniCpaRoot(): void {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-update-cmd-"));
-  temps.push(base);
-  process.env.LOCALAPPDATA = base;
-  process.env.XDG_DATA_HOME = base;
-  process.env.HOME = base;
-  delete process.env.CPA_HOME;
-}
-
-async function captureOutput<T>(fn: () => Promise<T>): Promise<{
-  stdout: string;
-  stderr: string;
-  result: T;
-}> {
-  const out: string[] = [];
-  const err: string[] = [];
-  const originalLog = console.log;
-  const originalError = console.error;
-  console.log = (message?: unknown) => out.push(String(message));
-  console.error = (message?: unknown) => err.push(String(message));
-  try {
-    const result = await fn();
-    return { stdout: out.join("\n"), stderr: err.join("\n"), result };
-  } finally {
-    console.log = originalLog;
-    console.error = originalError;
-  }
-}
-
-const RATE_LIMIT_ERROR =
-  "GitHub API 403 for router-for-me/CLIProxyAPI (releases/latest). " +
-  "REST rate limit may be exhausted — set GITHUB_TOKEN or GH_TOKEN and retry.";
-
-const binaryUpdated: () => Promise<BinaryUpdateResult> = async () => ({
-  version: "7.2.92",
-  previousVersion: "7.2.91",
-  skipped: false,
-  restarted: true,
-});
-
-afterEach(() => {
-  for (const dir of temps.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-  for (const [key, value] of Object.entries(savedEnv)) {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  }
-  process.exitCode = savedExitCode;
-});
-
-describe("runUpdate reporting", () => {
-  it("updates the CLIProxyAPI binary when config is not initialized", async () => {
-    isolateMiniCpaRoot();
-    const deps: UpdateDeps = { updateBinary: binaryUpdated };
-
-    const { stdout, stderr } = await captureOutput(() => runUpdate({}, deps));
-
-    assert.match(stdout, /CLIProxyAPI updated: 7\.2\.91 → 7\.2\.92 \(restarted\)/);
-    assert.doesNotMatch(stdout, /Web panel/i);
-    assert.equal(stderr, "");
-    assert.equal(process.exitCode, undefined);
-  });
-
-  it("synchronizes the latest config only in commit after binary preparation succeeds", async () => {
-    isolateMiniCpaRoot();
-    const home = resolveCpaHome();
-    const layout = cpaLayout(home);
-    fs.mkdirSync(home, { recursive: true });
-    const existing =
-      '# old comments\nhost: "0.0.0.0"\nport: 9000\napi-keys:\n  - "sk-existing"\nlogging-to-file: false\n';
-    fs.writeFileSync(layout.configFile, existing);
-    let inspectedSynchronizedConfig = false;
-
-    const { stdout } = await captureOutput(() =>
-      runUpdate(
-        {},
-        {
-          updateBinary: async (_home, options) => {
-            assert.equal(
-              fs.readFileSync(layout.configFile, "utf8"),
-              existing,
-              "preparation leaves config alone",
-            );
-            assert.equal(fs.existsSync(path.join(miniCpaRoot(), "state", "cpa.lock")), false);
-            await withMiniCpaLock("update", async () => {
-              options?.beforeInstall?.();
-              const configText = fs.readFileSync(layout.configFile, "utf8");
-              assert.match(configText, /^# CLIProxyAPI 中文配置示例/);
-              assert.match(configText, /pprof:\n {2}enable: false/);
-              assert.match(configText, /host: 0\.0\.0\.0/);
-              assert.match(configText, /port: 9000/);
-              assert.match(configText, /- sk-existing/);
-              assert.match(configText, /logging-to-file: true/);
-              assert.ok(fs.existsSync(path.join(miniCpaRoot(), "state", "cpa.lock")));
-              inspectedSynchronizedConfig = true;
-            });
-            return { version: "7.2.92", skipped: true, restarted: false };
-          },
-        },
-      ),
-    );
-
-    assert.equal(inspectedSynchronizedConfig, true);
+describe("runUpdate", () => {
+  it("updates the binary without initializing configuration", async () => {
+    const layout = setup();
+    const output = await captureConsole(() => runUpdate({}, { updateBinary: async () => UPDATED }));
     assert.match(
-      stdout,
-      /Config synchronized: .*config\.yaml \(\d+ defaults added, 1 settings updated\)/,
+      output.stdout.join("\n"),
+      /CLIProxyAPI updated: 8\.0\.46 → 8\.0\.47 \(restarted\)/,
     );
-    assert.match(stdout, /Config backup:/);
-    assert.match(stdout, /Config changes apply on the next cpa start\/restart\./);
-    const backups = configBackupPaths(layout.configFile).filter((file) => fs.existsSync(file));
-    assert.equal(backups.length, 1);
-    assert.equal(fs.readFileSync(backups[0]!, "utf8"), existing);
+    assert.deepEqual(output.stderr, []);
+    assert.equal(fs.existsSync(layout.configFile), false);
+    assert.equal(fs.existsSync(path.join(layout.home, ".env")), false);
   });
 
-  it("clears legacy backups on the next update but never rewrites config on download failure", async () => {
-    isolateMiniCpaRoot();
-    const home = resolveCpaHome();
-    const layout = cpaLayout(home);
-    fs.mkdirSync(home, { recursive: true });
-    const old = "port: 9000\nlogging-to-file: false\n";
-    fs.writeFileSync(layout.configFile, old);
-    const legacy = `${layout.configFile}.bak.2026-10-01T12-34-56-789Z`;
-    fs.writeFileSync(legacy, "old snapshot");
+  it("never reads, validates, rewrites or backs up configuration on an update", async () => {
+    const layout = setup();
+    const opaque = "not even valid YAML: [\n";
+    fs.writeFileSync(layout.configFile, opaque);
+    const originalRead = fs.readFileSync;
+    fs.readFileSync = ((file: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+      assert.notEqual(String(file), layout.configFile, "update must not read configuration");
+      return (originalRead as (...args: unknown[]) => unknown)(file, ...args);
+    }) as typeof fs.readFileSync;
+    try {
+      const output = await captureConsole(() =>
+        runUpdate(
+          { force: true },
+          {
+            updateBinary: async (home, options) => {
+              assert.equal(home, layout.home);
+              assert.equal(options?.force, true);
+              assert.equal(Object.hasOwn(options ?? {}, "beforeInstall"), false);
+              return UPDATED;
+            },
+          },
+        ),
+      );
+      assert.doesNotMatch(output.stdout.join("\n"), /Config synchronized|Config backup/);
+    } finally {
+      fs.readFileSync = originalRead;
+    }
+    assert.equal(fs.readFileSync(layout.configFile, "utf8"), opaque);
+    assert.equal(fs.existsSync(path.join(layout.home, "backups")), false);
+  });
+
+  it("preserves fixed-slot, legacy and recovery config backups even on download failure", async () => {
+    const layout = setup();
+    const files = [
+      layout.configFile,
+      `${layout.configFile}.bak.2026-10-01T12-34-56-789Z`,
+      path.join(layout.home, ".config.yaml.replace.bak"),
+      path.join(layout.home, "backups", "config", "config.1.yaml"),
+    ];
+    for (const file of files) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, "user data\n");
+    }
     await assert.rejects(
       () =>
-        captureOutput(() =>
+        captureConsole(() =>
           runUpdate(
             {},
             {
@@ -171,145 +106,102 @@ describe("runUpdate reporting", () => {
         ),
       /download failed/,
     );
-    assert.equal(fs.existsSync(legacy), false);
-    assert.equal(fs.readFileSync(layout.configFile, "utf8"), old);
-    assert.equal(
-      configBackupPaths(layout.configFile).some((file) => fs.existsSync(file)),
-      false,
+    for (const file of files) assert.equal(fs.readFileSync(file, "utf8"), "user data\n");
+    await captureConsole(() =>
+      runUpdate(
+        {},
+        { updateBinary: async () => ({ ...UPDATED, skipped: true, restarted: false }) },
+      ),
     );
+    for (const file of files) assert.equal(fs.readFileSync(file, "utf8"), "user data\n");
   });
 
-  it("retains edits made during preparation rather than merging an obsolete snapshot", async () => {
-    isolateMiniCpaRoot();
-    const home = resolveCpaHome();
-    const layout = cpaLayout(home);
-    fs.mkdirSync(home, { recursive: true });
-    fs.writeFileSync(layout.configFile, "port: 9000\n");
-    await captureOutput(() =>
+  it("leaves configuration changes made by CPA during preparation untouched", async () => {
+    const layout = setup();
+    fs.writeFileSync(layout.configFile, "old native config\n");
+    await captureConsole(() =>
       runUpdate(
         {},
         {
-          updateBinary: async (_home, options) => {
-            fs.writeFileSync(layout.configFile, "port: 12345\napi-keys: [sk-during-download]\n");
-            await withMiniCpaLock("update", async () => {
-              options?.beforeInstall?.();
-            });
-            return { version: "7.2.92", skipped: true, restarted: false };
+          updateBinary: async () => {
+            fs.writeFileSync(layout.configFile, "new native config\n");
+            return { ...UPDATED, skipped: true, restarted: false };
           },
         },
       ),
     );
-    assert.match(fs.readFileSync(layout.configFile, "utf8"), /port: 12345/);
-    assert.match(fs.readFileSync(layout.configFile, "utf8"), /sk-during-download/);
-    assert.equal(
-      fs.readFileSync(configBackupPaths(layout.configFile)[0]!, "utf8"),
-      "port: 12345\napi-keys: [sk-during-download]\n",
-    );
+    assert.equal(fs.readFileSync(layout.configFile, "utf8"), "new native config\n");
+    assert.equal(fs.existsSync(path.join(layout.home, "backups")), false);
   });
 
-  it("distinguishes install, reinstall, and explicit version changes", async () => {
-    isolateMiniCpaRoot();
-    const cases: Array<{
-      result: BinaryUpdateResult;
-      opts: { version?: string };
-      expected: RegExp;
-    }> = [
+  it("distinguishes install, reinstall, explicit version changes and already-current binaries", async () => {
+    setup();
+    const cases: Array<{ result: BinaryUpdateResult; version?: string; expected: RegExp }> = [
       {
-        result: { version: "7.2.92", skipped: false, restarted: false },
-        opts: {},
-        expected: /CLIProxyAPI installed: 7\.2\.92/,
+        result: { version: "8.0.47", skipped: false, restarted: false },
+        expected: /CLIProxyAPI installed: 8\.0\.47/,
       },
       {
-        result: {
-          version: "7.2.92",
-          previousVersion: "7.2.92",
-          skipped: false,
-          restarted: false,
-        },
-        opts: {},
-        expected: /CLIProxyAPI reinstalled: 7\.2\.92/,
+        result: { ...UPDATED, previousVersion: "8.0.47", restarted: false },
+        expected: /CLIProxyAPI reinstalled: 8\.0\.47/,
       },
       {
-        result: {
-          version: "7.2.90",
-          previousVersion: "7.2.92",
-          skipped: false,
-          restarted: false,
-        },
-        opts: { version: "7.2.90" },
-        expected: /CLIProxyAPI version changed: 7\.2\.92 → 7\.2\.90/,
+        result: { ...UPDATED, version: "8.0.45", restarted: false },
+        version: "8.0.45",
+        expected: /CLIProxyAPI version changed: 8\.0\.46 → 8\.0\.45/,
+      },
+      {
+        result: { ...UPDATED, skipped: true, restarted: false },
+        expected: /CLIProxyAPI is already up to date \(8\.0\.47\)/,
       },
     ];
-
-    for (const { result, opts, expected } of cases) {
-      const { stdout } = await captureOutput(() =>
-        runUpdate(opts, { updateBinary: async () => result }),
+    for (const { result, version, expected } of cases) {
+      const output = await captureConsole(() =>
+        runUpdate({ version }, { updateBinary: async () => result }),
       );
-      assert.match(stdout, expected);
+      assert.match(output.stdout.join("\n"), expected);
     }
-  });
-
-  it("reports an already-current binary", async () => {
-    isolateMiniCpaRoot();
-    const { stdout } = await captureOutput(() =>
-      runUpdate(
-        {},
-        {
-          updateBinary: async () => ({ version: "7.2.92", skipped: true, restarted: false }),
-        },
-      ),
-    );
-
-    assert.match(stdout, /CLIProxyAPI is already up to date \(7\.2\.92\)/);
   });
 });
 
-describe("runUpdateCheck reporting", () => {
-  it("reports the current binary without a panel network check", async () => {
-    isolateMiniCpaRoot();
-    const deps: UpdateCheckDeps = {
-      checkBinaryUpdate: async () => ({
-        current: "7.2.92",
-        latest: "7.2.92",
-        upToDate: true,
+describe("runUpdateCheck", () => {
+  it("reports only the binary and exits 0 when it is current", async () => {
+    setup();
+    const output = await captureConsole(() =>
+      runUpdateCheck({
+        checkBinaryUpdate: async () => ({ current: "8.0.47", latest: "8.0.47", upToDate: true }),
       }),
-    };
-
-    const { stdout } = await captureOutput(() => runUpdateCheck(deps));
-
-    assert.match(stdout, /CLIProxyAPI\s+current=7\.2\.92\s+latest=7\.2\.92\s+up to date/);
-    assert.doesNotMatch(stdout, /Web panel/i);
+    );
+    assert.match(
+      output.stdout.join("\n"),
+      /CLIProxyAPI\s+current=8\.0\.47\s+latest=8\.0\.47\s+up to date/,
+    );
+    assert.doesNotMatch(output.stdout.join("\n"), /Web panel|Config synchronized/i);
     assert.equal(process.exitCode, 0);
   });
 
-  it("prints the update command when a binary update is available", async () => {
-    isolateMiniCpaRoot();
-    const deps: UpdateCheckDeps = {
-      checkBinaryUpdate: async () => ({
-        current: "7.2.91",
-        latest: "7.2.92",
-        upToDate: false,
+  it("prints the update command and exits 1 when a binary update is available", async () => {
+    setup();
+    const output = await captureConsole(() =>
+      runUpdateCheck({
+        checkBinaryUpdate: async () => ({ current: "8.0.46", latest: "8.0.47", upToDate: false }),
       }),
-    };
-
-    const { stdout } = await captureOutput(() => runUpdateCheck(deps));
-
-    assert.match(stdout, /CLIProxyAPI\s+current=7\.2\.91\s+latest=7\.2\.92\s+update available/);
-    assert.match(stdout, /\nRun: cpa update$/);
+    );
+    assert.match(output.stdout.join("\n"), /update available/);
+    assert.match(output.stdout.join("\n"), /Run: cpa update$/);
     assert.equal(process.exitCode, 1);
   });
 
-  it("reports a failed binary check inline", async () => {
-    isolateMiniCpaRoot();
-    const deps: UpdateCheckDeps = {
-      checkBinaryUpdate: async () => {
-        throw new Error(RATE_LIMIT_ERROR);
-      },
-    };
-
-    const { stdout } = await captureOutput(() => runUpdateCheck(deps));
-
-    assert.match(stdout, /CLIProxyAPI\s+check failed: GitHub API 403/);
+  it("reports a failed check inline", async () => {
+    setup();
+    const output = await captureConsole(() =>
+      runUpdateCheck({
+        checkBinaryUpdate: async () => {
+          throw new Error("GitHub API 403: rate limit exhausted");
+        },
+      }),
+    );
+    assert.match(output.stdout.join("\n"), /check failed: GitHub API 403/);
     assert.equal(process.exitCode, 1);
   });
 });

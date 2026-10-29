@@ -24,6 +24,7 @@ const originalLocalAppData = process.env.LOCALAPPDATA;
 const originalXdgDataHome = process.env.XDG_DATA_HOME;
 const originalHome = process.env.HOME;
 const originalCpaHome = process.env.CPA_HOME;
+const originalApiUrl = process.env.MINICPA_API_URL;
 const originalExitCode = process.exitCode;
 const temps: string[] = [];
 
@@ -35,6 +36,7 @@ function useTempRoot(): string {
   process.env.XDG_DATA_HOME = base;
   process.env.HOME = base;
   delete process.env.CPA_HOME;
+  process.env.MINICPA_API_URL = "http://127.0.0.1:1";
   return base;
 }
 
@@ -50,6 +52,8 @@ afterEach(() => {
   else process.env.HOME = originalHome;
   if (originalCpaHome === undefined) delete process.env.CPA_HOME;
   else process.env.CPA_HOME = originalCpaHome;
+  if (originalApiUrl === undefined) delete process.env.MINICPA_API_URL;
+  else process.env.MINICPA_API_URL = originalApiUrl;
   process.exitCode = originalExitCode;
 });
 
@@ -126,51 +130,52 @@ describe("runDoctor", () => {
     assert.equal(process.exitCode, 1);
   });
 
-  it("reports CLIProxyAPI ownership of Web panel lifecycle settings", async () => {
+  it("reports configuration and panel ownership without reading configuration", async () => {
     useTempRoot();
     const home = resolveCpaHome();
     const configFile = cpaLayout(home).configFile;
     ensureDir(home);
-
-    fs.writeFileSync(configFile, "port: 8317\n");
-    const managed = await runDoctorCapturing();
-    assert.ok(hasLine(managed, "Web panel managed and updated by CLIProxyAPI"));
-
-    fs.writeFileSync(
-      configFile,
-      "port: 8317\nremote-management:\n  disable-auto-update-panel: true\n",
-    );
-    const pinned = await runDoctorCapturing();
-    assert.ok(hasLine(pinned, "Web panel managed by CLIProxyAPI (periodic updates disabled)"));
-
-    fs.writeFileSync(configFile, "port: 8317\nremote-management:\n  disable-control-panel: true\n");
-    const disabled = await runDoctorCapturing();
-    assert.ok(hasLine(disabled, "Web panel disabled in config.yaml"));
+    fs.writeFileSync(configFile, "opaque native configuration\n");
+    const originalRead = fs.readFileSync;
+    fs.readFileSync = ((file: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+      assert.notEqual(String(file), configFile, "doctor must not read CPA config");
+      return (originalRead as (...args: unknown[]) => unknown)(file, ...args);
+    }) as typeof fs.readFileSync;
+    try {
+      const lines = await runDoctorCapturing();
+      assert.ok(hasLine(lines, "contents managed by CLIProxyAPI"), lines.join("\n"));
+      assert.ok(hasLine(lines, "Web panel managed by CLIProxyAPI"), lines.join("\n"));
+    } finally {
+      fs.readFileSync = originalRead;
+    }
   });
 
-  it("completes the report when config.yaml cannot be parsed", async () => {
+  it("completes readiness reporting without interpreting malformed native configuration", async () => {
     useTempRoot();
     const home = resolveCpaHome();
-    const layout = cpaLayout(home);
     ensureDir(home);
-    fs.writeFileSync(layout.configFile, "host: 1\n  bad: [\n");
-    // A live, verifiable process is required to reach the readiness probe: the
-    // listen address is only derived inside the "running" branch. This process
-    // is alive and its executable path matches the record, so it verifies.
+    fs.writeFileSync(cpaLayout(home).configFile, "host: 1\n  bad: [\n");
     writePidRecord(home, {
       pid: process.pid,
       exe: process.execPath,
       startedAt: new Date().toISOString(),
     });
-
-    const lines = await runDoctorCapturing();
-
-    assert.ok(hasLine(lines, "config.yaml parse error"), lines.join("\n"));
-    assert.ok(hasLine(lines, "[fail] cannot derive listen address"), lines.join("\n"));
-    // The report must not abort: the sections after the readiness probe are present.
-    assert.ok(hasLine(lines, "[info] proxy env"), lines.join("\n"));
-    assert.ok(hasLine(lines, "GitHub API"), lines.join("\n"));
-    assert.equal(process.exitCode, 1);
+    await withHttpFixture(
+      {
+        "/": (_req, res) => {
+          res.end("ok");
+        },
+      },
+      async (baseUrl) => {
+        process.env.MINICPA_API_URL = baseUrl;
+        const lines = await runDoctorCapturing();
+        assert.ok(hasLine(lines, "contents managed by CLIProxyAPI"), lines.join("\n"));
+        assert.equal(hasLine(lines, "config.yaml parse error"), false);
+        assert.ok(hasLine(lines, `[ ok ] HTTP ${baseUrl}/`), lines.join("\n"));
+        assert.ok(hasLine(lines, "[info] proxy env"), lines.join("\n"));
+        assert.ok(hasLine(lines, "GitHub API"), lines.join("\n"));
+      },
+    );
   });
 
   it("probes the home with a real write on Windows, where access(W_OK) lies", async () => {
@@ -259,7 +264,7 @@ describe("runDoctor", () => {
     );
   });
 
-  it("reads config once and skips recursive temp statistics unless --deep is requested", async () => {
+  it("skips config reads and recursive temp statistics unless --deep is requested", async () => {
     useTempRoot();
     const home = resolveCpaHome();
     ensureDir(home);
@@ -282,9 +287,10 @@ describe("runDoctor", () => {
     }) as typeof fs.readdirSync;
     try {
       await runDoctorCapturing();
-      assert.equal(reads, 1);
+      assert.equal(reads, 0);
       assert.equal(scans, 0);
       await runDoctorCapturing({}, { deep: true });
+      assert.equal(reads, 0);
       assert.ok(scans > 0);
     } finally {
       fs.openSync = originalOpen;
@@ -359,7 +365,7 @@ describe("runDoctor", () => {
     assert.equal(hasLine(lines, "anonymous"), false);
   });
 
-  it("probes and reports HTTPS readiness when CPA is running with TLS enabled", async () => {
+  it("probes and reports an explicitly configured HTTPS target", async () => {
     useTempRoot();
     const home = resolveCpaHome();
     ensureDir(home);
@@ -372,10 +378,8 @@ describe("runDoctor", () => {
       },
       async (baseUrl) => {
         const port = new URL(baseUrl).port;
-        fs.writeFileSync(
-          cpaLayout(home).configFile,
-          `host: "127.0.0.1"\nport: ${port}\ntls:\n  enable: true\n`,
-        );
+        process.env.MINICPA_API_URL = baseUrl;
+        fs.writeFileSync(cpaLayout(home).configFile, "opaque native HTTPS configuration\n");
         writePidRecord(home, {
           pid: process.pid,
           exe: process.execPath,
@@ -410,8 +414,8 @@ describe("runDoctor", () => {
         },
       },
       async (baseUrl) => {
-        const port = new URL(baseUrl).port;
-        fs.writeFileSync(cpaLayout(home).configFile, `host: "127.0.0.1"\nport: ${port}\n`);
+        process.env.MINICPA_API_URL = baseUrl;
+        fs.writeFileSync(cpaLayout(home).configFile, "opaque native configuration\n");
         writePidRecord(home, {
           pid: process.pid,
           exe: process.execPath,

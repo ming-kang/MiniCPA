@@ -1,8 +1,8 @@
 # MiniCPA
 
-MiniCPA provides one cross-platform **`cpa`** command to set up, run, inspect, and update a local [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) instance.
+MiniCPA provides one cross-platform **`cpa`** command to bootstrap, run, inspect, and update a local [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) instance.
 
-It manages **one instance**. Configuration, provider authentication, and the Web panel asset remain in CLIProxyAPI; MiniCPA handles the instance files, background process, interface launchers, binary updates, and diagnostics.
+It manages **one instance**. MiniCPA creates a minimal configuration only when `config.yaml` is absent. After that, configuration, provider authentication, and the Web panel belong to CLIProxyAPI. MiniCPA never parses, synchronizes, replaces, backs up, or cleans up existing configuration.
 
 ## Install
 
@@ -12,54 +12,72 @@ Requires **Node.js 24+**.
 npm install -g @astralyn/minicpa
 ```
 
-Or run it without a global installation:
+Or inspect the CLI without a global installation:
 
 ```bash
 npx @astralyn/minicpa --help
 ```
 
-Running `cpa`, `cpa -h`, or `cpa --help` prints the same help. `cpa -v`, `cpa -V`, and `cpa --version` all print the MiniCPA version.
+Running `cpa`, `cpa -h`, or `cpa --help` prints the same help. `cpa -v`, `cpa -V`, and `cpa --version` print the MiniCPA version.
 
 ## Quick start
 
 ```bash
-cpa init   # create config.yaml and install the latest CLIProxyAPI binary
-cpa start  # start CLIProxyAPI; it provisions and updates its own Web panel
-cpa web    # open the web management panel
+cpa init   # create the minimal config once and install the latest CPA binary
+cpa start  # start CPA; it provisions and updates its own Web panel
+cpa web    # open the Web panel and complete setup in CPA
 ```
 
-`cpa init` generates a random `api-keys` entry in `config.yaml` without printing it, then downloads and integrity-checks the latest CLIProxyAPI binary. Rotate the key before exposing the API publicly. If the binary download fails, the initialized configuration remains in place and `cpa init` can be retried. `cpa init --force` backs up and replaces only `config.yaml`; use `cpa update --force` to reinstall the binary.
+The one-time bootstrap binds CPA to `127.0.0.1:8317`, uses `auths` beside the binary, and enables the `seakee/CPA-Manager-Plus` panel with automatic updates. The initial client key is **`sk-cliproxyapi`** and the management password is **`CLIPROXYAPI`**. These are public bootstrap credentials: replace them in CPA during initial setup, especially before exposing the service beyond your machine.
 
-MiniCPA always uses the one directory printed by `cpa home`: `<cpa root>/instance`. `--home` and `CPA_HOME` are intentionally unsupported.
+The bootstrap contains only the requested listener, authentication, and management settings. There is no bundled `config.example.yaml`, generated random key, operational policy, or `.env` creation. Routing, logging, TLS, provider settings, and all later changes are configured in CPA itself. See the [official CPA manual](https://help.router-for.me/cn/).
+
+A repeated `cpa init` leaves an existing configuration untouched, even if it is empty or malformed. Binary download failures leave the initial configuration in place, so installation can be retried without resetting subsequent user edits. A configuration write/flush failure aborts initialization and leaves the created path for inspection; review a potentially incomplete file before retrying. **`cpa init --force` has been removed**; use `cpa update --force` only to reinstall the binary.
+
+MiniCPA uses the one directory printed by `cpa home`: `<cpa root>/instance`. `--home` and `CPA_HOME` are intentionally unsupported. It does not repair permissions or traverse existing CPA configuration, `.env`, credentials, static assets, logs, or configuration backups. MiniCPA's own directories and newly written state files remain private.
+
+## Connection target, without configuration parsing
+
+MiniCPA's readiness probes and Web launcher default to **`http://127.0.0.1:8317`**, matching the bootstrap. It does not infer the current listener, port, TLS settings, panel switches, or credentials from YAML.
+
+If you change CPA's listener or enable HTTPS, explicitly tell MiniCPA which API base URL to use. The global option goes **before the command**:
+
+```bash
+cpa --api-url https://127.0.0.1:9443 start
+cpa --api-url https://127.0.0.1:9443 status
+cpa --api-url https://127.0.0.1:9443 web
+cpa --api-url https://127.0.0.1:9443 update
+```
+
+Alternatively, set **`MINICPA_API_URL`** in the invoking environment. The command-line option takes precedence. This changes only MiniCPA's connection target; it never writes or configures CPA's listener. Use an HTTP(S) base URL without embedded credentials, query, or fragment. Reverse-proxy path prefixes and IPv6 URLs are supported.
+
+`cpa tui` delegates to the official CPA terminal UI with the instance's config path; CPA itself reads its configuration and handles the terminal UI's connection and authentication.
 
 ## Update CLIProxyAPI or MiniCPA
 
 The two update commands have separate targets:
 
-- **`cpa update`** prepares the CLIProxyAPI binary, then synchronizes `config.yaml` and commits any binary replacement.
+- **`cpa update`** prepares and replaces the managed CLIProxyAPI binary only.
 - **`cpa upgrade`** upgrades the globally installed MiniCPA npm package.
-
-CLIProxyAPI itself owns `management.html`: it checks the configured panel repository when the service starts and periodically while running, and it provisions a missing panel on first access. `disable-auto-update-panel: true` stops startup/periodic replacement but still permits that first missing-file download; `disable-control-panel: true` disables both the asset and route. MiniCPA opens the panel but never downloads, versions, or replaces it. See the upstream [Web UI documentation](https://github.com/router-for-me/CLIProxyAPIDocs/blob/main/docs/en/management/webui.md).
 
 ### CLIProxyAPI binary updates
 
-After binary preparation succeeds, `cpa update` rebuilds an existing `config.yaml` from the bundled [`docs/config.example.yaml`](docs/config.example.yaml). The template is authoritative for operational settings, including logging limits, retries, routing, and feature switches. Machine-local endpoint settings (`host`, `port`, `tls`, `proxy-url`), credentials/secrets, `auth-dir`, and `plugins.configs` keep their existing values; extra keys are retained; missing keys are added; comments/order follow the current template. A missing config is left for `cpa init`; invalid YAML aborts before stopping or replacing the binary. Synchronization still runs when the binary is already current.
-
-Configuration history is bounded to **three different snapshots** in `<home>/backups/config/config.1.yaml` through `config.3.yaml` (newest first). Snapshots preserve the exact pre-write text and use direct text comparison, not hashes, for deduplication. Comment/order-only refreshes do not occupy a history slot. Config input, synchronized output, and each snapshot are limited to **4 MiB**. On the next `cpa update`, old generated `config.yaml.bak.<timestamp>[.<number>]` files are **deleted**, not imported into history. Binary `.bak` and atomic `.replace.bak` recovery files are never part of that deletion. Snapshot restoration remains manual.
-
-Downloads, integrity checks, extraction, and target-volume copy/fsync finish before a running CLIProxyAPI process is stopped. Commit takes the lifecycle lock, re-reads the current binary/process state, and restarts only when a currently running instance's binary is replaced. An already-current binary is skipped unless `--force` is used. If only the config changed, MiniCPA prints that it will take effect on the next `cpa start` or `cpa restart`.
-
-Binary rollback uses only the backup created by that update. A leftover backup from an earlier update cannot replace an untouched current binary. A failed commit restores its config write before restarting the previous binary; a later external config edit is reported as a conflict and is never overwritten. If install metadata cannot be written during recovery, MiniCPA still attempts to restart the previous binary and reports the metadata error. This is failure recovery, not a multi-file power-loss journal. Existing SHA-256 verification and streaming ZIP extraction are retained.
-
-Mutating operations use kernel-owned leases, including lock-file recovery. Lifecycle commits use `state/cpa.lock`; update/init preparation and temp cleanup use a separate `state/update/cpa.lock`. This serializes updates and protects active staging **without blocking start/stop during downloads, copy/fsync, or cleanup**. The installing phase of `cpa upgrade` takes both leases so it cannot replace package modules during preparation. Windows uses named pipes, Linux abstract Unix sockets, and macOS exclusive loopback TCP listeners derived from the application path. Leases disappear when commands exit or crash; lock files remain diagnostic records. Busy endpoints are never taken over. Avoid running different MiniCPA versions concurrently during an upgrade.
-
 ```bash
-cpa update check       # check the binary without installing
-cpa update             # update the binary
-cpa update --version 7.2.66
+cpa update check
+cpa update
+cpa update --version 8.0.47
+cpa update --force
 ```
 
-Binary archives are verified against upstream `checksums.txt`. `--insecure` skips that verification and is unsafe. `cpa update check` exits 1 when a binary update is available or the check fails.
+Downloads, integrity checks, extraction, and target-volume copy/fsync finish before a running CPA process is stopped. Commit takes the lifecycle lock, re-reads the current binary/process state, and restarts only when a currently running instance's binary is replaced. A user start or stop during preparation is respected. An already-current binary is skipped unless a reinstall or explicit version is requested.
+
+**Updates never read or rewrite configuration, validate its syntax, create configuration snapshots, or delete old configuration backups.** Existing fixed-slot, timestamped, manual, and atomic-recovery config files are left untouched. This applies to ordinary updates, pinned versions, forced reinstalls, already-current checks, and failures. Remove old configuration backups manually only if desired; they may contain credentials.
+
+Binary rollback uses only the backup created by that update. A stale backup cannot replace an untouched active binary. If install metadata cannot be repaired during recovery, MiniCPA still attempts to restart the previous binary and reports the metadata error. Configuration changes or migrations made by CPA itself are **not rolled back** by MiniCPA.
+
+Archives are verified against upstream `checksums.txt`; `--insecure` skips that verification and is unsafe. No new integrity or hash scheme is introduced. `cpa update check` exits 1 when an update is available or the check fails.
+
+Lifecycle commits use `<cpa root>/state/cpa.lock`. Preparation and cleanup use a separate lease at `<cpa root>/state/update/cpa.lock`, so downloads and cleanup do not block start/stop. The installing phase of `cpa upgrade` takes both leases to protect active package modules. Avoid running different MiniCPA versions concurrently during an upgrade.
 
 ### MiniCPA upgrades
 
@@ -70,107 +88,88 @@ cpa upgrade check
 cpa upgrade
 ```
 
-After comparing the current version with npm `latest`, `cpa upgrade` verifies the active installation and runs the safe equivalent of:
+After comparing npm `latest` with the current version, MiniCPA verifies the active installation and runs the safe equivalent of:
 
 ```bash
 npm update -g @astralyn/minicpa
 ```
 
-The npm process uses the detected global prefix, the official registry, fixed argument boundaries, disabled install scripts, and a credential-safe environment. MiniCPA verifies the installed package manifest afterwards. A locally newer MiniCPA version is never downgraded. `cpa upgrade --force` is the explicit exception that reinstalls the exact npm `latest` version when a reinstall is needed.
+The npm process uses the detected global prefix, official registry, fixed argument boundaries, disabled install scripts, and a credential-safe environment. MiniCPA verifies the installed manifest afterwards. A locally newer version is never downgraded. `cpa upgrade --force` reinstalls the exact npm `latest` version only when a reinstall is needed.
 
-Automatic upgrade refuses npx caches, `npm link`, source checkouts, project dependencies, pnpm/yarn/bun layouts, ambiguous prefixes, and read-only installations. Follow the reported reason and update with the package manager that owns the installation; for a direct npm installation the recovery command is:
+Automatic upgrade refuses npx caches, `npm link`, source checkouts, project dependencies, pnpm/yarn/bun layouts, ambiguous prefixes, and read-only installations. Follow the reported reason and use the package manager that owns the installation; for a direct npm installation:
 
 ```bash
 npm install -g @astralyn/minicpa@latest
 ```
 
-Upgrading MiniCPA does not stop, restart, or modify the managed CLIProxyAPI process.
+Upgrading MiniCPA does not stop, restart, or modify the managed CPA process or configuration.
 
 ## Commands
 
 | Command | Purpose |
 |---------|---------|
-| `cpa init` | Set up `config.yaml` and install the latest CLIProxyAPI binary |
-| `cpa start` | Start CLIProxyAPI in the background; waits until HTTP/HTTPS is ready |
-| `cpa stop` | Stop CLIProxyAPI |
-| `cpa restart` | Restart CLIProxyAPI |
-| `cpa auto [on\|off]` | Toggle or explicitly set automatic startup for the current user |
-| `cpa status` | Show runtime and autostart status, versions, and API/web endpoints; exits 1 when stopped or unreachable |
-| `cpa web` | Open the web management panel; prints the URL when no browser launcher is available |
-| `cpa tui` | Open the CLIProxyAPI terminal UI; CLIProxyAPI must already be running |
-| `cpa logs` | Show logs; supports `-n`, `--err`, and `-f` |
-| `cpa update` / `cpa update check` | Synchronize config and update the binary, or inspect the binary only |
+| `cpa init` | Create the minimal configuration once and install the latest CPA binary |
+| `cpa start` | Start CPA in the background and wait for the explicit/default API target |
+| `cpa stop` | Stop the managed CPA process |
+| `cpa restart` | Restart the managed process |
+| `cpa auto [on\|off]` | Toggle or explicitly set login autostart |
+| `cpa status` | Show runtime/autostart state, versions, paths, connection target and HTTP reachability |
+| `cpa web` | Open CPA's Web panel at the connection target |
+| `cpa tui` | Launch the official CPA terminal UI; CPA must already be running |
+| `cpa logs` | Read native logs; supports `-n`, `--err`, `--legacy`, and `-f` |
+| `cpa update` / `cpa update check` | Update or inspect the CPA binary only |
 | `cpa upgrade` / `cpa upgrade check` | Upgrade or inspect the MiniCPA npm package |
-| `cpa doctor` | Run installation, autostart, runtime, network, and integrity diagnostics |
-| `cpa version` | Show MiniCPA, CLIProxyAPI, and home information |
+| `cpa doctor` | Diagnose installation, process, autostart, network and staging issues without parsing CPA configuration |
+| `cpa version` | Show MiniCPA/CPA versions and instance home |
 | `cpa home` | Print the managed instance directory |
 
-`cpa open` remains a compatibility alias for `cpa web`. Advanced recovery/path commands (`clean`, `root`, and `temp`) remain callable but are intentionally omitted from root help.
+`cpa open` is a hidden compatibility alias for `cpa web`. `clean`, `root`, and `temp` remain callable but are omitted from root help. The legacy `update --all` and `--binary` flags remain binary-update aliases; `--panel` prints migration guidance because CPA owns its panel downloads and updates.
 
-`cpa auto` toggles login autostart; `cpa auto on` and `cpa auto off` set it explicitly. Use the explicit `off` form for deterministic cleanup even when inspection is unavailable. Enabling requires a stable, direct npm-global MiniCPA installation; npx caches, local/source installs, and links are rejected. It changes only future automatic startup and does not start or stop the current CLIProxyAPI process. On Windows it registers a hidden WScript launcher (`wscript.exe` plus a generated `.vbs` under `%LOCALAPPDATA%\MiniCPA`), so `cpa start --no-wait` no longer flashes a console window at logon. Linux uses a systemd user unit and records the effective `XDG_DATA_HOME` so the login service selects the same MiniCPA instance; that unit starts at login, so a headless machine also needs `loginctl enable-linger` (an argument-free `cpa auto` prints this hint when linger is off).
+`cpa auto` changes only future login startup; it does not install, start, or stop CPA immediately. Enabling requires a stable direct npm-global installation. Windows registers a hidden WScript launcher; Linux uses a systemd user unit recording the effective `XDG_DATA_HOME`; macOS uses a LaunchAgent. On headless Linux, also enable user linger if startup without login is required. `cpa auto off` performs deterministic cleanup even when inspection is unavailable.
 
-`cpa status` shows aligned configuration, version, download transport, and runtime details. `Download Via` reflects the environment proxy used for HTTPS downloads, with credentials redacted and any `NO_PROXY` rules noted. API and configuration paths are shown even while the instance is stopped.
+Autostart state is `on`, `off`, `stale`, `disabled`, or `unknown`. An argument-free `cpa auto` repairs stale or OS-disabled registrations. Registering before the binary or config exists prints a note. Autostart runs `cpa start --no-wait` and does not require an HTTP target to start the process.
 
-```text
-Source           Local File
-MiniCPA Version  0.4.3
-Core Version     7.2.92
-Download Via     Environment Proxy · http://127.0.0.1:7890
-Local API        http://127.0.0.1:8317
-Web Panel        http://127.0.0.1:8317/management.html
-Core Config      C:\Users\Asterin\AppData\Local\MiniCPA\instance\config.yaml
-Home             C:\Users\Asterin\AppData\Local\MiniCPA\instance
-Autostart        off
-Status           stopped
-```
+Each `cpa start` records its outcome in `<home>/state/minicpa.log` (1 MiB threshold, one rotated generation). It is outside CPA's log-cleaning directory. Doctor can report the last failure and falls back to old `logs/minicpa.log` history until a new event exists.
 
-Autostart is reported as `on`, `off`, `stale`, or `disabled`. `stale` means an OS registration exists but targets a different launcher; an argument-free `cpa auto` repairs it. `disabled` means the registration is present but disabled by the OS; an argument-free `cpa auto` re-enables it. Inspection failures are reported as `unknown` without hiding runtime status. Read-only commands report the CLIProxyAPI version last recorded after a healthy install/restart and never execute the active binary, so they cannot hold a Windows image lock against `cpa update`.
+## Native logs and diagnostics
 
-`cpa auto on` only schedules `cpa start --no-wait`; it installs nothing. Enabling it before `cpa init` or `cpa update` still succeeds, but prints a `Note:` naming the missing config or binary — otherwise that start would fail at every login without anyone seeing it. Every `cpa start` records its outcome in `<cpa home>/state/minicpa.log` (1 MiB, one rotated generation), outside CLIProxyAPI's log-cleaning directory. `cpa doctor` replays the last failure and can still read the old `logs/minicpa.log` until the first new event is written.
+`cpa logs` reads native `logs/main.log`; `--err` selects the ten newest `error-*.log` request-error files. `-f` follows replacement and discovers new error filenames with UTF-8/partial-line handling and backpressure. Shell `WRITABLE_PATH` / `writable_path` overrides are honored; MiniCPA does not load CPA's `.env`.
 
-`cpa logs` prints the last `-n, --lines <n>` lines of CLIProxyAPI's native `logs/main.log` (default `80`; positive whole numbers only). `--err` selects the ten newest native `error-*.log` request-error files. `-f`/`--follow` streams new output and ignores `--lines`; error following discovers newly created request files. Upstream's `WRITABLE_PATH` / `writable_path` override is honored.
+**The minimal bootstrap does not enable application file logging.** New detached starts discard stdout/stderr rather than create permanent duplicate captures. Configure native file logging in CPA when you need retained application logs. Raw stderr/panic output outside native logging is not permanently captured. Old running processes keep their capture descriptors until restarted; `cpa logs --legacy` reads those old files, with a warned fallback when native files are absent.
 
-New starts no longer append permanent stdout/stderr captures: application logging and continuous rotation belong to CLIProxyAPI. Enable `logging-to-file` to retain application logs; raw stderr/panic output outside native logging is no longer permanently captured. An already running old process keeps its old descriptors until restarted. `cpa logs --legacy` reads the old `cpa.log` / `cpa.err.log` files; the default falls back to them with a warning when native logs do not exist yet. Log following detects replacement, respects output backpressure, and bounds long prefixed lines.
+Status, version, doctor, and binary checks use recorded install metadata instead of executing the active binary. Doctor checks configuration presence, not its syntax or secrets. CPA reports configuration errors; MiniCPA does not try to repair them. Windows doctor uses a transient write probe to check directory access.
 
-Errors print a short message. Set `DEBUG=1` to include stack traces.
+`cpa clean` asynchronously removes private staging older than one hour, judging each legacy download by its own age. Updates clear orphaned operation directories before preparing another; blocked removal prevents further workspace growth. Neither path touches instance configuration or backups. Doctor skips recursive size statistics unless `--deep` is requested; its optional GitHub probe has one attempt and a three-second total budget.
 
 ## Network and security
 
-MiniCPA honors `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` (upper or lower case) for GitHub and npm requests. `ALL_PROXY` is an HTTP/HTTPS fallback only when its URL uses `http://` or `https://`; a `socks5://` value is reported but not applied. `cpa doctor` shows the detected proxy environment.
+GitHub/npm requests honor `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` in either case. `ALL_PROXY` is an HTTP/HTTPS fallback only; SOCKS values are reported but not applied. CPA inherits the configured proxy environment for its own network operations.
 
-Local readiness probes bypass proxy variables. With `tls.enable: true`, those isolated probes use HTTPS and accept a self-signed local certificate; GitHub and npm retain normal certificate validation.
+CPA readiness probes bypass environment proxies and accept self-signed certificates through an isolated dispatcher. GitHub and npm retain normal certificate verification. GitHub/npm credential environment variables are stripped from CPA children, version probes, and npm upgrades.
 
-`GITHUB_TOKEN` or `GH_TOKEN` can increase GitHub API quota for MiniCPA's binary-release fallback and doctor probe. GitHub/npm credential environment variables are removed from CLIProxyAPI child processes, version probes, and npm upgrade processes; CLIProxyAPI's panel updater still inherits the configured HTTP proxy settings.
-
-Lifecycle commands, autostart, and installation commits share the lifecycle lock; a blocked command reports the in-flight command and PID. Startup hardening visits only fixed directories/key files; `cpa init` performs explicit deep permission repair. Commands reuse a single config snapshot for URLs, warnings, and readiness probes.
-
-`cpa clean` asynchronously removes staging older than one hour, judging each old download by its own age rather than its shared parent. It does not pre-scan directory sizes or touch instance data. Updates clear orphaned operation directories before preparation; if one cannot be removed, they refuse to create another workspace. `cpa doctor` skips recursive temp statistics by default; request them with `--deep`. Its optional GitHub probe has a separate three-second total budget.
-
-Resource budgets are 4 MiB for config text, 1 MiB for GitHub metadata, 256 KiB for checksums, 512 MiB for downloaded archives/executable data, 10,000 archive entries, and 32 path components. TAR decompression also has an actual-stream byte budget. These are resource limits, not new hashes or integrity schemes. Symlink/junction roots for temp operations and config history are refused to protect unrelated files; a full MiniCPA event log stops appending if rotation is blocked.
+Existing archive SHA-256 verification and process-identity protection are retained. Inputs are bounded to 1 MiB for GitHub metadata, 256 KiB for checksums, and 512 MiB for archives/executable data; extraction limits archive entry count, path depth, and actual TAR decompression. MiniCPA never loads configuration text, so it has no configuration-text size limit or YAML dependency.
 
 ## Paths and uninstall
 
 | Command | Windows | macOS | Linux |
 |---------|---------|-------|-------|
 | `cpa root` | `%LOCALAPPDATA%\MiniCPA` | `~/Library/Application Support/MiniCPA` | `$XDG_DATA_HOME/MiniCPA` or `~/.local/share/MiniCPA` |
-| `cpa home` | `…\MiniCPA\instance` | same under root | same under root |
-| `cpa temp` | `<cpa root>\temp` | `<cpa root>/temp` | `<cpa root>/temp` |
+| `cpa home` | `<root>\instance` | `<root>/instance` | `<root>/instance` |
+| `cpa temp` | `<root>\temp` | `<root>/temp` | `<root>/temp` |
 
-CLIProxyAPI runs detached and remains running if MiniCPA is uninstalled. Stop it first and record the data paths:
+CPA remains running if MiniCPA is uninstalled. Stop it and remove autostart first:
 
 ```bash
-cpa auto off  # remove active, stale, or OS-disabled autostart registrations
+cpa auto off
 cpa stop
 cpa home
 cpa root
 npm uninstall -g @astralyn/minicpa
 ```
 
-If MiniCPA was removed first, use the PID in `<cpa home>/state/cpa.pid` with `taskkill /PID <pid> /F` on Windows or `kill <pid>` elsewhere. Uninstalling MiniCPA never deletes `config.yaml`, API keys, provider OAuth tokens under `auths/`, logs, or other instance data. Remove `cpa root` manually only after CLIProxyAPI has stopped.
+Uninstalling never deletes configuration, credentials, logs, backups, or instance data. If MiniCPA was already removed, stop the PID recorded in `<home>/state/cpa.pid` manually and remove its user autostart registration. Remove `cpa root` only after CPA has stopped and you have reviewed the data you want to preserve.
 
-Uninstalling also leaves any autostart registration in place, and it keeps firing at every login against a CLI that no longer exists — silently on Windows. If you skipped `cpa auto off` above, remove it by hand: the `MiniCPA` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` plus `%LOCALAPPDATA%\MiniCPA\minicpa-autostart.vbs` on Windows, `~/Library/LaunchAgents/com.astralyn.minicpa.plist` on macOS, or `systemctl --user disable minicpa.service` and `~/.config/systemd/user/minicpa.service` on Linux.
-
-See [docs/cpa-reference.md](docs/cpa-reference.md) for detailed lifecycle, locking, update, and troubleshooting behavior. Release notes are in [CHANGELOG.md](CHANGELOG.md).
+See [docs/cpa-reference.md](docs/cpa-reference.md) for lifecycle, locking, recovery, and troubleshooting details. Release notes are in [CHANGELOG.md](CHANGELOG.md).
 
 ## Develop
 
@@ -184,18 +183,16 @@ npm run dev -- --help
 
 | Command | Purpose |
 |---------|---------|
-| `npm run check` | Lint, type-check, run all tests, and build; also used by pre-commit and CI |
-| `npm test` | Type-check and run all tests |
-| `npm test -- lifecycle` | Type-check and run test files whose paths contain `lifecycle`; multiple filters match any |
+| `npm run check` | Lint, type-check, test, and build; shared by pre-commit and CI |
+| `npm test` | Type-check and run tests |
+| `npm test -- lifecycle` | Filter test files by path; multiple filters match any |
 | `npm run typecheck` | Check TypeScript without emitting files |
-| `npm run lint` / `npm run lint:fix` | Check formatting and lint rules, or apply fixes |
+| `npm run lint` / `npm run lint:fix` | Check or fix source formatting |
 | `npm run build` | Clean and rebuild `dist/` |
-| `npm run verify:package` | Pack the current build and verify installation in a temporary project; requires network access |
-| `npm run audit:prod` | Audit production dependencies; requires network access |
+| `npm run verify:package` | Pack and verify installation in a temporary project; requires network |
+| `npm run audit:prod` | Audit production dependencies; requires network |
 
-`hooks:install` enables the repository's pre-commit hook for this clone. The hook checks staged whitespace and runs `npm run check` without formatting or staging source files. Package installation checks and dependency audits run separately in CI and release verification. Follow [RELEASING.md](RELEASING.md) for releases.
-
-The CLI entry point is `src/cli.ts`; commands, process management, and updates live in `src/commands/`, `src/process/`, and `src/update/`. Keep `*.test.ts` beside the module under test, with shared fixtures in `src/test-fixtures/`. Tests use `node:test` through `tsx` and should use temporary directories and local HTTP fixtures. `docs/` contains user references and the bundled config template; `dist/` is generated. After building, `npm link` optionally exposes the local CLI as `cpa`.
+The CLI entry is `src/cli.ts`; commands, process management and updates live under `src/commands/`, `src/process/` and `src/update/`. Tests use `node:test` through `tsx`, isolated temporary directories and local HTTP fixtures. `docs/` contains references, not a CPA configuration template; `dist/` is generated. Follow [RELEASING.md](RELEASING.md) for publication.
 
 ## License
 

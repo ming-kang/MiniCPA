@@ -1,13 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import { readCpaConfig, type CpaConfig } from "../config-yaml.js";
-import {
-  activeExecutablePath,
-  cpaLayout,
-  ensureDir,
-  hardenCpaPermissions,
-  unlockProbePath,
-} from "../paths.js";
+import { activeExecutablePath, cpaLayout, ensureDir, unlockProbePath } from "../paths.js";
 import { recentRuntimeLogs as dumpRecentLogs, runtimeLogFile } from "../runtime-logs.js";
 import { clearPid, readPidRecord, writePidRecord } from "../state.js";
 import { sleep } from "../util.js";
@@ -196,22 +189,17 @@ export type StartOptions = {
   noWait?: boolean;
   /** Max ms to wait for HTTP (default 15000). */
   readyTimeoutMs?: number;
-  /** A command's already parsed config; never cached across commands. */
-  config?: CpaConfig;
 };
 
 export async function startDaemon(home: string, options?: StartOptions): Promise<RunningInfo> {
   recoverUnlockProbeBinary(home);
   const layout = cpaLayout(home);
-  const config = options?.config ?? readCpaConfig(layout.configFile);
+  const urls = options?.noWait ? [] : readinessUrls();
 
   const existing = await resolveRunning(home);
   if (existing) {
     if (!options?.noWait) {
-      const ready = await waitForAnyHttpOk(
-        readinessUrls(home, config),
-        options?.readyTimeoutMs ?? DEFAULT_READY_MS,
-      );
+      const ready = await waitForAnyHttpOk(urls, options?.readyTimeoutMs ?? DEFAULT_READY_MS);
       if (!ready) {
         throw new Error(
           `CLIProxyAPI is running (PID=${existing.pid}) but HTTP is not reachable. Try: cpa restart${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
@@ -221,11 +209,7 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
     return existing;
   }
 
-  ensureDir(layout.logsDir);
   ensureDir(layout.stateDir);
-  ensureDir(layout.authsDir);
-  ensureDir(layout.staticDir);
-  hardenCpaPermissions(home);
 
   if (!fs.existsSync(layout.configFile)) {
     throw new Error(`Missing config: ${layout.configFile}. Run: cpa init`);
@@ -283,7 +267,7 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
 
   if (!options?.noWait) {
     const readyMs = options?.readyTimeoutMs ?? DEFAULT_READY_MS;
-    const ready = await waitForAnyHttpOk(readinessUrls(home, config), readyMs);
+    const ready = await waitForAnyHttpOk(urls, readyMs);
     if (!ready) {
       if (!isProcessAlive(child.pid)) {
         clearPid(home);

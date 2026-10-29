@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { syncCpaConfigDefaults } from "../config-sync.js";
 import {
   activeExecutablePath,
   cpaHome,
@@ -118,12 +117,6 @@ function blockDownload(deps: BinaryPrepareDeps): { ready: Promise<void>; release
   return { ready, release };
 }
 
-function syncConfig(home: string): (() => void) | undefined {
-  return syncCpaConfigDefaults(cpaLayout(home).configFile, {
-    templateYaml: "port: 8317\ndebug: false\n",
-  }).rollback;
-}
-
 describe("binary preparation and commit", () => {
   it("copies and fsyncs on the target volume before stop or the lifecycle lock", async () => {
     const { home, deps, events, state } = setup();
@@ -156,7 +149,6 @@ describe("binary preparation and commit", () => {
       const result = await updateBinary(home, {
         insecure: true,
         deps,
-        beforeInstall: () => syncConfig(home),
       });
       assert.equal(result.restarted, true);
     } finally {
@@ -211,36 +203,24 @@ describe("binary preparation and commit", () => {
     assert.equal(events.filter((event) => event === "start").length, 1);
   });
 
-  it("never stops or synchronizes config when checksum preparation fails", async () => {
+  it("never stops or changes config when checksum preparation fails", async () => {
     const { home, deps, events } = setup();
     const old = fs.readFileSync(cpaLayout(home).configFile, "utf8");
-    let applied = false;
-    await assert.rejects(
-      () =>
-        updateBinary(home, {
-          deps,
-          beforeInstall: () => {
-            applied = true;
-            return syncConfig(home);
-          },
-        }),
-      /No checksums available/,
-    );
-    assert.equal(applied, false);
+    await assert.rejects(() => updateBinary(home, { deps }), /No checksums available/);
     assert.equal(events.includes("stop"), false);
     assert.equal(fs.readFileSync(cpaLayout(home).configFile, "utf8"), old);
     assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "old-binary");
   });
 
-  it("skips downloads but still synchronizes an already-current config under the commit lock", async () => {
+  it("skips downloads without synchronizing an already-current config", async () => {
     const { home, deps, events, state } = setup();
     state.version = "2.0.0";
     writeInstallState(home, { runtimeVersion: state.version });
-    const result = await updateBinary(home, { deps, beforeInstall: () => syncConfig(home) });
+    const result = await updateBinary(home, { deps });
     assert.equal(result.skipped, true);
     assert.equal(events.includes("download"), false);
     assert.equal(events.includes("stop"), false);
-    assert.match(fs.readFileSync(cpaLayout(home).configFile, "utf8"), /debug: false/);
+    assert.equal(fs.readFileSync(cpaLayout(home).configFile, "utf8"), "port: 8317\ndebug: true\n");
   });
 
   it("clears orphaned workspaces even when recent or already up to date", async () => {
@@ -279,19 +259,18 @@ describe("binary preparation and commit", () => {
     assert.deepEqual(fs.readdirSync(path.dirname(orphan)), ["update-locked"]);
   });
 
-  it("aborts before stop if config cannot be synchronized", async () => {
+  it("leaves config validation to CPA instead of inspecting it before replacement", async () => {
     const { home, deps, events } = setup();
-    fs.writeFileSync(cpaLayout(home).configFile, "port: [broken\n");
-    await assert.rejects(
-      () => updateBinary(home, { insecure: true, deps, beforeInstall: () => syncConfig(home) }),
-      /Could not synchronize/,
-    );
-    assert.equal(events.includes("stop"), false);
-    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "old-binary");
+    const config = cpaLayout(home).configFile;
+    fs.writeFileSync(config, "port: [broken\n");
+    assert.equal((await updateBinary(home, { insecure: true, deps })).restarted, true);
+    assert.equal(events.includes("stop"), true);
+    assert.equal(fs.readFileSync(config, "utf8"), "port: [broken\n");
+    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "new-binary");
     assert.equal(fs.existsSync(`${activeExecutablePath(home)}.new`), false);
   });
 
-  it("restores both config and binary before restarting the previous version", async () => {
+  it("restores the previous binary without rewriting config before the recovery restart", async () => {
     const { home, deps, state } = setup();
     const config = cpaLayout(home).configFile;
     const old = fs.readFileSync(config, "utf8");
@@ -304,14 +283,14 @@ describe("binary preparation and commit", () => {
       return { pid: 12345, exe: activeExecutablePath(home) };
     };
     await assert.rejects(
-      () => updateBinary(home, { insecure: true, deps, beforeInstall: () => syncConfig(home) }),
+      () => updateBinary(home, { insecure: true, deps }),
       /new version not ready/,
     );
     assert.equal(starts, 2);
     assert.equal(readInstallState(home).runtimeVersion, "1.0.0");
   });
 
-  it("reports an external config conflict without overwriting that edit during rollback", async () => {
+  it("preserves native config changes during binary rollback", async () => {
     const { home, deps, state } = setup();
     const config = cpaLayout(home).configFile;
     let starts = 0;
@@ -323,10 +302,7 @@ describe("binary preparation and commit", () => {
       }
       return { pid: 12345, exe: activeExecutablePath(home) };
     };
-    await assert.rejects(
-      () => updateBinary(home, { insecure: true, deps, beforeInstall: () => syncConfig(home) }),
-      /Could not restore config.*refusing to overwrite/s,
-    );
+    await assert.rejects(() => updateBinary(home, { insecure: true, deps }), /not ready/);
     assert.equal(fs.readFileSync(config, "utf8"), "port: 12345\n# external edit\n");
     assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "old-binary");
   });

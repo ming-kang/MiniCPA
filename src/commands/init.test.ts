@@ -1,172 +1,205 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { configBackupPaths } from "../config-backup.js";
 import { cpaHome, cpaLayout, miniCpaRoot } from "../paths.js";
+import { captureConsole, createIsolatedTestEnv } from "../test-fixtures/test-env.js";
 import type { UpdateDeps } from "./update-cmd.js";
 import { runInit } from "./init.js";
 
-const originalLocalAppData = process.env.LOCALAPPDATA;
-const originalXdgDataHome = process.env.XDG_DATA_HOME;
-const originalHome = process.env.HOME;
-const originalCpaHome = process.env.CPA_HOME;
-const originalExitCode = process.exitCode;
-const temps: string[] = [];
+const EXPECTED_CONFIG = `host: "127.0.0.1"
+port: 8317
 
-function isolateMiniCpaRoot(): string {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-init-"));
-  temps.push(base);
-  process.env.LOCALAPPDATA = base;
-  process.env.XDG_DATA_HOME = base;
-  process.env.HOME = base;
-  delete process.env.CPA_HOME;
-  return cpaHome();
-}
+auth-dir: "auths"
+api-keys:
+  - sk-cliproxyapi
 
-async function captureOutput(fn: () => Promise<void>): Promise<{
-  stdout: string;
-  stderr: string;
-  error?: unknown;
-}> {
-  const out: string[] = [];
-  const err: string[] = [];
-  const originalLog = console.log;
-  const originalError = console.error;
-  console.log = (message?: unknown): void => {
-    out.push(String(message));
-  };
-  console.error = (message?: unknown): void => {
-    err.push(String(message));
-  };
-  try {
-    await fn();
-    return { stdout: out.join("\n"), stderr: err.join("\n") };
-  } catch (error) {
-    return { stdout: out.join("\n"), stderr: err.join("\n"), error };
-  } finally {
-    console.log = originalLog;
-    console.error = originalError;
-  }
-}
+remote-management:
+  allow-remote: false
+  secret-key: CLIPROXYAPI
+  disable-control-panel: false
+  disable-auto-update-panel: false
+  panel-github-repository: "https://github.com/seakee/CPA-Manager-Plus"
+`;
 
+let env: ReturnType<typeof createIsolatedTestEnv> | undefined;
 afterEach(() => {
-  for (const dir of temps.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-  if (originalLocalAppData === undefined) delete process.env.LOCALAPPDATA;
-  else process.env.LOCALAPPDATA = originalLocalAppData;
-  if (originalXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
-  else process.env.XDG_DATA_HOME = originalXdgDataHome;
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalCpaHome === undefined) delete process.env.CPA_HOME;
-  else process.env.CPA_HOME = originalCpaHome;
-  process.exitCode = originalExitCode;
+  env?.cleanup();
+  env = undefined;
 });
 
+function setup(): ReturnType<typeof cpaLayout> {
+  env = createIsolatedTestEnv("minicpa-init-");
+  return cpaLayout(cpaHome());
+}
+
+const currentBinary: UpdateDeps = {
+  updateBinary: async () => ({ version: "8.0.47", skipped: true, restarted: false }),
+};
+
 describe("runInit", () => {
-  it("creates the canonical layout and installs only the latest binary", async () => {
-    const home = isolateMiniCpaRoot();
-    const layout = cpaLayout(home);
-    const lockPath = path.join(miniCpaRoot(), "state", "cpa.lock");
-    const calls: string[] = [];
-    const deps: UpdateDeps = {
-      updateBinary: async (receivedHome, options) => {
-        assert.equal(receivedHome, home);
-        assert.ok(fs.existsSync(layout.configFile), "config must exist before binary install");
-        assert.equal(options?.version, undefined);
-        assert.equal(options?.force, undefined);
-        assert.equal(options?.insecure, undefined);
-        assert.equal(
-          fs.existsSync(lockPath),
-          false,
-          "download preparation must not hold the lifecycle lock",
-        );
-        assert.ok(fs.existsSync(path.join(miniCpaRoot(), "state", "update", "cpa.lock")));
-        calls.push("binary");
-        return { version: "7.2.92", skipped: false, restarted: false };
-      },
-    };
-
-    const { stdout, stderr, error } = await captureOutput(() => runInit({}, deps));
-
-    assert.equal(error, undefined);
-    assert.equal(stderr, "");
-    assert.deepEqual(calls, ["binary"]);
-    assert.equal(home, path.join(miniCpaRoot(), "instance"));
-    assert.equal(fs.existsSync(path.join(miniCpaRoot(), "instances")), false);
-    assert.equal(fs.existsSync(path.join(miniCpaRoot(), "config.json")), false);
-
-    const configText = fs.readFileSync(layout.configFile, "utf8");
-    const apiKey = /-\s+"?(sk-[a-f0-9]+)"?/.exec(configText)?.[1];
-    assert.ok(apiKey);
-    assert.ok(fs.existsSync(layout.envFile));
-    assert.match(configText, /api-keys:/);
-    assert.match(configText, /disable-auto-update-panel: false/);
-    assert.ok(!stdout.includes(apiKey));
-    assert.match(stdout, /CLIProxyAPI installed: 7\.2\.92/);
-    assert.doesNotMatch(stdout, /Web panel installed/);
-    assert.match(stdout, /Next:[\s\S]*cpa start[\s\S]*cpa web/);
-    assert.doesNotMatch(stdout, /Next:[\s\S]*cpa update/);
-    assert.doesNotMatch(stdout, /cpa open/);
-    assert.equal(fs.existsSync(lockPath), false);
-
+  it("creates exactly the one-time bootstrap before installing the latest binary", async () => {
+    const layout = setup();
+    let installed = false;
+    const output = await captureConsole(() =>
+      runInit({
+        updateBinary: async (home, options) => {
+          assert.equal(home, layout.home);
+          assert.equal(fs.readFileSync(layout.configFile, "utf8"), EXPECTED_CONFIG);
+          assert.equal(options?.version, undefined);
+          assert.equal(options?.force, undefined);
+          assert.equal(options?.insecure, undefined);
+          assert.equal(Object.hasOwn(options ?? {}, "beforeInstall"), false);
+          assert.equal(fs.existsSync(path.join(miniCpaRoot(), "state", "cpa.lock")), false);
+          assert.ok(fs.existsSync(path.join(miniCpaRoot(), "state", "update", "cpa.lock")));
+          installed = true;
+          return { version: "8.0.47", skipped: false, restarted: false };
+        },
+      }),
+    );
+    assert.equal(installed, true);
+    assert.deepEqual(output.stderr, []);
+    assert.match(output.stdout.join("\n"), /CLIProxyAPI installed: 8\.0\.47/);
+    assert.match(output.stdout.join("\n"), /Next:[\s\S]*cpa start[\s\S]*cpa web/);
+    assert.doesNotMatch(output.stdout.join("\n"), /sk-cliproxyapi|CLIPROXYAPI/);
+    assert.equal(fs.existsSync(path.join(layout.home, ".env")), false);
+    assert.equal(fs.existsSync(path.join(layout.home, "backups")), false);
+    assert.equal(fs.existsSync(layout.authsDir), false);
+    assert.equal(fs.existsSync(layout.staticDir), false);
+    assert.equal(fs.existsSync(layout.logsDir), false);
+    assert.ok(fs.existsSync(layout.stateDir));
     if (process.platform !== "win32") {
-      for (const target of [
-        home,
-        layout.authsDir,
-        layout.logsDir,
-        layout.stateDir,
-        layout.staticDir,
-        layout.configFile,
-        layout.envFile,
-      ]) {
-        assert.equal(fs.statSync(target).mode & 0o077, 0, target);
-      }
+      assert.equal(fs.statSync(layout.configFile).mode & 0o777, 0o600);
+      assert.equal(fs.statSync(layout.home).mode & 0o777, 0o700);
     }
   });
 
-  it("keeps --force scoped to config replacement instead of binary reinstall", async () => {
-    const home = isolateMiniCpaRoot();
-    const layout = cpaLayout(home);
-    fs.mkdirSync(home, { recursive: true });
-    fs.writeFileSync(layout.configFile, "port: 9000\n");
-    const componentForces: Array<boolean | undefined> = [];
-    const deps: UpdateDeps = {
-      updateBinary: async (_receivedHome, options) => {
-        componentForces.push(options?.force);
-        return { version: "7.2.92", skipped: true, restarted: false };
-      },
-    };
-
-    const { error } = await captureOutput(() => runInit({ force: true }, deps));
-
-    assert.equal(error, undefined);
-    assert.deepEqual(componentForces, [undefined]);
-    const backups = configBackupPaths(layout.configFile).filter((file) => fs.existsSync(file));
-    assert.equal(backups.length, 1);
-    assert.equal(fs.readFileSync(backups[0]!, "utf8"), "port: 9000\n");
-    assert.notEqual(fs.readFileSync(layout.configFile, "utf8"), "port: 9000\n");
+  it("never reads or rewrites existing configuration, credentials, env or backups", async () => {
+    const layout = setup();
+    const preserved = [
+      layout.configFile,
+      path.join(layout.home, ".env"),
+      path.join(layout.authsDir, "credential.json"),
+      path.join(layout.staticDir, "management.html"),
+      path.join(layout.home, "backups", "config", "config.1.yaml"),
+      `${layout.configFile}.bak.2026-10-01T12-34-56-789Z`,
+      path.join(layout.home, ".config.yaml.replace.bak"),
+    ];
+    for (const [index, file] of preserved.entries()) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, `opaque user content ${index}\n`, { mode: 0o644 });
+    }
+    const modes = preserved.map((file) => fs.statSync(file).mode);
+    const originalRead = fs.readFileSync;
+    fs.readFileSync = ((file: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+      assert.equal(preserved.includes(String(file)), false, "MiniCPA must not read CPA files");
+      return (originalRead as (...args: unknown[]) => unknown)(file, ...args);
+    }) as typeof fs.readFileSync;
+    try {
+      await captureConsole(() => runInit(currentBinary));
+      await captureConsole(() => runInit(currentBinary));
+    } finally {
+      fs.readFileSync = originalRead;
+    }
+    for (const [index, file] of preserved.entries()) {
+      assert.equal(fs.readFileSync(file, "utf8"), `opaque user content ${index}\n`);
+      assert.equal(fs.statSync(file).mode, modes[index]);
+    }
   });
 
-  it("preserves initialized files when binary installation fails", async () => {
-    const home = isolateMiniCpaRoot();
-    const layout = cpaLayout(home);
-    const deps: UpdateDeps = {
-      updateBinary: async () => {
-        throw new Error("binary download failed");
-      },
+  it("preserves an existing empty or oversized config without validating it", async () => {
+    const layout = setup();
+    fs.mkdirSync(layout.home, { recursive: true });
+    fs.writeFileSync(layout.configFile, "");
+    await captureConsole(() => runInit(currentBinary));
+    assert.equal(fs.statSync(layout.configFile).size, 0);
+    fs.truncateSync(layout.configFile, 5 * 1024 * 1024);
+    await captureConsole(() => runInit(currentBinary));
+    assert.equal(fs.statSync(layout.configFile).size, 5 * 1024 * 1024);
+  });
+
+  it("preserves a config created by another writer at the exclusive creation boundary", async () => {
+    const layout = setup();
+    const originalOpen = fs.openSync;
+    let inserted = false;
+    fs.openSync = (file, ...args) => {
+      if (String(file) === layout.configFile && !inserted) {
+        inserted = true;
+        const fd = originalOpen(file, "wx", 0o600);
+        fs.writeFileSync(fd, "external config\n");
+        fs.closeSync(fd);
+      }
+      return originalOpen(file, ...args);
     };
+    try {
+      await captureConsole(() => runInit(currentBinary));
+    } finally {
+      fs.openSync = originalOpen;
+    }
+    assert.equal(inserted, true);
+    assert.equal(fs.readFileSync(layout.configFile, "utf8"), "external config\n");
+  });
 
-    const { stdout, error } = await captureOutput(() => runInit({}, deps));
+  it("preserves the initial config on download failure and user edits on a retry", async () => {
+    const layout = setup();
+    await assert.rejects(
+      () =>
+        captureConsole(() =>
+          runInit({
+            updateBinary: async () => {
+              throw new Error("download failed");
+            },
+          }),
+        ),
+      /download failed/,
+    );
+    assert.equal(fs.readFileSync(layout.configFile, "utf8"), EXPECTED_CONFIG);
+    fs.writeFileSync(layout.configFile, "user configuration after failed download\n");
+    await captureConsole(() => runInit(currentBinary));
+    assert.equal(
+      fs.readFileSync(layout.configFile, "utf8"),
+      "user configuration after failed download\n",
+    );
+    assert.equal(fs.existsSync(path.join(layout.home, ".env")), false);
+  });
 
-    assert.ok(error instanceof Error);
-    assert.match(error.message, /binary download failed/);
-    assert.ok(fs.existsSync(layout.configFile));
-    assert.ok(fs.existsSync(layout.envFile));
-    assert.doesNotMatch(stdout, /Next:/);
-    assert.equal(fs.existsSync(path.join(miniCpaRoot(), "state", "cpa.lock")), false);
+  it("reports a config flush failure without deleting a concurrent writer's contents", async () => {
+    const layout = setup();
+    const originalOpen = fs.openSync;
+    const originalSync = fs.fsyncSync;
+    let configFd: number | undefined;
+    let installed = false;
+    fs.openSync = (file, ...args) => {
+      const fd = originalOpen(file, ...args);
+      if (String(file) === layout.configFile) configFd = fd;
+      return fd;
+    };
+    fs.fsyncSync = (fd) => {
+      if (fd === configFd) {
+        configFd = undefined;
+        fs.writeFileSync(layout.configFile, "concurrent user configuration\n");
+        throw new Error("config flush failed");
+      }
+      originalSync(fd);
+    };
+    try {
+      await assert.rejects(
+        () =>
+          captureConsole(() =>
+            runInit({
+              updateBinary: async () => {
+                installed = true;
+                return currentBinary.updateBinary(layout.home);
+              },
+            }),
+          ),
+        /config flush failed/,
+      );
+    } finally {
+      fs.openSync = originalOpen;
+      fs.fsyncSync = originalSync;
+    }
+    assert.equal(installed, false);
+    assert.equal(fs.readFileSync(layout.configFile, "utf8"), "concurrent user configuration\n");
   });
 });

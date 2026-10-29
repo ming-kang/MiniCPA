@@ -1,44 +1,66 @@
 import fs from "node:fs";
-import { backupConfigYaml } from "../config-backup.js";
-import { defaultConfigYaml, generateApiKey } from "../config-yaml.js";
+import { apiBaseUrl } from "../api-url.js";
 import { createContext } from "../context.js";
-import { writeFileAtomic } from "../fs-atomic.js";
-import { ensureDir, hardenCpaPermissions, miniCpaRoot } from "../paths.js";
+import { ensureDir, miniCpaRoot } from "../paths.js";
 import { withMiniCpaLock, withMiniCpaUpdateLock } from "../process/lock.js";
 import { performUpdate, type UpdateDeps } from "./update-cmd.js";
 
-export async function runInit(opts: { force?: boolean }, updateDeps?: UpdateDeps): Promise<void> {
-  const ctx = createContext();
-  const { layout, home } = ctx;
+/** One-time bootstrap only. CLIProxyAPI owns every subsequent configuration change. */
+const INITIAL_CONFIG = `host: "127.0.0.1"
+port: 8317
+
+auth-dir: "auths"
+api-keys:
+  - sk-cliproxyapi
+
+remote-management:
+  allow-remote: false
+  secret-key: CLIPROXYAPI
+  disable-control-panel: false
+  disable-auto-update-panel: false
+  panel-github-repository: "https://github.com/seakee/CPA-Manager-Plus"
+`;
+
+function createInitialConfig(file: string): boolean {
+  let fd: number;
+  try {
+    // Exclusive creation also preserves an existing empty file, directory or link.
+    fd = fs.openSync(file, "wx", 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw error;
+  }
+  // Preserve the path even on I/O failure: another writer may already have
+  // taken ownership of it. Report the failure rather than deleting configuration.
+  try {
+    fs.writeFileSync(fd, INITIAL_CONFIG);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  return true;
+}
+
+export async function runInit(updateDeps?: UpdateDeps): Promise<void> {
+  const { layout, home } = createContext();
+  apiBaseUrl();
   await withMiniCpaUpdateLock("init", async () => {
     await withMiniCpaLock("init", async () => {
       ensureDir(home);
-      for (const dir of [layout.authsDir, layout.staticDir, layout.logsDir, layout.stateDir])
-        ensureDir(dir);
-      if (!fs.existsSync(layout.configFile) || opts.force) {
-        if (opts.force && fs.existsSync(layout.configFile)) {
-          const backup = backupConfigYaml(layout.configFile);
-          console.log(`Backed up ${layout.configFile} → ${backup}`);
-        }
-        writeFileAtomic(layout.configFile, defaultConfigYaml(generateApiKey()));
+      ensureDir(layout.stateDir);
+      if (createInitialConfig(layout.configFile)) {
         console.log(`Created    ${layout.configFile}`);
-        console.log("API key    Created in config.yaml (not shown)");
-      } else {
-        console.log(`Exists     ${layout.configFile}`);
-      }
-      if (!fs.existsSync(layout.envFile)) {
-        writeFileAtomic(
-          layout.envFile,
-          "# Optional overrides for CLIProxyAPI (MANAGEMENT_PASSWORD, storage backends, etc.)\n",
+        console.log(
+          "Config     One-time local bootstrap; change the fixed keys in CLIProxyAPI before exposing it",
         );
+      } else {
+        console.log(`Exists     ${layout.configFile} (left untouched)`);
       }
-      // Deep permission repair is explicit initialization work, never a startup scan.
-      hardenCpaPermissions(home, { deep: true });
     });
     console.log(`MiniCPA root  ${miniCpaRoot()}`);
     console.log(`Home          ${home}`);
     console.log("Component     Ensuring latest CLIProxyAPI binary");
-    // Configuration survives download failures; start/stop are free during preparation.
+    // The first configuration survives download failures; retries never replace it.
     await performUpdate(home, {}, updateDeps);
     console.log("Next:");
     console.log("  cpa start");

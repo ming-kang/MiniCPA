@@ -21,7 +21,10 @@ afterEach(() => {
 });
 
 /** Run the CLI in-source with an isolated MiniCPA root. */
-function runCli(args: string[]): {
+function runCli(
+  args: string[],
+  extraEnv: NodeJS.ProcessEnv = {},
+): {
   status: number | null;
   stdout: string;
   stderr: string;
@@ -42,6 +45,8 @@ function runCli(args: string[]): {
       // spawnSync drops undefined entries, so this unsets an inherited CPA_HOME
       // that would otherwise make resolveCpaHome() throw for unrelated reasons.
       CPA_HOME: undefined,
+      MINICPA_API_URL: undefined,
+      ...extraEnv,
     },
   });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr, root };
@@ -99,7 +104,7 @@ describe("cli smoke", () => {
     }
     assert.match(
       stdout,
-      /^ {2}init \[options\]\s+Initialize configuration and install the latest CLIProxyAPI\s+binary$/m,
+      /^ {2}init(?: \[options\])?\s+Create config\.yaml once and install the latest CLIProxyAPI\s+binary$/m,
     );
     assert.match(
       stdout,
@@ -147,7 +152,14 @@ describe("cli smoke", () => {
 
     assert.equal(update.status, 0);
     assert.equal(update.stderr, "");
-    assert.match(update.stdout, /Synchronize config and update the managed CLIProxyAPI binary/);
+    assert.match(
+      update.stdout,
+      /Update the managed CLIProxyAPI binary without modifying\s+configuration/,
+    );
+    assert.match(
+      update.stdout,
+      /Updates never synchronize configuration or manage configuration backups\./,
+    );
     assert.match(update.stdout, /CLIProxyAPI provisions and updates its Web panel itself\./);
     assert.match(update.stdout, /To upgrade MiniCPA itself, run cpa upgrade\./);
     for (const hidden of ["all", "binary", "panel"]) {
@@ -161,6 +173,36 @@ describe("cli smoke", () => {
     assert.match(upgrade.stdout, /To update CLIProxyAPI, run cpa update/);
     assert.match(upgrade.stdout, /CLIProxyAPI manages its own Web panel/);
     assert.match(upgrade.stdout, /--force/);
+  });
+
+  it("rejects removed init --force without creating or overwriting configuration", () => {
+    const result = runCli(["init", "--force"]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /unknown option '--force'/);
+    assert.deepEqual(fs.readdirSync(result.root), []);
+  });
+
+  it("uses an explicit API URL before a subcommand instead of reading configuration", () => {
+    const result = runCli(["--api-url", "https://[::1]:19443/", "status"], {
+      MINICPA_API_URL: "http://env.example:18080",
+    });
+    assert.equal(result.status, 1, "a new instance is stopped");
+    assert.match(result.stdout, /Local API\s+https:\/\/\[::1\]:19443/);
+    assert.match(result.stdout, /Web Panel\s+https:\/\/\[::1\]:19443\/management\.html/);
+    assert.doesNotMatch(result.stdout, /env\.example/);
+  });
+
+  it("accepts the MiniCPA connection URL through the environment", () => {
+    const result = runCli(["status"], { MINICPA_API_URL: "http://127.0.0.1:19444/" });
+    assert.match(result.stdout, /Local API\s+http:\/\/127\.0\.0\.1:19444/);
+  });
+
+  it("rejects credential-bearing connection URLs before initializing anything", () => {
+    const result = runCli(["--api-url", "https://user:private-password@example.com", "init"]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /absolute HTTP\(S\) base URL/);
+    assert.doesNotMatch(result.stderr, /private-password/);
+    assert.deepEqual(fs.readdirSync(result.root), []);
   });
 
   it("keeps the legacy --panel spelling as non-network migration guidance", () => {

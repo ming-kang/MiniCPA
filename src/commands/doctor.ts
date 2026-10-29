@@ -2,12 +2,6 @@ import { lingerHint } from "../process/autostart-linux.js";
 import fs from "node:fs";
 import path from "node:path";
 import { formatCliError } from "../cli-errors.js";
-import {
-  getListenAddress,
-  LEGACY_DEFAULT_API_KEY,
-  readCpaConfigWithWarnings,
-  type CpaConfig,
-} from "../config-yaml.js";
 import { createContext, printHome } from "../context.js";
 import { writeFileAtomic } from "../fs-atomic.js";
 import { describeProxyEnv, hasProxyEnvConfigured } from "../http.js";
@@ -141,8 +135,6 @@ export async function runDoctor(deps?: DoctorDeps, options?: { deep?: boolean })
   const ctx = createContext();
   printHome(ctx);
   let ok = true;
-  let config: CpaConfig | undefined;
-  let configError: string | undefined;
 
   // Layout / write access
   if (!reportHomeWritable(ctx.home)) {
@@ -153,44 +145,9 @@ export async function runDoctor(deps?: DoctorDeps, options?: { deep?: boolean })
     console.log("[fail] config.yaml missing — run: cpa init");
     ok = false;
   } else {
-    try {
-      const { config: cfg, warnings } = readCpaConfigWithWarnings(ctx.layout.configFile);
-      config = cfg;
-      const { host, port } = getListenAddress(cfg);
-      console.log("[ ok ] config.yaml");
-      for (const warning of warnings) {
-        console.log(`[warn] ${warning}`);
-      }
-      console.log(`[info] listen ${host}:${port}`);
-      if (cfg["logging-to-file"] === false) {
-        console.log(
-          "[warn] logging-to-file disabled — detached stdout/stderr are not captured; enable native file logging",
-        );
-      }
-      const apiKeys = cfg["api-keys"] ?? [];
-      const hasLegacyApiKey = apiKeys.includes(LEGACY_DEFAULT_API_KEY);
-      if (hasLegacyApiKey) {
-        console.log(
-          `[warn] default api-key ${LEGACY_DEFAULT_API_KEY} still in config — change before exposing the API`,
-        );
-      }
-      if (host !== "127.0.0.1" && host !== "localhost" && hasLegacyApiKey) {
-        console.log("[warn] non-loopback host with legacy default api-key is unsafe");
-      }
-      const remoteManagement = cfg["remote-management"];
-      if (remoteManagement?.["disable-control-panel"] === true) {
-        console.log("[info] Web panel disabled in config.yaml");
-      } else if (remoteManagement?.["disable-auto-update-panel"] === true) {
-        console.log("[info] Web panel managed by CLIProxyAPI (periodic updates disabled)");
-      } else {
-        console.log("[info] Web panel managed and updated by CLIProxyAPI");
-      }
-    } catch (err) {
-      configError = formatCliError(err);
-      console.log(`[fail] config.yaml parse error: ${configError}`);
-      ok = false;
-    }
+    console.log("[ ok ] config.yaml present (contents managed by CLIProxyAPI)");
   }
+  console.log("[info] Web panel managed by CLIProxyAPI");
 
   // Read-only lookup: diagnosing the home must never repair or execute it, or
   // doctor could race a lock-holding update over the binary being replaced.
@@ -218,30 +175,18 @@ export async function runDoctor(deps?: DoctorDeps, options?: { deep?: boolean })
   if (state.runtimeVersion && exe === undefined) {
     console.log("[warn] install state has runtimeVersion but binary is missing");
   }
-  for (const dir of [
-    ctx.layout.logsDir,
-    ctx.layout.stateDir,
-    ctx.layout.authsDir,
-    ctx.layout.staticDir,
-  ]) {
-    if (!fs.existsSync(dir)) {
-      console.log(`[warn] dir missing: ${dir}`);
-    }
+  if (!fs.existsSync(ctx.layout.stateDir)) {
+    console.log(`[warn] dir missing: ${ctx.layout.stateDir}`);
   }
 
   if (process.platform !== "win32") {
     for (const target of [
       ctx.home,
-      ctx.layout.configFile,
-      ctx.layout.envFile,
-      ctx.layout.authsDir,
-      ctx.layout.logsDir,
       ctx.layout.stateDir,
       ctx.layout.installStateFile,
       ctx.layout.pidFile,
       ctx.layout.logFile,
       ctx.layout.errLogFile,
-      ctx.layout.runtimeLogFile,
       ctx.layout.minicpaLogFile,
     ]) {
       if (!fs.existsSync(target)) continue;
@@ -359,8 +304,7 @@ export async function runDoctor(deps?: DoctorDeps, options?: { deep?: boolean })
       console.log(`[ ok ] CLIProxyAPI running (PID=${running.pid})`);
     }
     try {
-      if (!config) throw new Error(configError ?? "config.yaml missing");
-      const urls = readinessUrls(ctx.home, config);
+      const urls = readinessUrls();
       const reachableUrl = await waitForFirstHttpOk(urls, 3000);
       if (!reachableUrl) {
         console.log(`[fail] HTTP not reachable (tried ${urls.join(", ")})`);
@@ -368,10 +312,8 @@ export async function runDoctor(deps?: DoctorDeps, options?: { deep?: boolean })
       } else {
         console.log(`[ ok ] HTTP ${reachableUrl}`);
       }
-    } catch (err) {
-      // A broken config.yaml is already reported above; re-throwing it here would
-      // drop the remaining sections of the report.
-      console.log(`[fail] cannot derive listen address: ${formatCliError(err)}`);
+    } catch (error) {
+      console.log(`[fail] CPA API probe failed: ${formatCliError(error)}`);
       ok = false;
     }
   } else {

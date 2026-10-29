@@ -4,6 +4,7 @@ import { Argument, Command, CommanderError, type Help, Option } from "commander"
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_API_URL } from "./api-url.js";
 import { withCliErrors } from "./cli-errors.js";
 import { createContext } from "./context.js";
 import { miniCpaRoot, miniCpaTempRoot } from "./paths.js";
@@ -22,12 +23,20 @@ program
   // Commander options accept at most two flags. Keep the third version spelling as a
   // separate hidden option, handled through its public option event below.
   .addOption(new Option("-V", "Show the MiniCPA version").hideHelp())
+  .addOption(
+    new Option("--api-url <url>", "CPA API base URL for probes and Web access")
+      .default(DEFAULT_API_URL)
+      .env("MINICPA_API_URL"),
+  )
   .helpOption("-h, --help", "Show help")
   .showHelpAfterError(false)
   // Without this, a program-level version flag may be matched AFTER a subcommand
   // name, so `cpa update --version 7.2.66` would print MiniCPA's version instead of
   // reaching update's own `--version <ver>` pin.
   .enablePositionalOptions()
+  .hook("preAction", () => {
+    process.env.MINICPA_API_URL = program.opts<{ apiUrl: string }>().apiUrl;
+  })
   .exitOverride();
 
 program.on("option:V", () => {
@@ -37,12 +46,11 @@ program.on("option:V", () => {
 
 program
   .command("init")
-  .description("Initialize configuration and install the latest CLIProxyAPI binary")
-  .option("--force", "Overwrite config.yaml (keeps up to 3 snapshots under backups/config)")
+  .description("Create config.yaml once and install the latest CLIProxyAPI binary")
   .action(
-    withCliErrors(async (opts: { force?: boolean }) => {
+    withCliErrors(async () => {
       const { runInit } = await import("./commands/init.js");
-      await runInit({ force: opts.force });
+      await runInit();
     }),
   );
 
@@ -154,7 +162,7 @@ program
 
 const updateCmd = program
   .command("update")
-  .description("Synchronize config and update the managed CLIProxyAPI binary");
+  .description("Update the managed CLIProxyAPI binary without modifying configuration");
 
 updateCmd
   .command("check")
@@ -210,8 +218,8 @@ updateCmd.addHelpText(
   "after",
   [
     "",
-    "An existing config is synchronized after binary preparation succeeds.",
-    "Config history keeps 3 snapshots; old timestamped config backups are deleted.",
+    "CLIProxyAPI owns configuration after the one-time cpa init bootstrap.",
+    "Updates never synchronize configuration or manage configuration backups.",
     "CLIProxyAPI provisions and updates its Web panel itself.",
     "A running instance is restarted only when its CLIProxyAPI binary is replaced.",
     "To upgrade MiniCPA itself, run cpa upgrade.",

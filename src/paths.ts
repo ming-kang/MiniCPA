@@ -59,7 +59,6 @@ export function resolveCpaHome(): string {
 export type CpaLayout = {
   home: string;
   configFile: string;
-  envFile: string;
   authsDir: string;
   staticDir: string;
   logsDir: string;
@@ -78,7 +77,6 @@ export function cpaLayout(home: string): CpaLayout {
   return {
     home,
     configFile: path.join(home, "config.yaml"),
-    envFile: path.join(home, ".env"),
     authsDir: path.join(home, "auths"),
     staticDir: path.join(home, "static"),
     logsDir: path.join(home, "logs"),
@@ -90,72 +88,6 @@ export function cpaLayout(home: string): CpaLayout {
     runtimeLogFile: path.join(home, "logs", "main.log"),
     minicpaLogFile: path.join(home, "state", "minicpa.log"),
   };
-}
-
-/** Fixed-cost hardening on start; `cpa init` explicitly repairs the existing tree. */
-export function hardenCpaPermissions(home: string, options?: { deep?: boolean }): void {
-  if (process.platform === "win32" || !fs.existsSync(home)) return;
-
-  const chmodPrivate = (target: string, recursive: boolean): void => {
-    let stat: fs.Stats;
-    try {
-      stat = fs.lstatSync(target);
-    } catch {
-      return;
-    }
-    if (stat.isSymbolicLink()) return;
-    try {
-      fs.chmodSync(target, stat.isDirectory() ? 0o700 : 0o600);
-    } catch {
-      return;
-    }
-    if (!recursive || !stat.isDirectory()) return;
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(target, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      chmodPrivate(path.join(target, entry.name), true);
-    }
-  };
-
-  const layout = cpaLayout(home);
-  chmodPrivate(home, false);
-  chmodPrivate(layout.configFile, false);
-  chmodPrivate(layout.envFile, false);
-  for (const directory of [
-    layout.authsDir,
-    layout.logsDir,
-    layout.stateDir,
-    layout.staticDir,
-    path.join(home, "backups"),
-    path.join(home, "backups", "config"),
-  ]) {
-    chmodPrivate(directory, options?.deep === true);
-  }
-  for (const file of [
-    layout.pidFile,
-    layout.installStateFile,
-    layout.runtimeLogFile,
-    layout.minicpaLogFile,
-    layout.logFile,
-    layout.errLogFile,
-    ...[1, 2, 3].map((slot) => path.join(home, "backups", "config", `config.${slot}.yaml`)),
-  ]) {
-    chmodPrivate(file, false);
-  }
-  if (!options?.deep) return;
-  try {
-    for (const entry of fs.readdirSync(home)) {
-      if (entry.startsWith("config.yaml.bak.")) {
-        chmodPrivate(path.join(home, entry), false);
-      }
-    }
-  } catch {
-    /* best-effort upgrade hardening */
-  }
 }
 
 export function executableName(): string {

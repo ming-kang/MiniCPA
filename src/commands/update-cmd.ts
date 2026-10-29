@@ -1,14 +1,7 @@
+import { apiBaseUrl } from "../api-url.js";
 import { formatCliError } from "../cli-errors.js";
-import { removeLegacyConfigBackups } from "../config-backup.js";
-import { syncCpaConfigDefaults, type ConfigSyncResult } from "../config-sync.js";
 import { createContext, printHome } from "../context.js";
-import { withMiniCpaUpdateLock } from "../process/lock.js";
-import {
-  checkBinaryUpdate,
-  updateBinary,
-  type BinaryCommitHook,
-  type BinaryUpdateResult,
-} from "../update/binary.js";
+import { checkBinaryUpdate, updateBinary, type BinaryUpdateResult } from "../update/binary.js";
 import { consoleUpdateReporter } from "../update/reporter.js";
 
 /** Exit rule documented for `cpa update check`: 0 only when the binary is current. */
@@ -112,14 +105,12 @@ export async function performUpdate(
   home: string,
   opts: UpdateOptions,
   deps: UpdateDeps = realUpdateDeps,
-  beforeInstall?: BinaryCommitHook,
 ): Promise<BinaryUpdateResult> {
   const binary = await deps.updateBinary(home, {
     version: opts.version,
     force: opts.force,
     insecure: opts.insecure,
     reporter: consoleUpdateReporter(),
-    beforeInstall,
   });
   if (binary.skipped) {
     console.log(`CLIProxyAPI is already up to date (${binary.version})`);
@@ -134,29 +125,7 @@ export async function runUpdate(
   deps: UpdateDeps = realUpdateDeps,
 ): Promise<void> {
   const ctx = createContext();
+  apiBaseUrl();
   printHome(ctx);
-  await withMiniCpaUpdateLock("update", async () => {
-    const legacy = removeLegacyConfigBackups(ctx.layout.configFile);
-    if (legacy.removed > 0) console.log(`Removed ${legacy.removed} legacy config backups`);
-    for (const failure of legacy.failures) console.error(`Warning: could not remove ${failure}`);
-    let configSync: ConfigSyncResult | undefined;
-    const binary = await performUpdate(ctx.home, opts, deps, () => {
-      // Read the latest config only after preparation succeeds, inside commit.
-      configSync = syncCpaConfigDefaults(ctx.layout.configFile);
-      if (configSync.changed) {
-        const details: string[] = [];
-        if (configSync.addedPaths.length > 0)
-          details.push(`${configSync.addedPaths.length} defaults added`);
-        if (configSync.overwrittenPaths.length > 0)
-          details.push(`${configSync.overwrittenPaths.length} settings updated`);
-        if (details.length === 0) details.push("template comments refreshed");
-        console.log(`Config synchronized: ${ctx.layout.configFile} (${details.join(", ")})`);
-        if (configSync.backupPath) console.log(`Config backup:       ${configSync.backupPath}`);
-      }
-      return configSync.rollback;
-    });
-    if (configSync?.changed && !binary.restarted) {
-      console.log("Config changes apply on the next cpa start/restart.");
-    }
-  });
+  await performUpdate(ctx.home, opts, deps);
 }

@@ -46,7 +46,7 @@ export async function runLogs(opts: {
     throw new Error(
       opts.errOnly
         ? `Log not found: ${useLegacy ? layout.errLogFile : `${runtimeLogDirectory(home)}/error-*.log`}`
-        : `No log files yet under ${useLegacy ? layout.logsDir : runtimeLogDirectory(home)} (enable logging-to-file in config.yaml)`,
+        : `No log files yet under ${useLegacy ? layout.logsDir : runtimeLogDirectory(home)} (configure native logging in CLIProxyAPI)`,
     );
   }
   if (opts.follow) {

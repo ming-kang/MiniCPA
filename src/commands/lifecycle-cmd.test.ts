@@ -23,6 +23,7 @@ const originalLocalAppData = process.env.LOCALAPPDATA;
 const originalXdgDataHome = process.env.XDG_DATA_HOME;
 const originalHome = process.env.HOME;
 const originalCpaHome = process.env.CPA_HOME;
+const originalApiUrl = process.env.MINICPA_API_URL;
 const originalExitCode = process.exitCode;
 const temps: string[] = [];
 
@@ -34,16 +35,16 @@ function useTempRoot(): string {
   process.env.XDG_DATA_HOME = base;
   process.env.HOME = base;
   delete process.env.CPA_HOME;
+  process.env.MINICPA_API_URL = "http://127.0.0.1:1";
   return base;
 }
 
-/** Create the instance home with a config.yaml pointing at `baseUrl`'s port. */
-function writeHomeForBase(baseUrl: string, tls = false): string {
+/** Prepare an opaque native config and an explicit MiniCPA connection target. */
+function writeHomeForBase(baseUrl: string): string {
   const home = resolveCpaHome();
   ensureDir(home);
-  const port = new URL(baseUrl).port;
-  const tlsYaml = tls ? "\ntls:\n  enable: true\n" : "";
-  fs.writeFileSync(cpaLayout(home).configFile, `host: "127.0.0.1"\nport: ${port}${tlsYaml}\n`);
+  process.env.MINICPA_API_URL = baseUrl;
+  fs.writeFileSync(cpaLayout(home).configFile, "opaque native configuration\n");
   return home;
 }
 
@@ -81,6 +82,8 @@ afterEach(() => {
   else process.env.HOME = originalHome;
   if (originalCpaHome === undefined) delete process.env.CPA_HOME;
   else process.env.CPA_HOME = originalCpaHome;
+  if (originalApiUrl === undefined) delete process.env.MINICPA_API_URL;
+  else process.env.MINICPA_API_URL = originalApiUrl;
   process.exitCode = originalExitCode;
 });
 
@@ -144,8 +147,8 @@ describe("runStart", () => {
   });
 });
 
-describe("command config snapshots", () => {
-  it("shares one read between warnings, startup and endpoint reporting", async () => {
+describe("configuration ownership", () => {
+  it("does not read configuration for startup, warnings or endpoint reporting", async () => {
     useTempRoot();
     await withHttpFixture(
       {
@@ -169,12 +172,12 @@ describe("command config snapshots", () => {
         };
         try {
           await captureConsole(() => runStart({ noWait: true }));
-          assert.equal(reads, 1);
+          assert.equal(reads, 0);
           reads = 0;
           await captureConsole(() =>
             runStatus("0.4.3", { inspectAutostartState: async () => "off" }),
           );
-          assert.equal(reads, 1);
+          assert.equal(reads, 0);
         } finally {
           fs.openSync = originalOpen;
         }
@@ -257,16 +260,32 @@ describe("runOpen", () => {
     );
   });
 
-  it("reports a control panel disabled in config without probing the server", async () => {
+  it("opens an available native panel without interpreting the config file", async () => {
     useTempRoot();
-    const home = resolveCpaHome();
-    ensureDir(home);
-    fs.writeFileSync(
-      cpaLayout(home).configFile,
-      "host: 127.0.0.1\nport: 8317\nremote-management:\n  disable-control-panel: true\n",
+    await withHttpFixture(
+      {
+        "/management.html": (_req, res) => {
+          res.end("panel");
+        },
+      },
+      async (baseUrl) => {
+        const home = writeHomeForBase(baseUrl);
+        const originalRead = fs.readFileSync;
+        fs.readFileSync = ((file: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+          assert.notEqual(String(file), cpaLayout(home).configFile);
+          return (originalRead as (...args: unknown[]) => unknown)(file, ...args);
+        }) as typeof fs.readFileSync;
+        try {
+          await runOpen({
+            openInBrowser: async (url) => {
+              assert.equal(url, `${baseUrl}/management.html`);
+            },
+          });
+        } finally {
+          fs.readFileSync = originalRead;
+        }
+      },
     );
-
-    await assert.rejects(() => runOpen(), /remote-management\.disable-control-panel/);
   });
 
   it("tells the user to start CPA when nothing answers", async () => {
@@ -327,7 +346,7 @@ describe("runOpen", () => {
     );
   });
 
-  it("opens HTTPS panel URL when tls is enabled", async () => {
+  it("opens an explicitly configured HTTPS panel URL", async () => {
     useTempRoot();
     await withHttpsFixture(
       {
@@ -337,7 +356,7 @@ describe("runOpen", () => {
         },
       },
       async (baseUrl) => {
-        writeHomeForBase(baseUrl, true);
+        writeHomeForBase(baseUrl);
         const launched: string[] = [];
         await runOpen({
           openInBrowser: async (url) => {
@@ -457,7 +476,7 @@ describe("runStatus", () => {
     }
   });
 
-  it("reports HTTPS URLs and HTTP ok when running with TLS enabled", async () => {
+  it("reports explicit HTTPS URLs and readiness without inspecting TLS settings", async () => {
     useTempRoot();
     await withHttpsFixture(
       {
@@ -467,7 +486,7 @@ describe("runStatus", () => {
         },
       },
       async (baseUrl) => {
-        const home = writeHomeForBase(baseUrl, true);
+        const home = writeHomeForBase(baseUrl);
         writePidRecord(home, {
           pid: process.pid,
           exe: process.execPath,

@@ -1,65 +1,24 @@
 import { Agent, fetch as undiciFetch } from "undici";
-import { getListenAddress, isTlsEnabled, readCpaConfig, type CpaConfig } from "../config-yaml.js";
-import { cpaLayout } from "../paths.js";
+import { apiBaseUrl } from "../api-url.js";
 import { sleep } from "../util.js";
 
-/** Path of the remote-management panel, relative to the CPA HTTP base. */
+export { apiBaseUrl };
+
+/** Public panel route; no knowledge of CLIProxyAPI's configuration schema. */
 const PANEL_PATH = "/management.html";
-
-/** Longest a single probe request may wait, before the caller's deadline clamps it. */
 const PROBE_REQUEST_TIMEOUT_MS = 2000;
-
-/** Pause between probe passes, before the caller's deadline clamps it. */
 const PROBE_PASS_INTERVAL_MS = 300;
 
 /**
- * Direct dispatcher for loopback readiness probes: a plain undici Agent never
- * consults HTTP_PROXY/HTTPS_PROXY, unlike global fetch, which Node routes
- * through the environment proxy (including loopback) under NODE_USE_ENV_PROXY
- * or --use-env-proxy. Deliberately not httpFetch from ../http.js — that one
- * applies the proxy agent and retries, which is wrong for a local probe.
- *
- * Disables certificate verification strictly for local readiness probes so
- * self-signed certificates on loopback CPA HTTPS endpoints are accepted.
+ * Direct CPA readiness probes bypass environment proxies. The isolated
+ * dispatcher accepts self-signed CPA certificates; download clients retain
+ * normal certificate verification.
  */
 const loopbackDispatcher = new Agent({
   connect: {
     rejectUnauthorized: false,
   },
 });
-
-export function isWildcardListenHost(host: string): boolean {
-  const lower = host.trim().toLowerCase();
-  return (
-    lower === "0.0.0.0" ||
-    lower === "::" ||
-    lower === "[::]" ||
-    lower === "::0" ||
-    lower === "[::0]"
-  );
-}
-
-/**
- * Map wildcard listen addresses to a loopback host for local HTTP probes.
- * Concrete IPv6 literals are returned with brackets for URL use.
- */
-export function normalizeListenHost(host: string): string {
-  const trimmed = host.trim();
-  if (isWildcardListenHost(trimmed)) {
-    return "127.0.0.1";
-  }
-  // IPv6 literal without brackets → bracket for URL host part
-  if (trimmed.includes(":") && !trimmed.startsWith("[")) {
-    return `[${trimmed}]`;
-  }
-  return trimmed;
-}
-
-function formatHttpBase(host: string, port: number, tls = false): string {
-  const scheme = tls ? "https" : "http";
-  const normalizedHost = normalizeListenHost(host);
-  return `${scheme}://${normalizedHost}:${port}`;
-}
 
 function isReadyStatus(status: number): boolean {
   return (status >= 200 && status < 300) || status === 304 || status === 401 || status === 403;
@@ -73,11 +32,7 @@ export async function waitForAnyHttpOk(urls: string[], timeoutMs = 8000): Promis
   return (await waitForFirstHttpOk(urls, timeoutMs)) !== undefined;
 }
 
-/**
- * Probe several URLs until one returns a "server up" status and return that URL.
- * Never runs past `timeoutMs`: every request timeout and inter-pass sleep is
- * clamped to the remaining budget, so N URLs cannot multiply the caller's wait.
- */
+/** Probe endpoints under one total deadline, never reading response bodies. */
 export async function waitForFirstHttpOk(
   urls: string[],
   timeoutMs = 8000,
@@ -95,11 +50,8 @@ export async function waitForFirstHttpOk(
           signal: AbortSignal.timeout(Math.max(1, Math.min(PROBE_REQUEST_TIMEOUT_MS, budget))),
           dispatcher: loopbackDispatcher,
         });
-        // Release the socket back to the dispatcher; a probe never reads a body.
         await res.body?.cancel().catch(() => {});
-        if (isReadyStatus(res.status)) {
-          return url;
-        }
+        if (isReadyStatus(res.status)) return url;
       } catch {
         /* try next URL */
       }
@@ -111,36 +63,12 @@ export async function waitForFirstHttpOk(
   return undefined;
 }
 
-/** Single source of truth for the configured CPA HTTP/HTTPS base (one config read). */
-function resolveBase(home: string, config?: CpaConfig): string {
-  const cfg = config ?? readCpaConfig(cpaLayout(home).configFile);
-  const { host, port } = getListenAddress(cfg);
-  return formatHttpBase(host, port, isTlsEnabled(cfg));
+export function managementUrl(): string {
+  return `${apiBaseUrl()}${PANEL_PATH}`;
 }
 
-export function managementUrl(home: string, config?: CpaConfig): string {
-  return `${resolveBase(home, config)}${PANEL_PATH}`;
-}
-
-export function apiBaseUrl(home: string, config?: CpaConfig): string {
-  return resolveBase(home, config);
-}
-
-/** Prefer the API root; callers reuse their command's single config snapshot. */
-export function readinessUrls(home: string, config?: CpaConfig): string[] {
-  const cfg = config ?? readCpaConfig(cpaLayout(home).configFile);
-  const { host, port } = getListenAddress(cfg);
-  const tls = isTlsEnabled(cfg);
-  const primaryBase = formatHttpBase(host, port, tls);
-  const rootUrls = [`${primaryBase}/`];
-  const panelUrls = [`${primaryBase}${PANEL_PATH}`];
-
-  if (isWildcardListenHost(host)) {
-    const scheme = tls ? "https" : "http";
-    const ipv6Base = `${scheme}://[::1]:${port}`;
-    rootUrls.push(`${ipv6Base}/`);
-    panelUrls.push(`${ipv6Base}${PANEL_PATH}`);
-  }
-
-  return [...new Set([...rootUrls, ...panelUrls])];
+/** Prefer the API root without loading or validating CLIProxyAPI's config. */
+export function readinessUrls(): string[] {
+  const base = apiBaseUrl();
+  return [`${base}/`, `${base}${PANEL_PATH}`];
 }

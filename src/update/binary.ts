@@ -16,7 +16,6 @@ import { extractArchive } from "./archive.js";
 import {
   defaultBinaryUpdateDeps,
   installBinaryPhase,
-  type BinaryCommitHook,
   type BinaryUpdateDeps,
 } from "./binary-install.js";
 import { fetchChecksums } from "./checksum.js";
@@ -37,11 +36,7 @@ export {
   findSafeExtractedExecutable,
   isUnsafeArchiveEntryName,
 } from "./archive.js";
-export {
-  installBinaryPhase,
-  type BinaryCommitHook,
-  type BinaryUpdateDeps,
-} from "./binary-install.js";
+export { installBinaryPhase, type BinaryUpdateDeps } from "./binary-install.js";
 export { BinaryUpdateError } from "./binary-error.js";
 
 const MAX_BINARY_ARCHIVE_BYTES = 512 * 1024 * 1024;
@@ -136,7 +131,6 @@ export async function updateBinary(
     insecure?: boolean;
     reporter?: UpdateReporter;
     deps?: BinaryUpdateDeps & Partial<BinaryPrepareDeps>;
-    beforeInstall?: BinaryCommitHook;
   },
 ): Promise<BinaryUpdateResult> {
   const reporter = options?.reporter ?? silentUpdateReporter;
@@ -167,7 +161,6 @@ export async function updateBinary(
       const skipped = await withMiniCpaLock("update", async () => {
         const current = await deps.readCurrentRuntimeVersion(home);
         if (current !== version) return undefined;
-        options?.beforeInstall?.();
         return { version, previousVersion: current, skipped: true, restarted: false };
       });
       if (skipped) return skipped;
@@ -204,7 +197,6 @@ export async function updateBinary(
         const wasRunning = !!(await deps.resolveRunning(home));
         const currentVersion = await deps.readCurrentRuntimeVersion(home);
         if (maySkip && currentVersion === version) {
-          options?.beforeInstall?.();
           return { version, previousVersion: currentVersion, skipped: true, restarted: false };
         }
         const { restarted } = await installBinaryPhase(
@@ -215,7 +207,6 @@ export async function updateBinary(
             wasRunning,
             currentVersion,
             transaction,
-            beforeInstall: options?.beforeInstall,
           },
           deps,
           reporter,
