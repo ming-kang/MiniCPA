@@ -13,44 +13,37 @@ The npm package uses this one-time configuration:
 - Allowed action: `npm publish`
 - Environment: empty
 
-The workflow is manually dispatched from `main`, verifies the source and packed package, then publishes with provenance.
-
 ## Release checklist
 
-1. Update `package.json` and `package-lock.json` together:
+1. Describe the release under `## [Unreleased]` in `CHANGELOG.md`, then prepare it:
 
    ```bash
-   npm version x.y.z --no-git-tag-version
+   npm run release:prepare -- x.y.z
    ```
 
-2. Move the release notes out of `## [Unreleased]` into `## [x.y.z] - YYYY-MM-DD`.
-3. Run the normal checks:
+   This bumps `package.json` and `package-lock.json` together and moves the Unreleased notes under `## [x.y.z] - YYYY-MM-DD`. It refuses an empty Unreleased section or a version that is not newer.
+
+2. Review the notes, commit `chore(release): x.y.z` (the pre-commit hook runs `npm run check`), and push to `main`.
+3. Dispatch **Publish npm** from `main` with the same version:
 
    ```bash
-   npm ci
-   npm run audit:prod
-   npm run check
-   npm run verify:package
+   gh workflow run publish.yml --ref main -f version=x.y.z
    ```
 
-4. Commit and push the release change to `main`, then wait for CI to pass.
-5. Dispatch **Publish npm** from `main` with the same version. After it succeeds, record the run's head commit as `RELEASE_SHA`.
-6. Verify the published package:
+The workflow finishes the release on the dispatched commit:
 
-   ```bash
-   npm view @astralyn/minicpa version dist-tags --json
-   npx --yes @astralyn/minicpa@x.y.z --version
-   ```
+| Job | Permissions | Does |
+|-----|-------------|------|
+| Verify release request | `contents: read` | Requires `main`, matching package versions and CHANGELOG notes, and a version and tag that do not exist yet |
+| CI | `contents: read` | Runs `ci.yml` (check, package smoke test, production audit) on Ubuntu, Windows and macOS |
+| Publish | `contents: read`, `id-token: write` | Builds, packs, smoke-tests and publishes the tarball with provenance |
+| Verify npm registry | none | Waits until the version is installable and `npx @astralyn/minicpa@x.y.z --version` matches |
+| Tag and create GitHub Release | `contents: write` | Tags `vx.y.z` (annotated) at the published commit and creates the Release from the CHANGELOG section |
 
-   The npm package page should show provenance from `.github/workflows/publish.yml` at `RELEASE_SHA`.
-
-7. Tag that exact commit, not a potentially newer `main`, then create the matching GitHub Release:
-
-   ```bash
-   git tag -a "vX.Y.Z" "$RELEASE_SHA" -m "release: X.Y.Z"
-   git push origin "vX.Y.Z"
-   ```
+Edit the GitHub Release afterwards if it needs highlights beyond the CHANGELOG notes.
 
 ## Failed publication
 
-First check `npm view @astralyn/minicpa@x.y.z version`. If the version does not exist, fix the release commit and dispatch the workflow again. If it exists, npm has already accepted the immutable package; do not unpublish or try to overwrite it. Verify it and, if it is defective, deprecate it and prepare the next patch version.
+- **Before Publish** (request, CI, build, or smoke test): nothing reached npm. Fix the problem on `main` and dispatch again.
+- **After Publish** (registry wait, tag, or Release): npm already holds the immutable package. Use **Re-run failed jobs** on the same run; those jobs reuse an existing tag at the published commit and skip an existing Release. Never dispatch the same version again, and do not unpublish.
+- **Defective package**: check `npm view @astralyn/minicpa@x.y.z version`. If it exists, deprecate it and release the next patch version.

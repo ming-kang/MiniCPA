@@ -26,6 +26,7 @@
     "verify:package": "node scripts/verify-package.mjs",
     "verify:package-install": "node scripts/verify-package-install.mjs",
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
+    "release:prepare": "node scripts/release.mjs prepare",
     "prepublishOnly": "npm run audit:prod && npm run check"
   },
   "engines": {

@@ -8,19 +8,71 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: read
-  id-token: write
+# Jobs request their own permissions; only `release`, which runs no npm code, can write.
+permissions: {}
 
 concurrency:
   group: publish-npm
   cancel-in-progress: false
 
+env:
+  RELEASE_VERSION: ${{ inputs.version }}
+
 jobs:
+  request:
+    name: Verify release request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Verify version, lockfile and changelog
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Releases must run from main."
+            exit 1
+          fi
+          node scripts/release.mjs verify "$RELEASE_VERSION"
+
+      - name: Verify the version is unreleased
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          published=$(npm view "@astralyn/minicpa@$RELEASE_VERSION" version --prefer-online 2>/dev/null || true)
+          if [ -n "$published" ]; then
+            echo "::error::@astralyn/minicpa@$RELEASE_VERSION is already on npm."
+            exit 1
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$RELEASE_VERSION" --silent 2>/dev/null; then
+            echo "::error::Tag v$RELEASE_VERSION already exists."
+            exit 1
+          fi
+
+  ci:
+    name: CI
+    needs: request
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
   publish:
     name: Publish @astralyn/minicpa
+    needs: ci
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -33,52 +85,18 @@ jobs:
           node-version: 24
           cache: npm
 
-      - name: Verify release request
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
-        run: |
-          node --input-type=module <<'NODE'
-          import { readFileSync } from "node:fs";
-
-          const version = process.env.RELEASE_VERSION;
-          if (process.env.GITHUB_REF !== "refs/heads/main") {
-            throw new Error("Releases must run from main.");
-          }
-          if (!version || !/^\d+\.\d+\.\d+$/.test(version)) {
-            throw new Error(`Expected a stable version, got ${version ?? "nothing"}.`);
-          }
-
-          const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-          const packageLock = JSON.parse(readFileSync("package-lock.json", "utf8"));
-          if (
-            packageJson.version !== version ||
-            packageLock.version !== version ||
-            packageLock.packages?.[""]?.version !== version
-          ) {
-            throw new Error("The workflow input, package.json, and package-lock.json must match.");
-          }
-
-          const changelog = readFileSync("CHANGELOG.md", "utf8");
-          if (!changelog.includes(`## [${version}] - `)) {
-            throw new Error(`CHANGELOG.md has no release heading for ${version}.`);
-          }
-          NODE
-
       - name: Install npm
         run: npm install --global npm@11.15.0 --ignore-scripts
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
-      - name: Verify source
-        run: |
-          npm run audit:prod
-          npm run check
+      # The CI job has already linted, tested, audited and smoke-tested this commit on every OS.
+      - name: Build
+        run: npm run build
 
       - name: Pack package
         id: pack
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           package_dir="$RUNNER_TEMP/minicpa-package"
           mkdir "$package_dir"
@@ -90,10 +108,78 @@ jobs:
       - name: Verify package installation
         env:
           PACKED_TARBALL: ${{ steps.pack.outputs.tarball }}
-          RELEASE_VERSION: ${{ inputs.version }}
         run: npm run verify:package-install -- "$PACKED_TARBALL" "$RELEASE_VERSION"
 
       - name: Publish package
         env:
           PACKED_TARBALL: ${{ steps.pack.outputs.tarball }}
         run: npm publish "$PACKED_TARBALL" --access public --provenance --registry=https://registry.npmjs.org
+
+  registry:
+    name: Verify npm registry
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: {}
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Wait for the published version
+        run: |
+          # npm needs a few minutes before a new version is visible to installs.
+          for attempt in $(seq 1 40); do
+            if [ "$(npm view "@astralyn/minicpa@$RELEASE_VERSION" version --prefer-online 2>/dev/null)" = "$RELEASE_VERSION" ]; then
+              break
+            fi
+            if [ "$attempt" -eq 40 ]; then
+              echo "::error::@astralyn/minicpa@$RELEASE_VERSION is still not visible on npm."
+              exit 1
+            fi
+            sleep 15
+          done
+          installed=$(npx --yes "@astralyn/minicpa@$RELEASE_VERSION" --version)
+          if [ "$installed" != "$RELEASE_VERSION" ]; then
+            echo "::error::npx ran $installed instead of $RELEASE_VERSION."
+            exit 1
+          fi
+
+  release:
+    name: Tag and create GitHub Release
+    needs: registry
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Tag the published commit and create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v$RELEASE_VERSION"
+          notes="$RUNNER_TEMP/release-notes.md"
+          node scripts/release.mjs notes "$RELEASE_VERSION" > "$notes"
+          # Idempotent, so "Re-run failed jobs" can finish a release after npm accepted the package.
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --silent 2>/dev/null; then
+            tagged=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
+            if [ "$tagged" != "$GITHUB_SHA" ]; then
+              echo "::error::$tag already points to $tagged, not the published $GITHUB_SHA."
+              exit 1
+            fi
+          else
+            object=$(gh api "repos/$GITHUB_REPOSITORY/git/tags" \
+              -f tag="$tag" -f message="release: $RELEASE_VERSION" \
+              -f object="$GITHUB_SHA" -f type=commit --jq .sha)
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$object" --silent
+          fi
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "$tag" --notes-file "$notes"
+          fi

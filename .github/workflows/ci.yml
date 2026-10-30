@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # publish.yml runs the full matrix on the exact commit it publishes.
+  workflow_call:
 
 permissions:
   contents: read

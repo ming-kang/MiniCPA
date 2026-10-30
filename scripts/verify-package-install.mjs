@@ -267,58 +267,11 @@ try {
     throw new Error(`npm did not create the platform cpa shim at ${executableBinPath}.`);
   }
 
-  for (const flag of ["-v", "--version"]) {
-    const cliVersion = runCli(executableBinPath, [flag], smokeEnvironment).trim();
-    assertEqual(cliVersion, expectedVersion, `cpa ${flag} output`);
-  }
-
-  const rootHelp = runCli(executableBinPath, ["--help"], smokeEnvironment);
-  const bareHelp = runCli(executableBinPath, [], smokeEnvironment);
-  assertEqual(bareHelp, rootHelp, "bare cpa help output");
-  for (const command of [
-    "init",
-    "start",
-    "stop",
-    "restart",
-    "status",
-    "auto",
-    "web",
-    "tui",
-    "logs",
-    "update",
-    "upgrade",
-  ]) {
-    if (!new RegExp(`^\\s*${command}(?:\\s|$)`, "m").test(rootHelp)) {
-      throw new Error(`cpa --help must list the ${command} command.`);
-    }
-  }
-  for (const removed of ["open", "clean", "root", "temp", "doctor", "version", "home"]) {
-    if (new RegExp(`^\\s*${removed}(?:\\s|$)`, "m").test(rootHelp)) {
-      throw new Error(`cpa --help must not list the removed ${removed} command.`);
-    }
-  }
-  if (!/-v, --version/.test(rootHelp)) {
-    throw new Error("cpa --help must show the MiniCPA version flags.");
-  }
-
-  const autoHelp = runCli(executableBinPath, ["auto", "--help"], smokeEnvironment);
-  if (!/Usage:\s+cpa auto\s+\[options\]\s+\[mode\]/.test(autoHelp)) {
-    throw new Error("cpa auto --help did not show the explicit on/off mode.");
-  }
-
-  const webHelp = runCli(executableBinPath, ["web", "--help"], smokeEnvironment);
-  if (!/Usage:\s+cpa web\b/.test(webHelp)) {
-    throw new Error("cpa web --help did not show help for the web command.");
-  }
-
-  const updateHelp = runCli(executableBinPath, ["update", "--help"], smokeEnvironment);
-  if (/^\s*--(?:all|binary|panel)(?:\s|$)/m.test(updateHelp)) {
-    throw new Error("cpa update --help must not list the removed update scope options.");
-  }
-
-  const upgradeHelp = runCli(executableBinPath, ["upgrade", "--help"], smokeEnvironment);
-  if (!/Usage:\s+cpa upgrade\b/.test(upgradeHelp)) {
-    throw new Error("cpa upgrade --help did not show help for the upgrade command.");
+  // The command surface is covered by src/cli.test.ts; this only proves the shim runs the package.
+  const cliVersion = runCli(executableBinPath, ["--version"], smokeEnvironment).trim();
+  assertEqual(cliVersion, expectedVersion, "cpa --version output");
+  if (!/^Usage: cpa\b/m.test(runCli(executableBinPath, ["--help"], smokeEnvironment))) {
+    throw new Error("cpa --help did not print the CLI usage.");
   }
 
   console.log(
