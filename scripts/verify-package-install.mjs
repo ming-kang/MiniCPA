@@ -212,7 +212,11 @@ try {
     "dist/commands/upgrade-cmd.js",
     "dist/update/minicpa-release.js",
     "dist/update/self-upgrade.js",
-    "docs/cpa-reference.md",
+    "docs/README.md",
+    "docs/concurrency.md",
+    "docs/update-pipeline.md",
+    "docs/process-lifecycle.md",
+    "docs/security.md",
   ]) {
     assertFile(relativePath);
   }

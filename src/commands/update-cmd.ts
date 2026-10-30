@@ -4,7 +4,6 @@ import { createContext, printHome } from "../context.js";
 import { checkBinaryUpdate, updateBinary, type BinaryUpdateResult } from "../update/binary.js";
 import { consoleUpdateReporter } from "../update/reporter.js";
 
-/** Exit rule documented for `cpa update check`: 0 only when the binary is current. */
 export function updateCheckExitCode(result: {
   binaryUpToDate: boolean;
   binaryError: boolean;
@@ -18,7 +17,6 @@ export type UpdateCheckDeps = {
 
 const realUpdateCheckDeps: UpdateCheckDeps = { checkBinaryUpdate };
 
-/** Column width for the component label in `cpa update check` output. */
 const CHECK_LABEL_WIDTH = 13;
 
 function checkLabel(name: string): string {
@@ -92,15 +90,12 @@ export type UpdateDeps = {
 
 export type UpdateOptions = {
   version?: string;
-  /** Re-download even if already latest. */
   force?: boolean;
-  /** Skip binary checksum verification (unsafe). */
   insecure?: boolean;
 };
 
 const realUpdateDeps: UpdateDeps = { updateBinary };
 
-/** The updater owns its preparation lease and short lifecycle-locked commit. */
 export async function performUpdate(
   home: string,
   opts: UpdateOptions,

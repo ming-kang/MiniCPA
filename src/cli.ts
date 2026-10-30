@@ -175,8 +175,6 @@ updateCmd
   );
 
 updateCmd
-  // Keep old scope spellings parseable for scripts. They are hidden because
-  // these options only select the binary portion of the update.
   .addOption(
     new Option("--all", "Compatibility alias for a binary update")
       .hideHelp()
@@ -330,7 +328,6 @@ const rootCommandGroups = [
   { title: "Information", commands: ["version", "home"] },
 ] as const;
 
-/** Keep the root command list concise while retaining Commander's normal help elsewhere. */
 function formatRootHelp(cmd: Command, helper: Help): string {
   const termWidth = helper.padWidth(cmd, helper);
   const formatOption = (option: Option): string => {
@@ -377,8 +374,6 @@ function formatRootHelp(cmd: Command, helper: Help): string {
   return output.join("\n");
 }
 
-// Configure only the root after creating the children, so command-specific help keeps
-// Commander's standard renderer.
 program
   .configureHelp({ formatHelp: formatRootHelp })
   // With a root action Commander treats a bare operand as an excess argument. Accept it
@@ -405,7 +400,6 @@ try {
   // Commander exitOverride throws on --help / unknown commands / version.
   const e = err as { code?: string; message?: string; exitCode?: number };
   if (e.code === "commander.helpDisplayed" || e.code === "commander.version") {
-    // Explicit `--help` / `--version` always succeed.
     process.exitCode = 0;
   } else if (e.code === "commander.help") {
     // Commander reuses this code for both `cpa help <known-cmd>` (exitCode 0) and the

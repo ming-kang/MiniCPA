@@ -22,18 +22,9 @@ export type RunningInfo = {
   pid: number;
   exe: string;
   startedAt?: string;
-  /** True when PID is alive but identity probe failed (kept for safety). */
   identityUnknown?: boolean;
 };
 
-/**
- * Shared implementation behind resolveRunning and inspectRunning.
- *
- * With `repair` the instance home is healed as a side effect (stale pid records
- * are deleted and an interrupted transaction's `.bak` binary is restored);
- * without it nothing on disk is touched, so unlocked read-only commands cannot
- * race a lock-holding `cpa update` over the binary it is replacing.
- */
 async function evaluateRunning(home: string, repair: boolean): Promise<RunningInfo | undefined> {
   const record = readPidRecord(home);
   if (!record) return undefined;
@@ -61,12 +52,7 @@ async function evaluateRunning(home: string, repair: boolean): Promise<RunningIn
     return undefined;
   }
 
-  // A matching spawn-time start marker (boot id + start ticks, or matching tagged
-  // Darwin instant) is PID-reuse-proof, so it alone verifies ownership when the
-  // executable probe is inconclusive.
-  // Incomparable markers (such as a legacy untagged Darwin marker vs. a tagged UTC
-  // instant) cannot prove identity, so when the executable probe is unknown we fail
-  // closed to prevent terminating an unverified PID.
+  // Verified spawn-time start marker proves ownership even if exe probe is inconclusive.
   const markerDegraded = !!record.startMarker && !currentMarker;
   const identityUnknown = identity === "unknown" ? marker !== "same" : markerDegraded;
 
@@ -78,12 +64,10 @@ async function evaluateRunning(home: string, repair: boolean): Promise<RunningIn
   };
 }
 
-/** Repairing lookup for commands that hold the MiniCPA lock. */
 export async function resolveRunning(home: string): Promise<RunningInfo | undefined> {
   return evaluateRunning(home, true);
 }
 
-/** Read-only lookup for unlocked commands; never mutates the instance home. */
 export async function inspectRunning(home: string): Promise<RunningInfo | undefined> {
   return evaluateRunning(home, false);
 }
@@ -92,7 +76,6 @@ function logPathsHint(home: string): string {
   return `Check logs:\n  ${runtimeLogFile(home)}\n  ${cpaLayout(home).minicpaLogFile}`;
 }
 
-/** Resolves true when taskkill reported success (exit code 0). */
 async function runTaskkill(pid: number, force: boolean): Promise<boolean> {
   const args = force ? ["/PID", String(pid), "/T", "/F"] : ["/PID", String(pid), "/T"];
   return new Promise<boolean>((resolve) => {
@@ -105,7 +88,6 @@ async function runTaskkill(pid: number, force: boolean): Promise<boolean> {
   });
 }
 
-/** Send one platform-specific termination request; false means the graceful request failed. */
 async function signalProcess(pid: number, force: boolean): Promise<boolean> {
   if (process.platform === "win32") return runTaskkill(pid, force);
   try {
@@ -126,16 +108,14 @@ async function waitForProcessExit(
   while (Date.now() < deadline && isProcessAlive(pid)) await sleep(intervalMs);
 }
 
-/** Best-effort termination of a child MiniCPA can no longer keep track of. */
 async function killUntrackedChild(pid: number): Promise<void> {
   try {
     await signalProcess(pid, true);
   } catch {
-    /* the caller is already failing; report the original cause */
+    /* best-effort cleanup */
   }
 }
 
-/** Re-check immediately before a destructive signal to avoid PID-reuse kills. */
 async function assertSafeToStop(home: string, pid: number): Promise<void> {
   const current = await resolveRunning(home);
   if (!current || current.pid !== pid || current.identityUnknown) {
@@ -147,9 +127,7 @@ async function assertSafeToStop(home: string, pid: number): Promise<void> {
 }
 
 export type StartOptions = {
-  /** Skip waiting for HTTP ready (default false). */
   noWait?: boolean;
-  /** Max ms to wait for HTTP (default 15000). */
   readyTimeoutMs?: number;
 };
 
@@ -177,8 +155,6 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
   }
 
   const exe = resolveRunnableExecutable(home);
-  // CPA owns continuous log rotation. A detached child must not keep growing
-  // another pair of stdout/stderr files after the MiniCPA command has exited.
   const child = spawn(exe, ["-config", layout.configFile], {
     cwd: home,
     detached: true,
@@ -202,9 +178,7 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
   try {
     writePidRecord(home, { pid: child.pid, exe, startedAt, startMarker });
   } catch (err) {
-    // A live CPA with no PID record is invisible to `cpa status` and `cpa stop`,
-    // and the next `cpa start` would launch a second instance that dies on the
-    // port bind. Take the detached child down before surfacing the failure.
+    // Terminate untracked child immediately so it cannot become a leaked daemon without a PID file.
     await killUntrackedChild(child.pid);
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(
@@ -236,7 +210,6 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
           `CLIProxyAPI exited before becoming ready.${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
         );
       }
-      // Leave process running for diagnostics; do not clear PID.
       throw new Error(
         `CLIProxyAPI started (PID=${child.pid}) but was not ready within ${readyMs}ms. Try: cpa restart${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
       );
@@ -261,10 +234,8 @@ export async function stopDaemon(home: string): Promise<boolean> {
     );
   }
 
-  // Verify ownership immediately before sending any signal (graceful or force).
   await assertSafeToStop(home, pid);
 
-  // A failed graceful taskkill cannot signal a windowless child; skip its grace wait.
   if (await signalProcess(pid, false)) {
     await waitForProcessExit(pid, STOP_GRACE_MS, 200);
   }
@@ -280,7 +251,6 @@ export async function stopDaemon(home: string): Promise<boolean> {
     );
   }
 
-  // Stop finishes when the process is dead; updates handle their actual rename failures.
   clearPid(home);
   return true;
 }

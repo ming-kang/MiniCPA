@@ -84,7 +84,6 @@ function errorCode(error: unknown): string | undefined {
   return typeof error.code === "string" ? error.code : undefined;
 }
 
-/** Execute one safe npm operation and verify the exact release in a proven global install. */
 export async function executeMinicpaUpgrade(
   detection: SupportedNpmGlobalInstall,
   version: string,

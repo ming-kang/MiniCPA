@@ -1,4 +1,3 @@
-/** True if a process with this PID exists (including when signal is not permitted). */
 export function isProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -6,7 +5,7 @@ export function isProcessAlive(pid: number): boolean {
     return true;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    // Process exists but we cannot signal it (different user / protected).
+    // EPERM means process exists but we lack permission to signal it.
     if (code === "EPERM") return true;
     return false;
   }

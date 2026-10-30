@@ -71,7 +71,6 @@ export type MiniCpaLockStatus = { path: string } & (
     }
 );
 
-/** Read diagnostic metadata only; a record does not prove the kernel lease is held. */
 export function inspectMiniCpaLock(scope: "lifecycle" | "update" = "lifecycle"): MiniCpaLockStatus {
   const lockPath = resolveLockPath(scope);
   try {
@@ -92,12 +91,10 @@ export function inspectMiniCpaLock(scope: "lifecycle" | "update" = "lifecycle"):
   }
 }
 
-/** Exclusive lifecycle/commit lease for the one managed CPA instance. */
 export function withMiniCpaLock<T>(command: string, fn: () => Promise<T>): Promise<T> {
   return withLock("lifecycle", command, fn);
 }
 
-/** Serialize update preparation and temp cleanup without blocking start/stop. */
 export function withMiniCpaUpdateLock<T>(command: string, fn: () => Promise<T>): Promise<T> {
   return withLock("update", command, fn);
 }

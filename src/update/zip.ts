@@ -4,7 +4,6 @@ import { Transform, type Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { open, type Entry, type ZipFile } from "yauzl";
 
-/** Select lazily so even an archive with many entries does not accumulate metadata. */
 function selectEntry(zip: ZipFile, name: string, maxPathDepth: number): Promise<Entry> {
   return new Promise((resolve, reject) => {
     zip.once("error", (error: Error) =>
@@ -23,7 +22,6 @@ function selectEntry(zip: ZipFile, name: string, maxPathDepth: number): Promise<
   });
 }
 
-/** Inflate only the selected executable, enforcing the limit before and during streaming. */
 export async function extractZipExecutable(
   archive: string,
   directory: string,
@@ -66,7 +64,6 @@ export async function extractZipExecutable(
         );
       },
     });
-    // Exclusive creation also refuses a pre-existing symlink in the destination.
     const fd = fs.openSync(destination, "wx", 0o600);
     outputCreated = true;
     await pipeline(stream, limit, fs.createWriteStream(destination, { fd }));
@@ -76,7 +73,7 @@ export async function extractZipExecutable(
       try {
         fs.unlinkSync(destination);
       } catch {
-        /* preserve extraction failure */
+        /* best-effort */
       }
     }
     throw error;

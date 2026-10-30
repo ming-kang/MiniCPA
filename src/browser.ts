@@ -2,14 +2,6 @@ import { spawn } from "node:child_process";
 
 export type OpenCommand = { command: string; args: string[] };
 
-/**
- * Platform launcher for a URL.
- *
- * `platform` is overridable for tests only; the per-platform dispatch is exactly
- * what `openInBrowser` uses. A missing launcher (no `xdg-open` on a headless
- * box) surfaces as a `spawn <command> ENOENT` error, which callers report
- * without failing the command — the URL itself is already useful output.
- */
 export function resolveOpenCommand(
   url: string,
   platform: NodeJS.Platform = process.platform,
@@ -28,7 +20,6 @@ export async function openInBrowser(url: string): Promise<void> {
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(command, args, { detached: true, stdio: "ignore" });
-    // Rejected as-is so the errno (`code === "ENOENT"`) survives for callers.
     child.once("error", reject);
     child.once("spawn", () => {
       child.unref();

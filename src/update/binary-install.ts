@@ -10,7 +10,6 @@ import { readInstallState, writeInstallState } from "../state.js";
 import { BinaryUpdateError } from "./binary-error.js";
 import { silentUpdateReporter, type UpdateReporter } from "./reporter.js";
 
-/** Process-lifecycle seam: failure tests never launch or stop real CPA processes. */
 export type BinaryUpdateDeps = {
   stopDaemon(home: string): Promise<boolean>;
   startDaemon(home: string, options?: StartOptions): Promise<RunningInfo>;
@@ -23,7 +22,6 @@ export const defaultBinaryUpdateDeps: BinaryUpdateDeps = {
   resolveRunning,
 };
 
-/** Install an already prepared transaction under the lifecycle lease; the caller owns discard. */
 export async function installBinaryPhase(
   home: string,
   args: {

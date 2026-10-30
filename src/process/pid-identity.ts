@@ -4,8 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 
 function basenameLower(filePath: string): string {
-  // Process metadata may contain a path from a different OS than the current
-  // one (for example Windows tasklist output checked on a POSIX runner).
   return path.posix.basename(filePath.replace(/\\/g, "/")).toLowerCase();
 }
 
@@ -13,18 +11,13 @@ function stripExeSuffix(name: string): string {
   return name.toLowerCase().replace(/\.exe$/, "");
 }
 
-/**
- * Match process image/comm against expected CPA executable basename.
- * Prefer exact basename equality; allow Linux 15-char comm truncation only
- * when the observed name is exactly 15 characters (kernel TASK_COMM_LEN-1).
- */
 export function imageMatchesExpectedExe(imageOrComm: string, expectedExe: string): boolean {
   const expected = stripExeSuffix(basenameLower(expectedExe));
   if (!expected) return false;
   const observed = stripExeSuffix(basenameLower(imageOrComm.trim()));
   if (!observed) return false;
   if (observed === expected) return true;
-  // Linux /proc/pid/comm is truncated to 15 characters — only then allow prefix.
+  // Linux /proc/pid/comm is truncated to 15 chars (TASK_COMM_LEN-1); allow prefix only then.
   if (observed.length === 15 && expected.startsWith(observed) && expected.length > 15) {
     return true;
   }
@@ -33,14 +26,7 @@ export function imageMatchesExpectedExe(imageOrComm: string, expectedExe: string
 
 export type ProcessIdentity = "match" | "mismatch" | "unknown";
 
-/**
- * Classify a Darwin `ps -o comm=` observation against the expected executable.
- *
- * BSD ps truncates its last output column, so a partial absolute path is a
- * routine observation and must never be read as evidence of a different
- * process: a strict prefix of the expected path resolves to "unknown", which is
- * fail-closed (no kill, no pid-file delete) rather than "mismatch".
- */
+// BSD ps truncates output columns to terminal width; a truncated path prefix must fail closed (unknown).
 export function classifyDarwinComm(commOutput: string, expectedExe: string): ProcessIdentity {
   const out = commOutput.trim();
   if (!out) return "mismatch";
@@ -51,11 +37,6 @@ export function classifyDarwinComm(commOutput: string, expectedExe: string): Pro
   return imageMatchesExpectedExe(out, expectedExe) ? "unknown" : "mismatch";
 }
 
-/**
- * Classify whether `pid` is definitively the managed CPA binary.
- * A basename-only signal is useful for detecting a mismatch, but never enough to
- * authorize termination: another MiniCPA or unrelated process can share that name.
- */
 export async function classifyProcessIdentity(
   pid: number,
   expectedExe: string,
@@ -70,7 +51,6 @@ export async function classifyProcessIdentity(
         return exePathsMatch(exeLink, expected) ? "match" : "mismatch";
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code;
-        // The process exited between the liveness and identity probes.
         return code === "ENOENT" ? "mismatch" : "unknown";
       }
     }
@@ -81,8 +61,7 @@ export async function classifyProcessIdentity(
     }
 
     if (process.platform === "darwin") {
-      // -ww sets termwidth to unlimited; without it BSD ps truncates the last
-      // column to the terminal width (79 columns when stdout is a pipe).
+      // -ww sets unlimited termwidth; without it BSD ps truncates to 79 cols in pipes.
       const result = await runCommand("ps", ["-ww", "-p", String(pid), "-o", "comm="], {
         timeoutMs: 3000,
       });
@@ -95,7 +74,6 @@ export async function classifyProcessIdentity(
   return "unknown";
 }
 
-/** Stable process-creation marker used to detect PID reuse. */
 export async function readProcessStartMarker(pid: number): Promise<string | undefined> {
   if (!Number.isInteger(pid) || pid <= 0) return undefined;
   try {
@@ -113,7 +91,7 @@ export async function readProcessStartMarker(pid: number): Promise<string | unde
       try {
         bootId = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() || bootId;
       } catch {
-        /* start ticks remain stable for this boot */
+        /* best-effort */
       }
       return `${bootId}:${startTicks}`;
     }
@@ -121,11 +99,7 @@ export async function readProcessStartMarker(pid: number): Promise<string | unde
       return (await readWindowsProcess(pid)).startMarker;
     }
     if (process.platform === "darwin") {
-      // `lstart` is rendered in the caller's timezone and LC_TIME locale, so the
-      // same live process yields different text from a cron job, a `sudo` shell
-      // or after a timezone change. Pin both, then convert the pinned text to a
-      // tagged absolute instant here, at read time, so the stored marker carries
-      // the timezone it was read in instead of leaving it to be guessed later.
+      // Pin TZ and LC_ALL: ps lstart formatting is locale and timezone sensitive.
       const result = await runCommand("ps", ["-ww", "-p", String(pid), "-o", "lstart="], {
         timeoutMs: 3_000,
         env: { TZ: "UTC", LC_ALL: "C", LC_TIME: "C" },
@@ -157,48 +131,17 @@ const C_LOCALE_MONTHS = [
 const LSTART_PATTERN =
   /^(?:[a-z]{3}\s+)?([a-z]{3})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})$/i;
 
-/**
- * Prefix of the self-identifying Darwin marker this build writes.
- *
- * MiniCPA <= 0.1.0 stored the raw `ps -o lstart=` text with no TZ/locale pin, so
- * a recorded marker from that era is always wall-clock text and can never begin
- * with this tag. That is what makes the two generations distinguishable.
- */
 const LSTART_UTC_TAG = "lstart-utc:";
-
-/** A marker already reduced to an absolute instant by this build. */
 const TAGGED_START_MARKER_PATTERN = /^lstart-utc:-?\d+$/;
 
-/** Collapse incidental whitespace so otherwise identical markers compare equal. */
 function collapseWhitespace(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
 
-/**
- * True when a marker carries this build's timezone-explicit tag.
- *
- * Tagged and untagged markers are NOT comparable: an untagged Darwin marker is
- * wall-clock text in an unknown timezone and unknown locale, so no comparison
- * against a tagged marker can prove anything.
- */
 export function isTaggedStartMarker(marker: string): boolean {
   return TAGGED_START_MARKER_PATTERN.test(marker.trim());
 }
 
-/**
- * Reduce a freshly read Darwin `lstart` rendering to `lstart-utc:<epoch seconds>`.
- *
- * The wall-clock text is interpreted as UTC, which is only correct because
- * `readProcessStartMarker` pins `TZ=UTC`/`LC_ALL=C` for the probe that produced
- * it. It is therefore a read-time conversion, NOT a repair for stored values:
- * applying it to a marker recorded by an older, unpinned build would silently
- * reinterpret local wall-clock text as UTC and shift the instant by the
- * machine's UTC offset. Cross-generation comparison is handled by
- * `compareStartMarkers`, which refuses to compare the two shapes at all.
- *
- * Every other marker shape (Linux `<boot id>:<ticks>`, Windows tick counts,
- * already-tagged values) is passed through with whitespace collapsed.
- */
 export function canonicalizeStartMarker(rawMarker: string): string {
   const collapsed = collapseWhitespace(rawMarker);
   const parts = LSTART_PATTERN.exec(collapsed);
@@ -217,7 +160,6 @@ export function canonicalizeStartMarker(rawMarker: string): string {
   return `${LSTART_UTC_TAG}${Math.floor(epochMs / 1000)}`;
 }
 
-/** Missing markers and tagged/legacy Darwin pairs cannot prove identity or reuse. */
 export function compareStartMarkers(
   recordedMarker?: string,
   currentMarker?: string,
@@ -230,7 +172,6 @@ export function compareStartMarkers(
   return recorded === current ? "same" : "reused";
 }
 
-/** True only when full paths resolve to the same executable. */
 export function exePathsMatch(observedPath: string, expectedPath: string): boolean {
   try {
     const normalize = (filePath: string): string => {
@@ -249,7 +190,6 @@ export function exePathsMatch(observedPath: string, expectedPath: string): boole
   }
 }
 
-/** Snapshot scope is one inspection; destructive callers must always take a fresh snapshot. */
 export async function inspectProcessIdentity(
   pid: number,
   expectedExe: string,

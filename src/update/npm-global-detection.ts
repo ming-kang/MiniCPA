@@ -105,7 +105,6 @@ function hasPathPart(filePath: string, part: string, platform: Platform): boolea
   }
 }
 
-/** Pure classification of layouts emitted by `npm root -g`. */
 export function classifyNpmGlobalRoot(globalRoot: string, platform: Platform): GlobalRootLayout {
   const api = pathApi(platform);
   if (!api.isAbsolute(globalRoot)) {
@@ -143,7 +142,6 @@ export function classifyNpmGlobalRoot(globalRoot: string, platform: Platform): G
   return { supported: true, prefix, globalRoot: resolvedRoot };
 }
 
-/** Infer the only direct npm-global layout that could contain this scoped package. */
 export function inferNpmGlobalRoot(packageRoot: string, platform: Platform): GlobalRootLayout {
   const api = pathApi(platform);
   const resolvedPackageRoot = api.resolve(packageRoot);
@@ -254,11 +252,6 @@ async function globalBinTargetsPackage(
   }
 }
 
-/**
- * Prove that packageRoot is a direct npm global installation. Ambiguous layouts are rejected.
- * This function never mutates the installation and only invokes `npm root -g`.
- * Callers that only need a stable launcher may skip the write-access checks.
- */
 export async function detectNpmGlobalInstall(
   packageRoot: string,
   dependencies: Partial<SelfUpgradeDetectionDependencies> = {},

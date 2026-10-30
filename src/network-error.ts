@@ -1,7 +1,3 @@
-/**
- * Network failure whose message was already enriched by formatNetworkError
- * (cause chain, host, proxy hint). The CLI error formatter passes it through.
- */
 export class NetworkError extends Error {
   readonly url?: string;
 
@@ -12,7 +8,6 @@ export class NetworkError extends Error {
   }
 }
 
-/** True when any outbound proxy URL is configured in the environment. */
 export function hasProxyEnvConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
   return Boolean(
     env.HTTP_PROXY ||
@@ -40,10 +35,6 @@ function causeChain(err: unknown): unknown[] {
   return chain;
 }
 
-/**
- * Expand undici/Node "fetch failed" into something actionable
- * (timeout host, ECONNREFUSED, proxy hint).
- */
 export function formatNetworkError(err: unknown, contextUrl?: string): string {
   const parts: string[] = [];
   for (const item of causeChain(err)) {

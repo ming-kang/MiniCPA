@@ -26,10 +26,7 @@ function proxyEnvSignature(env: NodeJS.ProcessEnv = process.env): string {
   return PROXY_ENV_KEYS.map((key) => `${key}=${env[key] ?? ""}`).join("\n");
 }
 
-/**
- * ALL_PROXY value only when undici can actually use it: its ProxyAgent speaks
- * HTTP CONNECT, so socks5:// (and anything else) cannot be honored.
- */
+// undici EnvHttpProxyAgent ignores ALL_PROXY; ProxyAgent speaks HTTP CONNECT (no socks).
 function applicableAllProxy(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const value = env.ALL_PROXY ?? env.all_proxy;
   if (!value) return undefined;
@@ -55,15 +52,13 @@ function createProxyAgent(env: NodeJS.ProcessEnv = process.env): EnvHttpProxyAge
 function getProxyAgent(): EnvHttpProxyAgent {
   const signature = proxyEnvSignature();
   if (!sharedProxyAgent || sharedProxySignature !== signature) {
-    // One agent per distinct proxy environment; the previous one is dropped
-    // rather than destroyed so in-flight requests on it still complete.
+    // Drop previous agent so active in-flight requests can finish without abrupt closure.
     sharedProxyAgent = createProxyAgent();
     sharedProxySignature = signature;
   }
   return sharedProxyAgent;
 }
 
-/** Human-readable summary for doctor / DEBUG (values redacted). */
 export function describeProxyEnv(env: NodeJS.ProcessEnv = process.env): string {
   if (!hasProxyEnvConfigured(env)) return "none";
   const parts: string[] = [];
@@ -77,8 +72,6 @@ export function describeProxyEnv(env: NodeJS.ProcessEnv = process.env): string {
   ] as const) {
     const value = env[key];
     if (!value) continue;
-    // An ALL_PROXY that undici cannot dial (e.g. socks5://) is reported, but
-    // must not read as if it were in effect.
     const note =
       (key === "ALL_PROXY" || key === "all_proxy") && !applicableAllProxy(env)
         ? " (scheme not applied)"
@@ -92,7 +85,6 @@ export function describeProxyEnv(env: NodeJS.ProcessEnv = process.env): string {
   return parts.join(" ");
 }
 
-/** Download transport summary; HTTPS falls back to HTTP just as EnvHttpProxyAgent does. */
 export function describeDownloadRoute(env: NodeJS.ProcessEnv = process.env): string {
   const allProxy = applicableAllProxy(env);
   const httpProxy = env.http_proxy ?? env.HTTP_PROXY ?? allProxy;
@@ -114,8 +106,6 @@ export function redactProxyUrl(proxyUrl: string): string {
       parsed.username = parsed.username ? "***" : "";
       parsed.password = parsed.password ? "***" : "";
     }
-    // Proxy URLs should not normally carry a query or fragment; redact both in
-    // diagnostics because they may contain bearer tokens or credentials.
     if (parsed.search) parsed.search = "?***";
     if (parsed.hash) parsed.hash = "#***";
     return parsed.toString();
@@ -126,7 +116,6 @@ export function redactProxyUrl(proxyUrl: string): string {
 
 export type HttpFetchInit = UndiciRequestInit;
 
-/** HTTP failures carry their status; messages are presentation, not a control protocol. */
 export class HttpStatusError extends Error {
   constructor(
     readonly status: number,
@@ -137,7 +126,6 @@ export class HttpStatusError extends Error {
   }
 }
 
-/** Read actual response bytes with a budget; neither Content-Length nor JSON shape is trusted. */
 export async function readHttpTextBounded(
   response: Pick<UndiciResponse, "body">,
   maxBytes: number,
@@ -164,13 +152,11 @@ export async function readHttpTextBounded(
 }
 
 export type HttpRetryOptions = {
-  /** Extra attempts after the first try (default 3 → up to 4 total). */
   retries?: number;
   minDelayMs?: number;
   maxDelayMs?: number;
 };
 
-/** HTTP statuses worth retrying for GitHub / CDN flakiness. */
 export function isRetryableHttpStatus(status: number): boolean {
   return status === 408 || status === 425 || status === 429 || (status >= 500 && status <= 599);
 }
@@ -196,7 +182,6 @@ const RETRYABLE_NETWORK_CODES = new Set([
   "UND_ERR_SOCKET",
 ]);
 
-/** Only known transient transport codes retry; error wording never decides policy. */
 export function isRetryableNetworkError(err: unknown): boolean {
   if (isAbortLikeError(err)) return false;
   for (let current = err; current instanceof Error; current = current.cause) {
@@ -217,14 +202,6 @@ export function retryDelayMs(
   return base + jitter;
 }
 
-/**
- * HTTP fetch that honors shell proxy env vars via undici EnvHttpProxyAgent
- * (HTTP_PROXY, HTTPS_PROXY, NO_PROXY — upper or lower case, plus ALL_PROXY
- * when it is an http:/https: URL).
- *
- * Retries transient network failures and 408/425/429/5xx by default.
- * Pass `{ retries: 0 }` to disable.
- */
 export async function httpFetch(
   input: string | URL,
   init?: HttpFetchInit,

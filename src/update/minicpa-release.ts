@@ -21,10 +21,6 @@ function isLoopbackHostname(hostname: string): boolean {
   return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "[::1]";
 }
 
-/**
- * Build the npm `latest` endpoint for MiniCPA's scoped package.
- * The registry override is internal/test-only and is restricted to loopback URLs.
- */
 export function minicpaLatestMetadataUrl(registryBaseUrl: string = NPM_REGISTRY_BASE_URL): string {
   let registry: URL;
   try {
@@ -75,7 +71,6 @@ function assertExactSemver(version: unknown, source: "current" | "latest"): stri
   return version;
 }
 
-/** Fetch and validate the version behind npm's `latest` dist-tag. */
 export async function fetchLatestMinicpaVersion(
   registryBaseUrl: string = NPM_REGISTRY_BASE_URL,
 ): Promise<string> {
@@ -136,7 +131,6 @@ export async function fetchLatestMinicpaVersion(
   return assertExactSemver(latest.version, "latest");
 }
 
-/** Compare exact semvers without ever treating a newer local version as a downgrade candidate. */
 export function compareMinicpaVersions(
   currentVersion: string,
   latestVersion: string,

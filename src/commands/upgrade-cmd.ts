@@ -48,7 +48,6 @@ function printVersionStatus(
   }
 }
 
-/** Check npm's latest MiniCPA version without inspecting the installation or taking a lock. */
 export async function runUpgradeCheck(
   currentVersion: string,
   deps: UpgradeCheckDeps = realUpgradeCheckDeps,
@@ -60,7 +59,6 @@ export async function runUpgradeCheck(
   process.exitCode = status === "outdated" ? 1 : 0;
 }
 
-/** Upgrade MiniCPA itself when this is a proven direct npm-global installation. */
 export async function runUpgrade(
   opts: {
     currentVersion: string;
@@ -72,8 +70,6 @@ export async function runUpgrade(
   const latestVersion = await deps.fetchLatestMinicpaVersion();
   const status = deps.compareMinicpaVersions(opts.currentVersion, latestVersion);
 
-  // A local version newer than npm's latest must never become a downgrade candidate,
-  // including when --force was supplied.
   if (status === "ahead") {
     printVersionStatus(opts.currentVersion, latestVersion, status);
     return;
@@ -86,7 +82,7 @@ export async function runUpgrade(
     printVersionStatus(opts.currentVersion, latestVersion, status);
   }
 
-  // Do not replace package modules/templates while a binary update is preparing.
+  // Acquire update lock before lifecycle lock to prevent concurrent binary preparations.
   await deps.withMiniCpaUpdateLock("upgrade", () =>
     deps.withMiniCpaLock("upgrade", async () => {
       const detection = await deps.detectNpmGlobalInstall(opts.packageRoot);

@@ -3,7 +3,7 @@ import path from "node:path";
 import { cpaLayout } from "./paths.js";
 import { tailFile } from "./util.js";
 
-/** CLIProxyAPI honors WRITABLE_PATH; otherwise it writes relative to its home/cwd. */
+// CLIProxyAPI honors WRITABLE_PATH; otherwise writes relative to its home/cwd.
 export function runtimeLogDirectory(home: string): string {
   const writable = process.env.WRITABLE_PATH?.trim() || process.env.writable_path?.trim();
   return writable ? path.resolve(home, writable, "logs") : cpaLayout(home).logsDir;
@@ -13,7 +13,6 @@ export function runtimeLogFile(home: string): string {
   return path.join(runtimeLogDirectory(home), "main.log");
 }
 
-/** Native forced error logs are flat error-*.log files, normally retained by CPA itself. */
 export function runtimeErrorLogFiles(home: string): string[] {
   const directory = runtimeLogDirectory(home);
   try {
@@ -40,7 +39,6 @@ export function runtimeErrorLogFiles(home: string): string[] {
   }
 }
 
-/** Failure context uses native logs; old stdout/stderr are read-only fallback history. */
 export function recentRuntimeLogs(home: string): string {
   const main = runtimeLogFile(home);
   const layout = cpaLayout(home);

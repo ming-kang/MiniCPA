@@ -7,8 +7,6 @@ import {
 } from "./autostart-shared.js";
 export type { AutostartDependencies, AutostartState } from "./autostart-shared.js";
 
-// --- Platform dispatch ---
-
 function assertSupportedPlatform(
   platform: NodeJS.Platform,
 ): asserts platform is "win32" | "darwin" | "linux" {
@@ -24,7 +22,6 @@ function assertCliPath(deps?: AutostartDependencies): void {
   }
 }
 
-/** Read the current user's effective MiniCPA autostart registration state. */
 export async function inspectAutostartState(deps?: AutostartDependencies): Promise<AutostartState> {
   const platform = platformOf(deps);
   assertSupportedPlatform(platform);
@@ -41,7 +38,6 @@ export async function inspectAutostartState(deps?: AutostartDependencies): Promi
   return inspectLinuxAutostart(deps);
 }
 
-/** Set the current user's MiniCPA autostart registration. */
 export async function setAutostartEnabled(
   enabled: boolean,
   deps?: AutostartDependencies,

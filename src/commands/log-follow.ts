@@ -3,7 +3,6 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { setTimeout as delay } from "node:timers/promises";
 
-/** Read from a path or an already-open descriptor; advance only by bytes actually read. */
 export function readLogChunk(
   file: string | number,
   pos: number,
@@ -58,7 +57,6 @@ function prefixFor(file: string, count: number): string {
   return `[${file.endsWith(".err.log") ? "err" : "out"}] `;
 }
 
-/** Preserve normal lines; split oversized lines into bounded prefixed fragments. */
 async function writeLines(
   state: FollowFileState,
   text: string,
@@ -87,7 +85,6 @@ async function flush(state: FollowFileState, prefix: string, write: FollowWriter
   state.pendingLine = "";
 }
 
-/** Poll with bounded buffers and await output, so slow consumers exert backpressure. */
 export async function tailFollowMany(
   files: string[] | (() => string[]),
   deps?: TailFollowDeps,
@@ -95,8 +92,6 @@ export async function tailFollowMany(
   const listFiles = typeof files === "function" ? files : () => files;
   const initialFiles = listFiles();
   const states = new Map(initialFiles.map((file) => [file, initialState(file)]));
-  // Dynamic error-log sets always use stable filename prefixes, even with one
-  // file. Changing prefix mode mid-UTF-8 sequence would lose decoder state.
   const filePrefix = (file: string): string =>
     prefixFor(file, typeof files === "function" ? 2 : states.size);
   const write: FollowWriter =

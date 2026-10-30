@@ -7,10 +7,8 @@ export type GhAsset = {
   url?: string;
 };
 
-/** A redirect discovers only a tag; an API result also knows which assets exist. */
 export type GithubRelease = {
   tag: string;
-  /** Undefined means public URL discovery; an empty map means an API release with no assets. */
   assets?: Map<string, GhAsset>;
 };
 
@@ -18,7 +16,6 @@ const API_TIMEOUT_MS = 30_000;
 export const MAX_GITHUB_METADATA_BYTES = 1024 * 1024;
 const GITHUB_API_BASE_URL = "https://api.github.com";
 
-/** Auth for remaining API fallback paths. Prefers GITHUB_TOKEN, then GH_TOKEN (gh CLI). */
 export function githubAuthToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const token = env.GITHUB_TOKEN || env.GH_TOKEN;
   return token?.trim() ? token.trim() : undefined;
@@ -32,7 +29,6 @@ export function githubHeaders(
   };
   if (mode === "json") headers.Accept = "application/vnd.github+json";
   else if (mode === "download") headers.Accept = "application/octet-stream";
-  // Never attach tokens to public browser downloads (only API paths).
   if (mode !== "browser") {
     const token = githubAuthToken();
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -40,14 +36,11 @@ export function githubHeaders(
   return headers;
 }
 
-/** Safe public release tags only (semver-ish). */
 export function isSafeReleaseTag(tag: string): boolean {
   const t = tag.trim();
-  // Allow v1.2.3, 1.2.3, pre-release / build metadata common on GitHub.
   return /^v?\d+(\.\d+){0,3}([._+-][A-Za-z0-9._+-]*)?$/i.test(t);
 }
 
-/** Normalize tag to the form used in github.com/releases/download URLs (leading v). */
 export function ensureReleaseTag(tag: string): string {
   const trimmed = tag.trim();
   if (!trimmed) throw new Error("Empty release tag");
@@ -59,7 +52,6 @@ export function ensureReleaseTag(tag: string): string {
     : `v${trimmed}`;
 }
 
-/** Public browser download URL — does not consume GitHub REST rate limit. */
 export function browserReleaseAssetUrl(repo: string, tag: string, assetName: string): string {
   const releaseTag = ensureReleaseTag(tag);
   const encodedTag = encodeURIComponent(releaseTag);
@@ -70,7 +62,6 @@ export function browserReleaseAssetUrl(repo: string, tag: string, assetName: str
   return `https://github.com/${repo}/releases/download/${encodedTag}/${encoded}`;
 }
 
-/** Hosts MiniCPA will fetch release assets and checksums from. */
 const ALLOWED_GITHUB_DOWNLOAD_HOSTS = new Set([
   "github.com",
   "www.github.com",
@@ -79,11 +70,6 @@ const ALLOWED_GITHUB_DOWNLOAD_HOSTS = new Set([
   "release-assets.githubusercontent.com",
 ]);
 
-/**
- * True for HTTPS URLs on GitHub release / API / CDN hosts.
- * Rejects HTTP and any other host so a compromised or spoofed API payload cannot
- * redirect downloads off-platform.
- */
 export function isAllowedGithubDownloadUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
@@ -94,10 +80,6 @@ export function isAllowedGithubDownloadUrl(url: string): boolean {
   }
 }
 
-/**
- * Prefer browser release URLs (no REST quota). Fall back to API asset endpoints only when
- * no browser URL is available (e.g. partial API payloads for private assets).
- */
 export function releaseAssetDownloadUrl(repo: string, asset: GhAsset): string {
   const browser = asset.browser_download_url?.trim() ?? "";
   if (browser && !isApiAssetUrl(browser) && isAllowedGithubDownloadUrl(browser)) {
@@ -124,7 +106,6 @@ export function isApiAssetUrl(url: string): boolean {
   return /api\.github\.com\/repos\/.+\/releases\/assets\//i.test(url);
 }
 
-/** Extract release tag from a GitHub /releases/latest Location header or final URL. */
 export function parseReleaseTagFromLocation(location: string): string | undefined {
   const raw = location.trim();
   if (!raw) return undefined;
@@ -146,11 +127,6 @@ function formatGitHubApiError(status: number, repo: string, context: string): st
   return base;
 }
 
-/**
- * Resolve the latest release tag via github.com redirect (no REST rate limit).
- * Uses redirect: "manual" and reads the Location header.
- * `baseUrl` is overridable for tests only.
- */
 export async function resolveLatestReleaseTag(
   repo: string,
   baseUrl = "https://github.com",
@@ -215,7 +191,6 @@ function validateReleaseMetadata(repo: string, release: unknown): GithubRelease 
     if (url?.trim() && !isAllowedGithubDownloadUrl(url)) {
       throw new Error(`GitHub returned an untrusted asset API URL for ${repo} asset ${asset.name}`);
     }
-    // Preserve first-match semantics when an API payload repeats a name.
     if (!assets.has(asset.name))
       assets.set(asset.name, {
         name: asset.name,
@@ -227,7 +202,6 @@ function validateReleaseMetadata(repo: string, release: unknown): GithubRelease 
   return { tag: candidate.tag_name, assets };
 }
 
-/** Fetch bounded API metadata and reduce it to the tag and an asset lookup. */
 export async function fetchLatestReleaseViaApi(
   repo: string,
   apiBaseUrl = GITHUB_API_BASE_URL,
@@ -249,7 +223,6 @@ export async function fetchLatestReleaseViaApi(
   );
 }
 
-/** Release metadata for a specific tag via the REST API. */
 export async function fetchReleaseByTagViaApi(
   repo: string,
   normalizedTag: string,
@@ -275,7 +248,6 @@ export async function fetchReleaseByTagViaApi(
   );
 }
 
-/** Discover the tag without synthesizing assets; retain real metadata only on API fallback. */
 export async function fetchLatestRelease(
   repo: string,
   deps = { resolveLatestReleaseTag, fetchLatestReleaseViaApi },
@@ -308,17 +280,10 @@ export type GithubReachability = {
   authenticated: boolean;
 };
 
-/**
- * Probe the GitHub API with this client's headers — including Authorization when
- * GITHUB_TOKEN/GH_TOKEN is set, which is what makes the reported rate limit the one
- * MiniCPA actually gets. Transport errors propagate; the caller reports them.
- * `apiBaseUrl` is overridable for tests only.
- */
 export async function checkGithubReachability(
   apiBaseUrl = GITHUB_API_BASE_URL,
   timeoutMs = 3000,
 ): Promise<GithubReachability> {
-  // Same predicate githubHeaders() uses, so a blank token never reads as authenticated.
   const authenticated = githubAuthToken() !== undefined;
   const res = await httpFetch(
     `${apiBaseUrl}/rate_limit`,
@@ -333,7 +298,7 @@ export async function checkGithubReachability(
     try {
       await res.body?.cancel();
     } catch {
-      /* ignore cancellation errors */
+      /* best-effort */
     }
     return result;
   }
@@ -346,7 +311,7 @@ export async function checkGithubReachability(
       result.remaining = remaining;
     }
   } catch {
-    /* rate_limit body is diagnostics only; reachability already established */
+    /* rate limit body is diagnostic only */
   }
   return result;
 }

@@ -21,8 +21,6 @@ export type AutostartDependencies = {
   runCommand?: CommandRunner;
 };
 
-// --- Shared helpers exported for platform backends ---
-
 export function platformOf(deps?: AutostartDependencies): NodeJS.Platform {
   return deps?.platform ?? process.platform;
 }
@@ -63,9 +61,6 @@ export function commandFailure(action: string, result: CommandResult): Error {
   return new Error(`Failed to ${action} autostart: ${detail}`);
 }
 
-/**
- * Run an OS autostart manager command with shared environment and timeout.
- */
 export function runAutostartCommand(
   deps: AutostartDependencies | undefined,
   command: string,
@@ -78,9 +73,6 @@ export function runAutostartCommand(
   });
 }
 
-/**
- * Derive a registration state from platform-specific signals.
- */
 export async function autostartVerdict(registration: {
   registered: boolean;
   intact: boolean;
@@ -100,10 +92,6 @@ export function readFileIfExists(file: string): string | undefined {
   }
 }
 
-/**
- * Publish a registration file, then register it with the OS manager. A failure
- * restores the previous registration, or removes a newly created file.
- */
 export async function registerWithRollback(
   file: string,
   contents: string,
@@ -117,7 +105,6 @@ export async function registerWithRollback(
   });
 }
 
-/** Publish a launcher and restore its exact previous bytes if OS registration fails. */
 export async function withRegistrationFile(
   file: string,
   contents: string | Buffer,

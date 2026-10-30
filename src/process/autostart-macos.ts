@@ -39,7 +39,6 @@ function escapeXml(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
-/** @internal exported for focused serialization tests. */
 export function launchAgentContents(nodePath: string, cliPath: string): string {
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -65,7 +64,7 @@ export function launchAgentContents(nodePath: string, cliPath: string): string {
   ].join("\n");
 }
 
-/** Values `launchctl print-disabled` is known to use for an enabled service. */
+// launchctl print-disabled reports "false" or "enabled" for active services.
 const LAUNCHCTL_ENABLED_VALUES = new Set(["false", "enabled"]);
 
 function launchctlReportsDisabled(stdout: string): boolean {

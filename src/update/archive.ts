@@ -16,7 +16,6 @@ function isPathInsideDirectory(candidate: string, directory: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-/** Find CPA executable under extract dir; reject path traversal. */
 export function findSafeExtractedExecutable(destDir: string, exeName: string): string {
   const resolvedDest = fs.realpathSync(destDir);
   const candidates = fs

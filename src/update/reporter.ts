@@ -3,20 +3,16 @@ import { formatBytes } from "../util.js";
 export type DownloadProgressEvent = {
   label: string;
   receivedBytes: number;
-  /** 0 when the server did not declare a content length. */
   totalBytes: number;
-  /** True exactly once, after the download completed. */
   done: boolean;
 };
 
-/** Presentation seam for update flows: commands pass the console implementation. */
 export type UpdateReporter = {
   info(message: string): void;
   warn(message: string): void;
   progress?(event: DownloadProgressEvent): void;
 };
 
-/** Interactive rendering: info→stdout, warn→stderr, throttled \r progress on stderr. */
 export function consoleUpdateReporter(): UpdateReporter {
   let lastPct = -1;
   let lastBytesMark = -1;
@@ -57,7 +53,6 @@ export function consoleUpdateReporter(): UpdateReporter {
   };
 }
 
-/** Default for library callers and tests: no output. */
 export const silentUpdateReporter: UpdateReporter = {
   info() {},
   warn() {},

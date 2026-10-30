@@ -3,12 +3,8 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
-/**
- * A kernel-owned endpoint serializes lock-file transitions and the entire operation.
- * Windows named pipes and Linux abstract sockets disappear automatically on death.
- * macOS uses an exclusive loopback listener because its Unix sockets leave stale
- * filesystem entries. A busy endpoint always fails closed; nothing is stolen.
- */
+// Kernel-owned endpoint for mutual exclusion: Windows named pipes, Linux abstract
+// sockets, and macOS exclusive loopback listeners fail closed and clean up on exit.
 export async function acquireLockLease(
   lockPath: string,
   scope: "lifecycle" | "update" = "lifecycle",
@@ -18,8 +14,6 @@ export async function acquireLockLease(
   const directory = fs.realpathSync.native(stateDirectory);
   const key = process.platform === "win32" ? directory.toLowerCase() : directory;
   const digest = createHash("sha256").update(key).digest();
-  // Reuse the existing root identity, not another hash scheme. Adjacent ports
-  // keep our two macOS leases from ever colliding with each other.
   const name = `minicpa-${digest.toString("hex")}${scope === "update" ? "-update" : ""}`;
   const port = 1024 + ((digest.readUInt32BE(0) + (scope === "update" ? 1 : 0)) % 64512);
   const endpoint: net.ListenOptions =

@@ -11,7 +11,6 @@ export function parseLogLineCount(value: string): number {
   return Number(value);
 }
 
-/** Native application/error logs, with explicit read-only access to old captures. */
 export async function runLogs(opts: {
   follow?: boolean;
   lines?: number;
@@ -37,8 +36,7 @@ export async function runLogs(opts: {
     );
   }
   if (opts.follow && opts.errOnly && !useLegacy && fs.existsSync(runtimeLogDirectory(home))) {
-    // Each failed request creates a new filename. A fixed file list would miss
-    // all later errors and keep following an already deleted retention victim.
+    // Dynamic error-log polling discovers newly created request error log files.
     await tailFollowMany(() => runtimeErrorLogFiles(home));
     return;
   }

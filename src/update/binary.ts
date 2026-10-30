@@ -41,7 +41,6 @@ export { BinaryUpdateError } from "./binary-error.js";
 
 const MAX_BINARY_ARCHIVE_BYTES = 512 * 1024 * 1024;
 
-/** Verify the release archive against upstream checksums.txt; no new integrity scheme. */
 export async function verifyArchiveChecksum(
   checksums: Map<string, string>,
   archivePath: string,
@@ -84,7 +83,6 @@ function recordedVersion(home: string): string | undefined {
   return installed.executable?.kind === "active" ? installed.state.runtimeVersion : undefined;
 }
 
-/** Network/filesystem preparation seams keep update concurrency tests offline. */
 export type BinaryPrepareDeps = {
   fetchLatestRelease: typeof fetchLatestRelease;
   fetchCpaReleaseByTag: typeof fetchCpaReleaseByTag;
@@ -115,15 +113,9 @@ async function downloadFirstAvailableAsset(
       lastError = error;
     }
   }
-  // The caller has already rejected an empty candidate list.
   throw lastError;
 }
 
-/**
- * Preparation owns an update-only lease. Downloads, extraction, copy/fsync and
- * temp cleanup never hold the lifecycle lock. Commit re-reads the current binary
- * and process state, so a stop/start during preparation is respected.
- */
 export async function updateBinary(
   home: string,
   options?: {
@@ -156,8 +148,6 @@ export async function updateBinary(
     const targetVersion = normalizeTagVersion(discovered.tag);
     const maySkip = !options?.version && !options?.force;
 
-    // The normal already-current path downloads nothing. If a recovered/changed
-    // binary differs, release the lifecycle lock before preparing its replacement.
     if (maySkip && initialVersion === targetVersion) {
       const skipped = await withMiniCpaLock("update", async () => {
         const current = await deps.readCurrentRuntimeVersion(home);

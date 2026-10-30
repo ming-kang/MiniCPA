@@ -2,7 +2,6 @@ import { formatNetworkError, NetworkError } from "./network-error.js";
 import { BinaryUpdateError } from "./update/binary-error.js";
 
 export function formatCliError(err: unknown): string {
-  // Messages of these types are already user-ready (enriched / suffixed).
   if (err instanceof BinaryUpdateError) return err.message;
   if (err instanceof NetworkError) return err.message;
   if (err instanceof Error) {
@@ -15,7 +14,6 @@ export function formatCliError(err: unknown): string {
   return String(err);
 }
 
-/** Wrap async CLI actions so users see a short message (stack only with DEBUG=1). */
 export function withCliErrors<Args extends unknown[]>(
   fn: (...args: Args) => Promise<void>,
 ): (...args: Args) => Promise<void> {

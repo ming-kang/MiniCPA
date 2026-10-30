@@ -1,4 +1,3 @@
-/** Secrets used by MiniCPA for GitHub/npm — must not leak into CPA children. */
 export const STRIPPED_ENV_KEYS = [
   "GITHUB_TOKEN",
   "GH_TOKEN",
@@ -16,13 +15,11 @@ export const STRIPPED_ENV_KEYS = [
 
 const STRIPPED_ENV_KEY_SET = new Set<string>(STRIPPED_ENV_KEYS);
 
-/** Copy an environment while removing credentials that must never reach child processes. */
 export function buildCredentialSafeChildEnv(
   sourceEnv: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   const childEnv: NodeJS.ProcessEnv = { ...sourceEnv };
-  // Windows environment-variable names are case-insensitive. Filter every spelling
-  // on every platform so a differently cased token can never reach a child.
+  // Filter all case variants (Windows env vars are case-insensitive).
   for (const key of Object.keys(childEnv)) {
     const upper = key.toUpperCase();
     const lower = key.toLowerCase();

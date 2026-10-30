@@ -12,7 +12,6 @@ function privateTempRoot(): string {
   return root;
 }
 
-/** No temp history: the update lease proves every older operation is orphaned. */
 export async function cleanupPreviousUpdateOperations(): Promise<void> {
   const directory = path.join(privateTempRoot(), "operations");
   if (!fs.existsSync(directory)) return;
@@ -24,8 +23,6 @@ export async function cleanupPreviousUpdateOperations(): Promise<void> {
     try {
       await fs.promises.rm(file, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     } catch (error) {
-      // Refuse another workspace rather than accumulate one more failed cleanup
-      // on every retry. Recovery binaries/config snapshots live outside temp.
       throw new Error(
         `Could not clear previous update operation ${file}. Close programs using staging files and retry.`,
         { cause: error },
@@ -34,7 +31,6 @@ export async function cleanupPreviousUpdateOperations(): Promise<void> {
   }
 }
 
-/** Enumerate only operation roots, not every archive/extracted file below them. */
 function* entries(directory: string): Generator<fs.Dirent> {
   const handle = fs.opendirSync(directory);
   try {
@@ -51,8 +47,7 @@ function* entries(directory: string): Generator<fs.Dirent> {
 function* cleanupCandidates(root: string): Generator<string> {
   for (const entry of entries(root)) {
     const file = path.join(root, entry.name);
-    // Old releases used downloads/<id> plus top-level extract-<id>.
-    // Judge each download/operation by its own age, never its shared parent.
+    // Legacy support: judge each download/operation by its own age rather than shared parent.
     if (entry.isDirectory() && (entry.name === "downloads" || entry.name === "operations")) {
       for (const child of entries(file)) yield path.join(file, child.name);
     } else {
@@ -67,10 +62,8 @@ export type TempCleanupResult = {
   failures: string[];
 };
 
-/** Caller owns the update-preparation lease, so no live operation can be removed. */
 export async function cleanupTempFiles(options?: {
   minAgeMs?: number;
-  /** Automatic maintenance has a small scan budget; explicit clean scans all roots. */
   maxEntries?: number;
 }): Promise<TempCleanupResult> {
   const root = privateTempRoot();
@@ -93,8 +86,6 @@ export async function cleanupTempFiles(options?: {
       continue;
     }
     try {
-      // No preliminary size walk. rm does the only traversal, asynchronously.
-      // A symlink is removed as a link; its destination is never traversed.
       await fs.promises.rm(file, { recursive: true, force: true });
       result.removed++;
     } catch (error) {
@@ -105,13 +96,12 @@ export async function cleanupTempFiles(options?: {
     try {
       await fs.promises.rmdir(directory);
     } catch {
-      /* Only drop empty containers; recent entries and failed deletions remain. */
+      /* ignore */
     }
   }
   return result;
 }
 
-/** Cleanup is outside the lifecycle lock and cannot turn an installed update into failure. */
 export async function removeTempOperation(
   directory: string,
   warn: (message: string) => void,

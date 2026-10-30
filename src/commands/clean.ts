@@ -2,7 +2,6 @@ import { miniCpaTempRoot } from "../paths.js";
 import { withMiniCpaUpdateLock } from "../process/lock.js";
 import { cleanupTempFiles, TEMP_MIN_AGE_MS } from "../temp-files.js";
 
-/** Serialize with downloads, but never hold the lifecycle lock during recursive removal. */
 export async function runClean(options?: { minAgeMs?: number }): Promise<void> {
   await withMiniCpaUpdateLock("clean", async () => {
     const result = await cleanupTempFiles(options);

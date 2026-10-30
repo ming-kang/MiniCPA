@@ -7,19 +7,14 @@ import { formatBytes } from "../util.js";
 import { githubHeaders, isApiAssetUrl } from "./github-client.js";
 
 const DOWNLOAD_TIMEOUT_MS = 300_000;
-/** Abort a download that has received no bytes for this long (well under the total budget). */
 const DOWNLOAD_STALL_MS = 60_000;
 const DOWNLOAD_STALL_CHECK_MS = 5_000;
 
 export type DownloadOptions = {
-  /** Shown in progress events / error messages. */
   label?: string;
   timeoutMs?: number;
-  /** Abort when no byte arrives for this long (default 60s, well under timeoutMs). */
   stallTimeoutMs?: number;
-  /** Refuse a response larger than this many bytes (both declared and streamed). */
   maxBytes?: number;
-  /** Called per chunk (done: false) and once after completion (done: true). */
   onProgress?: (event: {
     label: string;
     receivedBytes: number;
@@ -28,7 +23,6 @@ export type DownloadOptions = {
   }) => void;
 };
 
-/** Stream download to disk with optional progress callback. Honors proxy env via httpFetch. */
 export async function downloadToFile(
   url: string,
   dest: string,
@@ -66,7 +60,7 @@ export async function downloadToFile(
     try {
       await res.body.cancel();
     } catch {
-      /* ignore cancellation failure */
+      /* best-effort */
     }
     throw new RangeError(`Download exceeds ${formatBytes(maxBytes)} limit: ${label}`);
   }
@@ -96,8 +90,6 @@ export async function downloadToFile(
     },
   });
 
-  // The total AbortSignal.timeout above bounds the whole transfer; this watchdog
-  // fails fast on a connection that opened and then went silent.
   const stallMs = options?.stallTimeoutMs ?? DOWNLOAD_STALL_MS;
   const stallSeconds = Math.max(1, Math.round(stallMs / 1_000));
   const stallTimer = setInterval(

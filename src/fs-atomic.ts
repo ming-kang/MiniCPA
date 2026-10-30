@@ -4,7 +4,6 @@ import path from "node:path";
 
 const PRIVATE_FILE_MODE = 0o600;
 
-/** Flush a directory entry so a rename survives a power loss (no-op on win32). */
 export function syncDirectory(directory: string): void {
   if (process.platform === "win32") return;
   try {
@@ -15,25 +14,18 @@ export function syncDirectory(directory: string): void {
       fs.closeSync(fd);
     }
   } catch {
-    /* best-effort durability only */
+    /* best-effort */
   }
 }
 
-/** Backoff for the Windows replace retry; 5 attempts total. */
 const RENAME_RETRY_DELAYS_MS = [50, 100, 200, 400];
 const RETRYABLE_RENAME_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
 
-/** writeFileAtomic is synchronous by contract, so the backoff must block. */
 function sleepSync(milliseconds: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
-/**
- * Replace `to` with `from`, absorbing the transient Windows sharing violations
- * (EPERM/EBUSY/EACCES) that antivirus and indexers cause on a just-written file.
- * Retry the actual rename only; other platforms rename once. A failed replace
- * leaves the original in place and propagates to the caller.
- */
+// Retry transient Windows sharing violations (antivirus/indexers) during in-place replace.
 export function renameWithWindowsRetry(
   from: string,
   to: string,
@@ -53,11 +45,6 @@ export function renameWithWindowsRetry(
   }
 }
 
-/**
- * Write a private file via exclusive temp + atomic rename; never move the old file aside.
- * By default the parent directory is hardened to 0700; callers writing standard
- * OS directories can preserve an existing mode with `hardenDirectory: false`.
- */
 export function writeFileAtomic(
   filePath: string,
   data: string | Buffer,

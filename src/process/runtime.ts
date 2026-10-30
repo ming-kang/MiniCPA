@@ -6,7 +6,6 @@ import { activeExecutablePath, backupExecutablePath, ensureDir } from "../paths.
 import { readInstallState, type InstallState } from "../state.js";
 import { buildCredentialSafeChildEnv } from "./child-env.js";
 
-/** Outcome of a finished child process: exit code plus its captured streams. */
 export type CommandResult = {
   code: number;
   stdout: string;
@@ -14,7 +13,6 @@ export type CommandResult = {
   signal?: NodeJS.Signals | null;
 };
 
-/** MiniCPA tokens are always stripped from the child environment (see AGENTS.md). */
 export async function runCommand(
   command: string,
   args: string[],
@@ -98,19 +96,11 @@ export async function readInstalledRuntimeVersion(exePath: string): Promise<stri
   }
 }
 
-/**
- * Probe the installed binary for its version by executing it.
- *
- * A running Windows image holds a section lock on its own file, so this must only
- * be called by a command that owns the MiniCPA lock. Unlocked read commands use
- * inspectRuntimeInstallation instead and report the last health-verified version
- * recorded by the update path.
- */
+// Windows locks running executables; reading current version by executing requires lifecycle lock.
 export async function readCurrentRuntimeVersion(home: string): Promise<string | undefined> {
   return readInstalledRuntimeVersion(activeExecutablePath(home));
 }
 
-/** A replacement owns its backup only after the old active file has been moved. */
 export class RuntimeBinaryTransaction {
   private phase: "prepared" | "backed-up" | "published" = "prepared";
   private hadPrevious: boolean;
@@ -125,17 +115,14 @@ export class RuntimeBinaryTransaction {
     this.hadPrevious = fs.existsSync(this.target);
   }
 
-  /** Copy/fsync before downtime. The caller owns staging cleanup in one finally. */
   prepare(source: string): void {
     ensureDir(this.home);
     stageBinary(source, this.staging);
   }
 
-  /** Install an already prepared binary, retrying only the actual Windows renames. */
   install(): void {
     this.hadPrevious = fs.existsSync(this.target);
     if (this.hadPrevious) {
-      // Failure here leaves the active version untouched and owns no backup.
       fs.rmSync(this.backup, { force: true });
       renameWithWindowsRetry(this.target, this.backup);
       this.phase = "backed-up";
@@ -145,12 +132,11 @@ export class RuntimeBinaryTransaction {
     syncDirectory(this.home);
   }
 
-  /** Never touches the active binary or any rollback/recovery file. */
   discard(): void {
     try {
       fs.rmSync(this.staging, { force: true });
     } catch {
-      /* At most one deterministic staging residue; the next preparation replaces it. */
+      /* best-effort */
     }
   }
 
@@ -186,7 +172,6 @@ function stageBinary(source: string, staging: string): void {
   }
 }
 
-/** Atomically restore `.bak`, without needing free space for another binary copy. */
 export function restoreRuntimeBinaryFromBackup(home: string): boolean {
   const target = activeExecutablePath(home);
   const backup = backupExecutablePath(home);
@@ -202,26 +187,22 @@ export function restoreRuntimeBinaryFromBackup(home: string): boolean {
   }
 }
 
-/** Drop backup after a successful update + restart. */
 export function clearRuntimeBinaryBackup(home: string): void {
   const backup = backupExecutablePath(home);
   try {
     if (fs.existsSync(backup)) fs.unlinkSync(backup);
   } catch {
-    /* ignore */
+    /* best-effort */
   }
 }
 
-/** The active binary or its previous-version transaction backup. */
 export type RunnableExecutableKind = "active" | "backup";
 
 export type RunnableExecutableLocation = {
-  /** The file that actually exists; only "active" is the canonical name. */
   path: string;
   kind: RunnableExecutableKind;
 };
 
-/** Read-only lookup. A backup contains the previous version, not the active one. */
 export function inspectRunnableExecutable(home: string): RunnableExecutableLocation | undefined {
   const active = activeExecutablePath(home);
   if (fs.existsSync(active)) return { path: active, kind: "active" };
@@ -232,11 +213,9 @@ export function inspectRunnableExecutable(home: string): RunnableExecutableLocat
 
 export type RuntimeInstallationInspection = {
   executable?: RunnableExecutableLocation;
-  /** Install metadata last written after a healthy update; reading never probes the executable. */
   state: InstallState;
 };
 
-/** Read-only installation view that never executes, repairs, or locks the binary. */
 export function inspectRuntimeInstallation(home: string): RuntimeInstallationInspection {
   const executable = inspectRunnableExecutable(home);
   return {
@@ -245,24 +224,10 @@ export function inspectRuntimeInstallation(home: string): RuntimeInstallationIns
   };
 }
 
-/**
- * Path-only view of inspectRunnableExecutable for callers that only need to
- * know whether a runnable file exists. Prefer inspectRunnableExecutable when
- * the answer is reported to the user: the returned path may be the previous
- * `.bak` binary rather than the active one.
- */
 export function findRunnableExecutable(home: string): string | undefined {
   return inspectRunnableExecutable(home)?.path;
 }
 
-/**
- * Run the managed binary attached to the current terminal.
- *
- * Takes the executable path from the caller rather than resolving it, so an
- * unlocked command (`cpa tui`) can pick it with inspectRunnableExecutable and
- * reach the same child process without repairing the instance home under a
- * concurrent, lock-holding `cpa update`.
- */
 export async function runRuntimeAttached(
   exe: string,
   args: string[],
@@ -291,11 +256,10 @@ export async function runRuntimeAttached(
   });
 }
 
-/** Locked resolver: restore an interrupted transaction's backup when the active binary is missing. */
 export function resolveRunnableExecutable(home: string): string {
   const active = activeExecutablePath(home);
   if (fs.existsSync(active)) return active;
-  // A crash between move-aside and rename can leave only `.bak`; use it.
+  // Interrupted replace can leave only .bak; recover from it.
   if (restoreRuntimeBinaryFromBackup(home) && fs.existsSync(active)) return active;
   throw new Error(`CLIProxyAPI binary not found under ${home}. Run: cpa update`);
 }

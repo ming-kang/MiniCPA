@@ -4,7 +4,6 @@ export type WindowsProcessFacts = { startMarker?: string; executable?: string };
 const PROBE_BUDGET_MS = 10_000;
 let preferredShell = "pwsh.exe";
 
-/** One process lookup provides both identity fields under one shared deadline. */
 export async function readWindowsProcess(
   pid: number,
   run: typeof runCommand = runCommand,

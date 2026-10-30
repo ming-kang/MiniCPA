@@ -4,7 +4,6 @@ import { githubHeaders, isApiAssetUrl } from "./github-client.js";
 const API_TIMEOUT_MS = 30_000;
 export const MAX_CHECKSUM_BYTES = 256 * 1024;
 
-/** Parse GitHub checksums.txt body into map of filename → sha256. */
 export function parseChecksumsText(text: string): Map<string, string> {
   const map = new Map<string, string>();
   for (const line of text.split(/\r?\n/)) {

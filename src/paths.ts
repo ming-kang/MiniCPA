@@ -2,17 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-/** Single branded namespace — avoids generic "CPA" colliding with other installs. */
 export const MINICPA_DIR_NAME = "MiniCPA";
 
-/**
- * MiniCPA application root (single instance, lock, and staging files).
- * Windows: %LOCALAPPDATA%\MiniCPA
- */
 function envPathOr(fallback: string, value: string | undefined): string {
   const trimmed = value?.trim();
-  // Per the XDG Base Directory spec, a non-absolute value must be ignored: a
-  // cwd-relative root would move the global lock with the working directory.
+  // Per XDG spec, ignore non-absolute paths so relative roots don't shift with cwd.
   return trimmed && path.isAbsolute(trimmed) ? trimmed : fallback;
 }
 
@@ -28,19 +22,15 @@ export function miniCpaRoot(): string {
   return path.join(xdgData, MINICPA_DIR_NAME);
 }
 
-/** The one canonical CPA instance directory. */
 export function cpaHome(): string {
   return path.join(miniCpaRoot(), "instance");
 }
 
-/** Ephemeral MiniCPA files (release zips, extract staging) under private app data. */
 export function miniCpaTempRoot(): string {
-  // Keep staging under MiniCPA's private application root rather than a predictable
-  // shared OS-temp path such as /tmp/MiniCPA, which is vulnerable to symlink attacks.
+  // Keep staging under private app root to prevent shared /tmp symlink attacks.
   return path.join(miniCpaRoot(), "temp");
 }
 
-/** Download and extraction files share one bounded-lifetime operation directory. */
 export function miniCpaTempOperationDir(): string {
   const operations = path.join(miniCpaTempRoot(), "operations");
   ensureDir(operations);
@@ -67,9 +57,7 @@ export type CpaLayout = {
   installStateFile: string;
   logFile: string;
   errLogFile: string;
-  /** CLIProxyAPI's native, continuously rotated application log. */
   runtimeLogFile: string;
-  /** MiniCPA's own bounded start event log. */
   minicpaLogFile: string;
 };
 
@@ -94,17 +82,14 @@ export function executableName(): string {
   return process.platform === "win32" ? "cli-proxy-api.exe" : "cli-proxy-api";
 }
 
-/** Single active binary under the instance root (replaced on each update). */
 export function activeExecutablePath(home: string): string {
   return path.join(home, executableName());
 }
 
-/** Previous binary kept during update for rollback. */
 export function backupExecutablePath(home: string): string {
   return `${activeExecutablePath(home)}.bak`;
 }
 
-/** Create a MiniCPA-private directory (0700 on POSIX). */
 export function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   if (process.platform !== "win32") {

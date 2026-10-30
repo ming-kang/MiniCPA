@@ -59,11 +59,6 @@ const WINDOWS_INSPECT_SCRIPT = [
   "} catch { [Console]::Error.Write($_.Exception.Message); exit 3 }",
 ].join(" ");
 
-/**
- * Registry facts reported by the Windows inspect script. Both fields are base64
- * and always present — `ConvertTo-Json` emits explicit nulls — so absence is
- * spelled `null` rather than a missing key.
- */
 type WindowsRegistryFacts = { run: string | null; approval: string | null };
 
 function isWindowsRegistryFacts(value: unknown): value is WindowsRegistryFacts {
@@ -116,7 +111,6 @@ function windowsLauncherCommand(deps?: AutostartDependencies): string {
   return `"${wscript}" "${vbsPath}"`;
 }
 
-/** @internal exported for focused serialization tests. */
 export function windowsVbsContents(nodePath: string, cliPath: string): string {
   assertSafeLauncherValue(nodePath);
   assertSafeLauncherValue(cliPath);
@@ -129,9 +123,6 @@ export function windowsVbsContents(nodePath: string, cliPath: string): string {
   ].join("\r\n");
 }
 
-/**
- * Read the generated Windows launcher back as comparable text.
- */
 function readWindowsLauncher(deps?: AutostartDependencies): string | undefined {
   const raw = readFileBytesIfExists(windowsVbsPath(deps));
   if (raw === undefined) return undefined;
@@ -199,7 +190,7 @@ export async function setWindowsAutostart(
     try {
       fs.rmSync(vbsPath, { force: true });
     } catch {
-      /* registration is already gone */
+      /* best-effort */
     }
   }
 }

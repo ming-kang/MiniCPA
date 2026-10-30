@@ -1,10 +1,8 @@
-/** MiniCPA's connection target, not CLIProxyAPI configuration or runtime defaults. */
 export const DEFAULT_API_URL = "http://127.0.0.1:8317";
 
 const INVALID_API_URL =
   "--api-url / MINICPA_API_URL must be an absolute HTTP(S) base URL without credentials, query or fragment";
 
-/** Explicit per-invocation target; never infer values from config.yaml. */
 export function apiBaseUrl(): string {
   let url: URL;
   try {

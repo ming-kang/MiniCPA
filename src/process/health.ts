@@ -4,16 +4,11 @@ import { sleep } from "../util.js";
 
 export { apiBaseUrl };
 
-/** Public panel route; no knowledge of CLIProxyAPI's configuration schema. */
 const PANEL_PATH = "/management.html";
 const PROBE_REQUEST_TIMEOUT_MS = 2000;
 const PROBE_PASS_INTERVAL_MS = 300;
 
-/**
- * Direct CPA readiness probes bypass environment proxies. The isolated
- * dispatcher accepts self-signed CPA certificates; download clients retain
- * normal certificate verification.
- */
+// Isolated dispatcher accepts CPA's local self-signed certificates without proxy.
 const loopbackDispatcher = new Agent({
   connect: {
     rejectUnauthorized: false,
@@ -28,7 +23,6 @@ export async function waitForAnyHttpOk(urls: string[], timeoutMs = 8000): Promis
   return (await waitForFirstHttpOk(urls, timeoutMs)) !== undefined;
 }
 
-/** Probe endpoints under one total deadline, never reading response bodies. */
 export async function waitForFirstHttpOk(
   urls: string[],
   timeoutMs = 8000,
@@ -63,7 +57,6 @@ export function managementUrl(): string {
   return `${apiBaseUrl()}${PANEL_PATH}`;
 }
 
-/** Prefer the API root without loading or validating CLIProxyAPI's config. */
 export function readinessUrls(): string[] {
   const base = apiBaseUrl();
   return [`${base}/`, `${base}${PANEL_PATH}`];

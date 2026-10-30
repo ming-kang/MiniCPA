@@ -6,7 +6,6 @@ export type InstallState = {
   runtimeVersion?: string;
 };
 
-/** Process ownership record (JSON in cpa.pid). Legacy plain PID still accepted. */
 export type PidRecord = {
   pid: number;
   exe: string;
@@ -18,7 +17,6 @@ function isPositiveInt(n: unknown): n is number {
   return typeof n === "number" && Number.isInteger(n) && n > 0;
 }
 
-/** Read-only. Only a missing file means there is no recorded installation. */
 export function readInstallState(home: string): InstallState {
   const file = cpaLayout(home).installStateFile;
   try {
@@ -37,7 +35,6 @@ export function readInstallState(home: string): InstallState {
   }
 }
 
-/** Write the complete install metadata, without merging previous or legacy fields. */
 export function writeInstallState(home: string, state: InstallState): void {
   const layout = cpaLayout(home);
   ensureDir(layout.stateDir);
@@ -82,11 +79,9 @@ export function writePidRecord(home: string, record: PidRecord): void {
 
 export function clearPid(home: string): void {
   const layout = cpaLayout(home);
-  // Best-effort: transient EPERM/EBUSY (AV scan) must not crash read paths like
-  // `cpa status`, and a stale pid file is tolerated by resolveRunning.
   try {
     fs.unlinkSync(layout.pidFile);
   } catch {
-    /* ignore */
+    /* best-effort */
   }
 }

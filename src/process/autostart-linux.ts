@@ -17,10 +17,6 @@ import {
 
 const SYSTEMD_UNIT_NAME = "minicpa.service";
 
-/**
- * Every `systemctl --user is-enabled` answer other than `enabled` that still
- * describes a real, known unit.
- */
 const SYSTEMD_INACTIVE_STATES =
   /^(?:enabled-runtime|disabled|masked(?:-runtime)?|not-found|static|indirect|linked(?:-runtime)?|alias|generated|transient)$/;
 
@@ -58,7 +54,6 @@ function quoteSystemdEnvironment(name: string, value: string): string {
   return quoteSystemdValue(`${name}=${value}`, false);
 }
 
-/** @internal exported for focused serialization tests. */
 export function systemdUnitContents(nodePath: string, cliPath: string, dataHome: string): string {
   return [
     "[Unit]",
@@ -134,9 +129,6 @@ export async function setLinuxAutostart(
 export const LINGER_HINT =
   "systemd user units start at login only — for startup without a login, run: loginctl enable-linger";
 
-/**
- * Whether the current user's systemd units also start without a login.
- */
 async function inspectLingerEnabled(deps?: AutostartDependencies): Promise<boolean | undefined> {
   if (platformOf(deps) !== "linux") return undefined;
   try {
@@ -153,10 +145,6 @@ async function inspectLingerEnabled(deps?: AutostartDependencies): Promise<boole
   }
 }
 
-/**
- * Hint when MiniCPA autostart is in force but systemd starts user units at
- * login only. Resolves, never rejects.
- */
 export async function lingerHint(deps?: AutostartDependencies): Promise<string | undefined> {
   if (platformOf(deps) !== "linux") return undefined;
   return (await inspectLingerEnabled(deps)) === true ? undefined : LINGER_HINT;

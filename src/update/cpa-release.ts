@@ -14,7 +14,6 @@ export const CPA_REPO = "router-for-me/CLIProxyAPI";
 type SupportedPlatform = "win32" | "darwin" | "linux";
 type SupportedArch = "x64" | "arm64";
 
-/** One canonical source for current and historical upstream package labels. */
 const CPA_ASSET_SUFFIXES: Record<SupportedPlatform, Record<SupportedArch, readonly string[]>> = {
   win32: {
     x64: ["windows_amd64.zip"],
@@ -30,7 +29,6 @@ const CPA_ASSET_SUFFIXES: Record<SupportedPlatform, Record<SupportedArch, readon
   },
 };
 
-/** Ordered candidates for this target only; never fall back across architectures. */
 export function cpaAssetNameCandidates(
   version: string,
   platform: NodeJS.Platform,
@@ -55,7 +53,6 @@ export type CpaRelease = {
   checksumUrl: string;
 };
 
-/** Reduce discovery to the current target's downloads, without fabricating API metadata. */
 export function resolveCpaRelease(
   release: GithubRelease,
   platform: NodeJS.Platform = process.platform,
@@ -79,7 +76,6 @@ export function resolveCpaRelease(
   };
 }
 
-/** With a token try the API first; a missing pinned release must not fall through. */
 export async function fetchCpaReleaseByTag(
   tag: string,
   fetchApi: typeof fetchReleaseByTagViaApi = fetchReleaseByTagViaApi,
@@ -90,7 +86,6 @@ export async function fetchCpaReleaseByTag(
       return await fetchApi(CPA_REPO, normalized);
     } catch (error) {
       if (error instanceof HttpStatusError && error.status === 404) throw error;
-      // Rate limit / network: public URLs may still work.
     }
   }
   return { tag: normalized };

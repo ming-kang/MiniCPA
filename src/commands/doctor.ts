@@ -16,15 +16,11 @@ import { checkGithubReachability, type GithubReachability } from "../update/gith
 import { runtimeLogDirectory, runtimeLogFile } from "../runtime-logs.js";
 import { directorySizeBytes, formatBytes } from "../util.js";
 
-/** Transient file used to prove the home is writable on Windows. */
 const WRITE_PROBE_NAME = ".minicpa-write-probe";
 
 /**
- * Report whether the instance home can actually be written to.
- *
- * `fs.access(W_OK)` only consults FILE_ATTRIBUTE_READONLY on Windows and ignores
- * the ACL, so it reports success for exactly the directory this check exists to
- * catch. Windows therefore gets a real write probe instead.
+ * fs.access(W_OK) only consults FILE_ATTRIBUTE_READONLY on Windows and ignores
+ * the ACL, so Windows requires a real write probe.
  */
 function reportHomeWritable(home: string): boolean {
   if (!fs.existsSync(home)) {
@@ -60,11 +56,6 @@ function reportHomeWritable(home: string): boolean {
   }
 }
 
-/**
- * Report the autostart registration. Never fails the report: "off" is a valid
- * choice, and a broken registration is a warning a user can repair with
- * `cpa auto` — not something that should turn the diagnostics red.
- */
 async function reportAutostart(
   inspect: () => Promise<AutostartState>,
   hint: () => Promise<string | undefined>,
@@ -93,28 +84,17 @@ async function reportAutostart(
       break;
   }
   if (state !== "on") return;
-  // The hint owns the Linux gating and resolves even when its probe fails.
   const line = await hint();
   if (line) console.log(`[info] ${line}`);
   reportLastStartFailure(lastStartEvent, startLogFile);
 }
 
-/**
- * Surface the most recent recorded start failure.
- *
- * Only reported next to a registration that is in force, because that is the
- * case where nobody watched the output: a login launch discards it, so this
- * record is the user's only evidence. A later success supersedes the failure, so
- * this reads the newest record rather than hunting for any failure at all.
- */
 function reportLastStartFailure(
   lastStartEvent: () => MiniCpaEvent | undefined,
   startLogFile: string,
 ): void {
   const event = lastStartEvent();
   if (event?.level !== "error") return;
-  // Print the record verbatim: the writer phrases it for humans, and restating
-  // it here would be a second copy of a format doctor does not own.
   console.log(`[warn] ${event.message} (${event.at})`);
   console.log(`[info] MiniCPA start log ${startLogFile}`);
 }
@@ -131,7 +111,6 @@ export async function runDoctor(deps?: DoctorDeps, options?: { deep?: boolean })
   printHome(ctx);
   let ok = true;
 
-  // Layout / write access
   if (!reportHomeWritable(ctx.home)) {
     ok = false;
   }
@@ -144,8 +123,7 @@ export async function runDoctor(deps?: DoctorDeps, options?: { deep?: boolean })
   }
   console.log("[info] Web panel managed by CLIProxyAPI");
 
-  // Read-only lookup: diagnosing the home must never repair or execute it, or
-  // doctor could race a lock-holding update over the binary being replaced.
+  // Read-only inspection: must never repair or execute binary to avoid racing updates.
   const installed = inspectRuntimeInstallation(ctx.home);
   const exe = installed.executable?.path;
   const activeExe = activeExecutablePath(ctx.home);
@@ -246,7 +224,6 @@ export async function runDoctor(deps?: DoctorDeps, options?: { deep?: boolean })
     );
   }
 
-  // Inspect metadata only; kernel leases, not these records, own exclusion.
   for (const [scope, label] of [
     ["lifecycle", "MiniCPA"],
     ["update", "Update preparation"],
@@ -301,8 +278,6 @@ export async function runDoctor(deps?: DoctorDeps, options?: { deep?: boolean })
     console.log("[info] proxy env none (HTTP(S)_PROXY / ALL_PROXY not set)");
   }
 
-  // Optional: GitHub reachability (non-fatal). Uses the update client's headers,
-  // so a configured GITHUB_TOKEN/GH_TOKEN reports the quota MiniCPA really gets.
   const probeGithub = deps?.checkGithubReachability ?? checkGithubReachability;
   try {
     const reach = await probeGithub();

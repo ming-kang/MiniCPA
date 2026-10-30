@@ -4,6 +4,12 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+### Changed
+
+- Streamline codebase comments to retain only non-obvious invariants, OS caveats, and architectural constraints while removing redundant, self-explanatory documentation.
+- Refocus `README.md` on high-level system architecture, boundaries, and workflows instead of low-level implementation details.
+- Split the former `docs/cpa-reference.md` into focused architectural guides covering dual-lease concurrency (`docs/concurrency.md`), two-phase update pipelines (`docs/update-pipeline.md`), process supervision and autostart (`docs/process-lifecycle.md`), and security isolation boundaries (`docs/security.md`), with `docs/README.md` serving as the unified architecture index.
+
 ## [0.4.5] - 2026-10-30
 
 ### Changed

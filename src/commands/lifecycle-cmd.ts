@@ -19,16 +19,6 @@ function printRunningSummary(ctx: ReturnType<typeof createContext>, pid: number)
   console.log(`Web        ${managementUrl()}`);
 }
 
-/**
- * Start CLIProxyAPI, recording the outcome in MiniCPA's own event log.
- *
- * The record is here for the autostart path: at login the launcher discards this
- * process's output, and the failures that matter most there (missing config,
- * missing binary, a held lock) all happen before the CPA child exists, so they
- * reach neither the terminal nor `cpa.err.log`. Successes are recorded too —
- * that is what makes an empty log meaningful, because it then means the launcher
- * never fired rather than "it fired and worked".
- */
 export async function runStart(opts: { noWait?: boolean }): Promise<void> {
   const ctx = createContext();
   let running: RunningInfo;
@@ -114,13 +104,6 @@ export async function runStatus(cliVersion: string, deps?: StatusDependencies): 
   }
 }
 
-/**
- * Name of the missing launcher when a browser could not be spawned at all.
- *
- * Node reports this as `spawn <command> ENOENT`; a headless Linux box, a WSL
- * shell or a container simply has no `xdg-open`, which must not turn `cpa web`
- * into a failed command — the URL is already on stdout.
- */
 function missingBrowserCommand(err: unknown): string | undefined {
   const errno = err as NodeJS.ErrnoException;
   const message = typeof errno?.message === "string" ? errno.message : "";
@@ -130,14 +113,11 @@ function missingBrowserCommand(err: unknown): string | undefined {
   return undefined;
 }
 
-/** Open the explicit panel URL directly; CPA and the browser own loading and reachability. */
 export async function runOpen(deps?: {
   openInBrowser?: (url: string) => Promise<void>;
 }): Promise<void> {
   createContext();
   const url = managementUrl();
-  // Print before launching: the URL is the useful output even when no browser
-  // can be started.
   console.log(url);
   const open = deps?.openInBrowser ?? openInBrowser;
   try {
@@ -155,14 +135,7 @@ export type TuiDeps = {
   runRuntimeAttached?: typeof runRuntimeAttached;
 };
 
-/**
- * Attach the official CPA terminal UI to this terminal.
- *
- * `cpa tui` holds no MiniCPA lock, so every step here is a read: it resolves the
- * executable with inspectRunnableExecutable instead of the repairing
- * resolveRunnableExecutable, which could restore `.bak` over the binary a
- * lock-holding `cpa update` is replacing.
- */
+// cpa tui holds no lock, so it must not trigger repairing resolvers.
 export async function runTui(deps?: TuiDeps): Promise<void> {
   const ctx = createContext();
   const inspect = deps?.inspectRunning ?? inspectRunning;
@@ -175,8 +148,6 @@ export async function runTui(deps?: TuiDeps): Promise<void> {
     throw new Error(`CLIProxyAPI binary not found under ${ctx.home}. Run: cpa update`);
   }
   if (found.kind !== "active") {
-    // Recovering the residue here would be a write from an unlocked command, so
-    // report it and run the file where it lies; `cpa start` renames it back.
     console.error(
       `Warning: the active binary is missing; running the TUI from ${found.path} — run: cpa start to recover it`,
     );
