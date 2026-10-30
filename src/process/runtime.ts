@@ -2,12 +2,7 @@ import { spawn } from "node:child_process";
 import spawnCommand from "cross-spawn";
 import fs from "node:fs";
 import { renameWithWindowsRetry, syncDirectory } from "../fs-atomic.js";
-import {
-  activeExecutablePath,
-  backupExecutablePath,
-  ensureDir,
-  unlockProbePath,
-} from "../paths.js";
+import { activeExecutablePath, backupExecutablePath, ensureDir } from "../paths.js";
 import { readInstallState, type InstallState } from "../state.js";
 import { buildCredentialSafeChildEnv } from "./child-env.js";
 
@@ -130,34 +125,24 @@ export class RuntimeBinaryTransaction {
     this.hadPrevious = fs.existsSync(this.target);
   }
 
-  /** Copy across volumes and fsync before stopping CPA or taking the lifecycle lock. */
+  /** Copy/fsync before downtime. The caller owns staging cleanup in one finally. */
   prepare(source: string): void {
     ensureDir(this.home);
-    try {
-      stageBinary(source, this.staging);
-    } catch (error) {
-      this.discard();
-      throw error;
-    }
+    stageBinary(source, this.staging);
   }
 
-  /** Commit only renames an already prepared, same-directory binary. */
-  install(source?: string): void {
-    if (source !== undefined) this.prepare(source);
+  /** Install an already prepared binary, retrying only the actual Windows renames. */
+  install(): void {
     this.hadPrevious = fs.existsSync(this.target);
-    try {
-      if (this.hadPrevious) {
-        // Failure here leaves the active version untouched and owns no backup.
-        fs.rmSync(this.backup, { force: true });
-        renameWithWindowsRetry(this.target, this.backup);
-        this.phase = "backed-up";
-      }
-      renameWithWindowsRetry(this.staging, this.target);
-      this.phase = "published";
-      syncDirectory(this.home);
-    } finally {
-      this.discard();
+    if (this.hadPrevious) {
+      // Failure here leaves the active version untouched and owns no backup.
+      fs.rmSync(this.backup, { force: true });
+      renameWithWindowsRetry(this.target, this.backup);
+      this.phase = "backed-up";
     }
+    renameWithWindowsRetry(this.staging, this.target);
+    this.phase = "published";
+    syncDirectory(this.home);
   }
 
   /** Never touches the active binary or any rollback/recovery file. */
@@ -201,11 +186,6 @@ function stageBinary(source: string, staging: string): void {
   }
 }
 
-/** Replace the active binary; callers own rollback and recording the verified version. */
-export function installRuntimeBinary(home: string, sourceExe: string): void {
-  new RuntimeBinaryTransaction(home).install(sourceExe);
-}
-
 /** Atomically restore `.bak`, without needing free space for another binary copy. */
 export function restoreRuntimeBinaryFromBackup(home: string): boolean {
   const target = activeExecutablePath(home);
@@ -232,31 +212,8 @@ export function clearRuntimeBinaryBackup(home: string): void {
   }
 }
 
-/** If a crash left the binary as `*.unlock-probe`, restore the canonical name. */
-export function recoverUnlockProbeBinary(home: string): boolean {
-  const active = activeExecutablePath(home);
-  const probe = unlockProbePath(home);
-  if (fs.existsSync(active) || !fs.existsSync(probe)) return false;
-  try {
-    fs.renameSync(probe, active);
-    return true;
-  } catch {
-    try {
-      fs.copyFileSync(probe, active);
-      try {
-        fs.unlinkSync(probe);
-      } catch {
-        /* ignore */
-      }
-      return true;
-    } catch {
-      return false;
-    }
-  }
-}
-
-/** Which name the managed binary was found under, in resolve precedence order. */
-export type RunnableExecutableKind = "active" | "unlock-probe" | "backup";
+/** The active binary or its previous-version transaction backup. */
+export type RunnableExecutableKind = "active" | "backup";
 
 export type RunnableExecutableLocation = {
   /** The file that actually exists; only "active" is the canonical name. */
@@ -264,29 +221,10 @@ export type RunnableExecutableLocation = {
   kind: RunnableExecutableKind;
 };
 
-/**
- * Read-only sibling of resolveRunnableExecutable for unlocked commands.
- *
- * Never renames, copies or unlinks anything, so `cpa status`, `cpa doctor` and
- * `cpa tui` cannot race a lock-holding `cpa update` over the binary it is
- * replacing.
- *
- * It reports every name the binary can legitimately be found under, because
- * "not under the canonical name" is not the same failure as "not on disk":
- * `unlock-probe` is the current binary left renamed by a crashed unlock probe
- * and `backup` is the previous version kept for rollback, and both are
- * recovered in place by the next `cpa start`. Only `undefined` means the user
- * has to re-download anything. Callers that display or execute `path` must
- * therefore handle all three kinds — a `backup` path holds the PREVIOUS
- * version's bytes.
- */
+/** Read-only lookup. A backup contains the previous version, not the active one. */
 export function inspectRunnableExecutable(home: string): RunnableExecutableLocation | undefined {
   const active = activeExecutablePath(home);
   if (fs.existsSync(active)) return { path: active, kind: "active" };
-  // Same precedence as resolveRunnableExecutable, which recovers the unlock
-  // probe before it falls back to the backup.
-  const probe = unlockProbePath(home);
-  if (fs.existsSync(probe)) return { path: probe, kind: "unlock-probe" };
   const backup = backupExecutablePath(home);
   if (fs.existsSync(backup)) return { path: backup, kind: "backup" };
   return undefined;
@@ -310,8 +248,8 @@ export function inspectRuntimeInstallation(home: string): RuntimeInstallationIns
 /**
  * Path-only view of inspectRunnableExecutable for callers that only need to
  * know whether a runnable file exists. Prefer inspectRunnableExecutable when
- * the answer is reported to the user: the returned path may be the `.bak` or
- * `.unlock-probe` residue rather than the active binary.
+ * the answer is reported to the user: the returned path may be the previous
+ * `.bak` binary rather than the active one.
  */
 export function findRunnableExecutable(home: string): string | undefined {
   return inspectRunnableExecutable(home)?.path;
@@ -353,9 +291,8 @@ export async function runRuntimeAttached(
   });
 }
 
-/** Mutating resolver: repairs crash residue, then returns the active binary. */
+/** Locked resolver: restore an interrupted transaction's backup when the active binary is missing. */
 export function resolveRunnableExecutable(home: string): string {
-  recoverUnlockProbeBinary(home);
   const active = activeExecutablePath(home);
   if (fs.existsSync(active)) return active;
   // A crash between move-aside and rename can leave only `.bak`; use it.

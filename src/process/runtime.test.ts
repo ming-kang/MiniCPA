@@ -3,16 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { activeExecutablePath, backupExecutablePath, unlockProbePath } from "../paths.js";
+import { activeExecutablePath, backupExecutablePath } from "../paths.js";
 import { readInstallState, writeInstallState } from "../state.js";
 import {
   clearRuntimeBinaryBackup,
   findRunnableExecutable,
   inspectRunnableExecutable,
-  installRuntimeBinary,
   parseCpaVersionFromHelp,
   readCurrentRuntimeVersion,
-  recoverUnlockProbeBinary,
   resolveRunnableExecutable,
   restoreRuntimeBinaryFromBackup,
   RuntimeBinaryTransaction,
@@ -46,10 +44,27 @@ function writeSourceExe(home: string, content: string): string {
   return source;
 }
 
-describe("installRuntimeBinary", () => {
+function installBinary(home: string, sourceExe: string): void {
+  const transaction = new RuntimeBinaryTransaction(home);
+  try {
+    transaction.prepare(sourceExe);
+    transaction.install();
+    transaction.commit();
+  } finally {
+    transaction.discard();
+  }
+}
+
+function prepareTransaction(home: string, sourceExe: string): RuntimeBinaryTransaction {
+  const transaction = new RuntimeBinaryTransaction(home);
+  transaction.prepare(sourceExe);
+  return transaction;
+}
+
+describe("RuntimeBinaryTransaction installation", () => {
   it("installs a fresh binary and leaves no staging residue", () => {
     const home = tempHome();
-    installRuntimeBinary(home, writeSourceExe(home, "new-binary"));
+    installBinary(home, writeSourceExe(home, "new-binary"));
     const active = activeExecutablePath(home);
     assert.equal(fs.readFileSync(active, "utf8"), "new-binary");
     assert.equal(fs.existsSync(`${active}.new`), false);
@@ -61,9 +76,15 @@ describe("installRuntimeBinary", () => {
   it("keeps the previous binary as .bak when replacing", () => {
     const home = tempHome();
     fs.writeFileSync(activeExecutablePath(home), "old-binary");
-    installRuntimeBinary(home, writeSourceExe(home, "new-binary"));
-    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "new-binary");
-    assert.equal(fs.readFileSync(backupExecutablePath(home), "utf8"), "old-binary");
+    const transaction = prepareTransaction(home, writeSourceExe(home, "new-binary"));
+    try {
+      transaction.install();
+      assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "new-binary");
+      assert.equal(fs.readFileSync(backupExecutablePath(home), "utf8"), "old-binary");
+      transaction.commit();
+    } finally {
+      transaction.discard();
+    }
   });
 
   it("fsyncs the staged binary before publishing it", () => {
@@ -74,12 +95,16 @@ describe("installRuntimeBinary", () => {
       synced.push(fd);
       original(fd);
     };
+    const transaction = new RuntimeBinaryTransaction(home);
     try {
-      installRuntimeBinary(home, writeSourceExe(home, "durable-binary"));
+      transaction.prepare(writeSourceExe(home, "durable-binary"));
+      transaction.install();
+      transaction.commit();
     } finally {
       fs.fsyncSync = original;
+      transaction.discard();
     }
-    assert.ok(synced.length >= 1, "expected installRuntimeBinary to fsync the staged binary");
+    assert.ok(synced.length >= 1, "expected preparation to fsync the staged binary");
     assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "durable-binary");
   });
 });
@@ -88,33 +113,57 @@ describe("RuntimeBinaryTransaction preparation", () => {
   it("stages before publishing and commits without another copy", () => {
     const home = tempHome();
     fs.writeFileSync(activeExecutablePath(home), "old");
-    const transaction = new RuntimeBinaryTransaction(home);
-    transaction.prepare(writeSourceExe(home, "new"));
-    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "old");
-    assert.equal(fs.readFileSync(`${activeExecutablePath(home)}.new`, "utf8"), "new");
-    const originalCopy = fs.copyFileSync;
-    fs.copyFileSync = () => {
-      throw new Error("commit must not copy");
-    };
+    const transaction = prepareTransaction(home, writeSourceExe(home, "new"));
     try {
-      transaction.install();
+      assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "old");
+      assert.equal(fs.readFileSync(`${activeExecutablePath(home)}.new`, "utf8"), "new");
+      const originalCopy = fs.copyFileSync;
+      fs.copyFileSync = () => {
+        throw new Error("commit must not copy");
+      };
+      try {
+        transaction.install();
+      } finally {
+        fs.copyFileSync = originalCopy;
+      }
+      assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "new");
+      assert.equal(fs.readFileSync(backupExecutablePath(home), "utf8"), "old");
+      transaction.commit();
     } finally {
-      fs.copyFileSync = originalCopy;
+      transaction.discard();
     }
-    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "new");
-    assert.equal(fs.readFileSync(backupExecutablePath(home), "utf8"), "old");
-    transaction.commit();
   });
 
   it("backs up a binary recovered after preparation began", () => {
     const home = tempHome();
+    const transaction = prepareTransaction(home, writeSourceExe(home, "new"));
+    try {
+      fs.writeFileSync(activeExecutablePath(home), "recovered-during-download");
+      transaction.install();
+      assert.equal(
+        fs.readFileSync(backupExecutablePath(home), "utf8"),
+        "recovered-during-download",
+      );
+      transaction.rollback();
+      assert.equal(
+        fs.readFileSync(activeExecutablePath(home), "utf8"),
+        "recovered-during-download",
+      );
+    } finally {
+      transaction.discard();
+    }
+  });
+
+  it("leaves staging residue for caller discard when preparation fails", () => {
+    const home = tempHome();
     const transaction = new RuntimeBinaryTransaction(home);
-    transaction.prepare(writeSourceExe(home, "new"));
-    fs.writeFileSync(activeExecutablePath(home), "recovered-during-download");
-    transaction.install();
-    assert.equal(fs.readFileSync(backupExecutablePath(home), "utf8"), "recovered-during-download");
-    transaction.rollback();
-    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "recovered-during-download");
+    const nonExistent = path.join(home, "does-not-exist");
+    try {
+      assert.throws(() => transaction.prepare(nonExistent));
+    } finally {
+      transaction.discard();
+    }
+    assert.equal(fs.existsSync(`${activeExecutablePath(home)}.new`), false);
   });
 });
 
@@ -138,41 +187,17 @@ describe("inspectRunnableExecutable", () => {
     });
   });
 
-  it("reports unlock-probe residue without recovering it", () => {
-    const home = tempHome();
-    fs.writeFileSync(unlockProbePath(home), "probe-binary");
-    const before = snapshotHome(home);
-
-    assert.deepEqual(inspectRunnableExecutable(home), {
-      path: unlockProbePath(home),
-      kind: "unlock-probe",
-    });
-
-    assert.deepEqual(snapshotHome(home), before, "the read must not touch the home");
-    assert.equal(fs.existsSync(activeExecutablePath(home)), false);
-  });
-
-  it("prefers the unlock probe over the older backup", () => {
-    const home = tempHome();
-    fs.writeFileSync(unlockProbePath(home), "current-binary");
-    fs.writeFileSync(backupExecutablePath(home), "previous-binary");
-    const before = snapshotHome(home);
-
-    assert.deepEqual(inspectRunnableExecutable(home), {
-      path: unlockProbePath(home),
-      kind: "unlock-probe",
-    });
-
-    assert.deepEqual(snapshotHome(home), before, "the read must not touch the home");
-  });
-
   it("labels the backup when only the rollback copy survives", () => {
     const home = tempHome();
     fs.writeFileSync(backupExecutablePath(home), "rollback-binary");
+    const before = snapshotHome(home);
+
     assert.deepEqual(inspectRunnableExecutable(home), {
       path: backupExecutablePath(home),
       kind: "backup",
     });
+
+    assert.deepEqual(snapshotHome(home), before, "the read must not touch the home");
   });
 
   it("returns undefined only when nothing is on disk", () => {
@@ -217,24 +242,6 @@ describe("clearRuntimeBinaryBackup", () => {
     clearRuntimeBinaryBackup(home);
     assert.equal(fs.existsSync(backupExecutablePath(home)), false);
     clearRuntimeBinaryBackup(home);
-  });
-});
-
-describe("recoverUnlockProbeBinary", () => {
-  it("restores the canonical name from a crashed unlock probe", () => {
-    const home = tempHome();
-    fs.writeFileSync(unlockProbePath(home), "probe-binary");
-    assert.equal(recoverUnlockProbeBinary(home), true);
-    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "probe-binary");
-    assert.equal(fs.existsSync(unlockProbePath(home)), false);
-  });
-
-  it("does nothing when the active binary already exists", () => {
-    const home = tempHome();
-    fs.writeFileSync(activeExecutablePath(home), "active");
-    fs.writeFileSync(unlockProbePath(home), "probe");
-    assert.equal(recoverUnlockProbeBinary(home), false);
-    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "active");
   });
 });
 

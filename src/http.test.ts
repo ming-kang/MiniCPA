@@ -8,6 +8,8 @@ import {
   formatNetworkError,
   hasProxyEnvConfigured,
   httpFetch,
+  HttpStatusError,
+  isAbortLikeError,
   readHttpTextBounded,
   isRetryableHttpStatus,
   isRetryableNetworkError,
@@ -21,6 +23,15 @@ import { withHttpFixture } from "./test-fixtures/http-server.js";
 // the first httpFetch call so the lazily created proxy agent honors it.
 process.env.NO_PROXY = "127.0.0.1";
 process.env.no_proxy = "127.0.0.1";
+
+describe("HttpStatusError", () => {
+  it("keeps HTTP status independent from its display message", () => {
+    const error = new HttpStatusError(404, "localized message");
+    assert.ok(error instanceof Error);
+    assert.equal(error.status, 404);
+    assert.equal(error.message, "localized message");
+  });
+});
 
 describe("describeDownloadRoute", () => {
   it("reports HTTPS precedence and HTTP fallback", () => {
@@ -279,6 +290,31 @@ describe("httpFetch", () => {
     );
   });
 
+  it("retries a real socket failure using the transport error code", async () => {
+    let hits = 0;
+    await withHttpFixture(
+      {
+        "/reset": (req, res) => {
+          hits++;
+          if (hits === 1) {
+            req.socket.destroy();
+            return;
+          }
+          res.end("recovered");
+        },
+      },
+      async (baseUrl) => {
+        const response = await httpFetch(`${baseUrl}/reset`, undefined, {
+          retries: 1,
+          minDelayMs: 5,
+          maxDelayMs: 5,
+        });
+        assert.equal(await response.text(), "recovered");
+        assert.equal(hits, 2);
+      },
+    );
+  });
+
   it("throws NetworkError for a refused connection", async () => {
     // Acquire a port that is guaranteed closed by opening and closing a fixture.
     let closedPort = 0;
@@ -313,7 +349,14 @@ describe("readHttpTextBounded", () => {
       },
     });
     const response = new Response(body, { headers: { "content-length": "2" } });
-    await assert.rejects(() => readHttpTextBounded(response, 4, "fixture"), /size limit/);
+    await assert.rejects(
+      () => readHttpTextBounded(response, 4, "fixture"),
+      (error) => {
+        assert.ok(error instanceof RangeError);
+        assert.match(error.message, /size limit/);
+        return true;
+      },
+    );
     assert.equal(cancelled, true);
     assert.equal(response.body?.locked, false);
   });
@@ -340,6 +383,35 @@ describe("retry helpers", () => {
     const abort = new Error("The operation was aborted");
     abort.name = "AbortError";
     assert.equal(isRetryableNetworkError(abort), false);
+  });
+
+  it("does not infer transport failures from error wording", () => {
+    for (const message of ["fetch failed", "network socket timeout", "ECONNRESET", "AbortError"]) {
+      const error = new Error(message);
+      assert.equal(isRetryableNetworkError(error), false);
+      assert.equal(isAbortLikeError(error), false);
+    }
+    assert.equal(isRetryableNetworkError(new HttpStatusError(404, "network timeout")), false);
+    assert.equal(
+      isRetryableNetworkError(
+        Object.assign(new Error("arbitrary wording"), { code: "ECONNRESET" }),
+      ),
+      true,
+    );
+    assert.equal(
+      isRetryableNetworkError(
+        Object.assign(new Error("fetch failed"), { code: "CERT_HAS_EXPIRED" }),
+      ),
+      false,
+    );
+  });
+
+  it("never retries an explicit abort or request deadline", () => {
+    for (const name of ["AbortError", "TimeoutError"]) {
+      const error = Object.assign(new Error("unrelated wording"), { name, code: "ECONNRESET" });
+      assert.equal(isAbortLikeError(error), true);
+      assert.equal(isRetryableNetworkError(error), false);
+    }
   });
 
   it("computes bounded backoff with deterministic random", () => {

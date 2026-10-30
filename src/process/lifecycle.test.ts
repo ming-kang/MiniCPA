@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, describe, it, type TestContext } from "node:test";
 import { activeExecutablePath, backupExecutablePath, cpaLayout, ensureDir } from "../paths.js";
 import { writePidRecord } from "../state.js";
 import { sleep } from "../util.js";
@@ -174,6 +174,135 @@ describe("process identity safety", () => {
     const stopped = await stopDaemon(home);
     assert.equal(stopped, true);
     assert.equal(isProcessAlive(pid), false);
+  });
+});
+
+type FakeProcess = {
+  home: string;
+  pid: number;
+  alive: boolean;
+  ticks?: string;
+  probes: number;
+  signals: string[];
+};
+
+/** Exercise POSIX signalling on every runner without sending a signal to any real PID. */
+function mockPosixProcess(
+  t: TestContext,
+  onSignal: (signal: string, state: FakeProcess) => void,
+): FakeProcess {
+  const platform = process.platform;
+  Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+  t.after(() =>
+    Object.defineProperty(process, "platform", { value: platform, configurable: true }),
+  );
+  const state: FakeProcess = {
+    home: tempHome(),
+    pid: 424242,
+    alive: true,
+    ticks: "100",
+    probes: 0,
+    signals: [],
+  };
+  writePidRecord(state.home, {
+    pid: state.pid,
+    exe: process.execPath,
+    startedAt: "",
+    startMarker: "test-boot:100",
+  });
+  const kill = process.kill;
+  t.mock.method(process, "kill", (pid: number, signal?: string | number) => {
+    if (pid !== state.pid) return kill(pid, signal);
+    if (signal === 0) {
+      if (state.alive) return true;
+      throw Object.assign(new Error("process exited"), { code: "ESRCH" });
+    }
+    const name = String(signal);
+    state.signals.push(name);
+    onSignal(name, state);
+    return true;
+  });
+  const read = fs.readFileSync;
+  t.mock.method(fs, "readFileSync", ((file, ...args) => {
+    if (String(file) === `/proc/${state.pid}/stat`) {
+      state.probes++;
+      const fields = Array<string>(20).fill("0");
+      fields[19] = state.ticks ?? "unreadable";
+      return `${state.pid} (test) ${fields.join(" ")}`;
+    }
+    if (String(file) === "/proc/sys/kernel/random/boot_id") return "test-boot";
+    return read(file, ...args);
+  }) as typeof fs.readFileSync);
+  const readlink = fs.readlinkSync;
+  t.mock.method(fs, "readlinkSync", ((file, ...args) =>
+    String(file) === `/proc/${state.pid}/exe`
+      ? process.execPath
+      : Reflect.apply(readlink, fs, [file, ...args])) as typeof fs.readlinkSync);
+  let clock = 0;
+  t.mock.method(Date, "now", () => {
+    clock += 6000;
+    return clock;
+  });
+  return state;
+}
+
+describe("stopDaemon phases", () => {
+  it("does not force-kill a process that exits gracefully", async (t) => {
+    const state = mockPosixProcess(t, (_signal, current) => {
+      current.alive = false;
+    });
+    assert.equal(await stopDaemon(state.home), true);
+    assert.deepEqual(state.signals, ["SIGTERM"]);
+    assert.equal(state.probes, 2, "ownership is checked again just before the first signal");
+    assert.equal(fs.existsSync(cpaLayout(state.home).pidFile), false);
+  });
+
+  it("rechecks ownership before force-killing after the grace deadline", async (t) => {
+    const state = mockPosixProcess(t, (signal, current) => {
+      if (signal === "SIGKILL") current.alive = false;
+    });
+    assert.equal(await stopDaemon(state.home), true);
+    assert.deepEqual(state.signals, ["SIGTERM", "SIGKILL"]);
+    assert.equal(state.probes, 3, "the force signal needs its own fresh identity snapshot");
+  });
+
+  it("refuses force-kill and keeps the record if the identity marker degrades", async (t) => {
+    const state = mockPosixProcess(t, (_signal, current) => {
+      current.ticks = undefined;
+    });
+    await assert.rejects(() => stopDaemon(state.home), /can no longer verify/);
+    assert.deepEqual(state.signals, ["SIGTERM"]);
+    assert.equal(state.alive, true);
+    assert.equal(fs.existsSync(cpaLayout(state.home).pidFile), true);
+  });
+
+  it("keeps the record when the process survives both stopping phases", async (t) => {
+    const state = mockPosixProcess(t, () => {});
+    await assert.rejects(() => stopDaemon(state.home), /still running after stop/);
+    assert.deepEqual(state.signals, ["SIGTERM", "SIGKILL"]);
+    assert.equal(fs.existsSync(cpaLayout(state.home).pidFile), true);
+  });
+
+  it("tolerates ESRCH when the process exits just before the graceful signal", async (t) => {
+    const state = mockPosixProcess(t, (_signal, current) => {
+      current.alive = false;
+      throw Object.assign(new Error("process exited"), { code: "ESRCH" });
+    });
+    assert.equal(await stopDaemon(state.home), true);
+    assert.deepEqual(state.signals, ["SIGTERM"]);
+  });
+
+  it("propagates other signal errors without clearing the record", async (t) => {
+    const failure = Object.assign(new Error("signal denied"), { code: "EPERM" });
+    const state = mockPosixProcess(t, () => {
+      throw failure;
+    });
+    await assert.rejects(
+      () => stopDaemon(state.home),
+      (error) => error === failure,
+    );
+    assert.deepEqual(state.signals, ["SIGTERM"]);
+    assert.equal(fs.existsSync(cpaLayout(state.home).pidFile), true);
   });
 });
 

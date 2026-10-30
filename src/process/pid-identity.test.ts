@@ -1,18 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  areStartMarkersComparable,
   canonicalizeStartMarker,
   classifyDarwinComm,
   classifyProcessIdentity,
+  compareStartMarkers,
   exePathsMatch,
   imageMatchesExpectedExe,
   isTaggedStartMarker,
-  parseTasklistImageName,
-  probePidReuse,
   readProcessStartMarker,
-  startMarkersProveIdentity,
-  startMarkersProveReuse,
 } from "./pid-identity.js";
 
 describe("classifyProcessIdentity", () => {
@@ -22,25 +18,25 @@ describe("classifyProcessIdentity", () => {
 });
 
 describe("imageMatchesExpectedExe", () => {
-  it("matches exact basenames", async () => {
+  it("matches exact basenames", () => {
     assert.equal(imageMatchesExpectedExe("cli-proxy-api", "/home/x/cli-proxy-api"), true);
     assert.equal(imageMatchesExpectedExe("cli-proxy-api.exe", "C:\\a\\cli-proxy-api.exe"), true);
   });
 
-  it("allows truncated linux comm only when observed is exactly 15 chars", async () => {
-    const fullName = "cli-proxy-api-xx"; // 16 chars
+  it("allows truncated linux comm only when observed is exactly 15 chars", () => {
+    const fullName = "cli-proxy-api-xx";
     const truncated15 = fullName.slice(0, 15);
     assert.equal(truncated15.length, 15);
     assert.equal(imageMatchesExpectedExe(truncated15, fullName), true);
   });
 
-  it("rejects short prefixes that are not true comm truncation", async () => {
-    assert.equal(imageMatchesExpectedExe("cli", "cli-proxy-api"), false);
-    assert.equal(imageMatchesExpectedExe("cli-proxy", "cli-proxy-api"), false);
-    assert.equal(imageMatchesExpectedExe("c", "cli-proxy-api"), false);
+  it("rejects short prefixes that are not true comm truncation", () => {
+    for (const prefix of ["cli", "cli-proxy", "c"]) {
+      assert.equal(imageMatchesExpectedExe(prefix, "cli-proxy-api"), false);
+    }
   });
 
-  it("rejects unrelated images", async () => {
+  it("rejects unrelated images", () => {
     assert.equal(imageMatchesExpectedExe("chrome", "cli-proxy-api"), false);
     assert.equal(imageMatchesExpectedExe("node", "/bin/cli-proxy-api"), false);
     assert.equal(imageMatchesExpectedExe("cli-proxy-api-other", "cli-proxy-api"), false);
@@ -48,59 +44,53 @@ describe("imageMatchesExpectedExe", () => {
 });
 
 describe("exePathsMatch", () => {
-  it("accepts the same resolved path", async () => {
+  it("accepts the same resolved path", () => {
     assert.equal(exePathsMatch("/opt/cpa/cli-proxy-api", "/opt/cpa/cli-proxy-api"), true);
   });
 
-  it("rejects a different binary with the same basename", async () => {
+  it("rejects a different binary with the same basename", () => {
     assert.equal(exePathsMatch("/opt/other/cli-proxy-api", "/opt/managed/cli-proxy-api"), false);
   });
 });
 
 describe("classifyDarwinComm", () => {
-  // A canonical macOS install path with a deliberately long home directory;
-  // BSD ps truncates its last column to the terminal width, and falls back to
-  // 79 columns when stdout is a pipe.
   const expected =
     "/Users/asterin-with-a-long-home-directory/Library/Application Support/MiniCPA/instance/cli-proxy-api";
 
-  it("uses a fixture path that deliberately exceeds the 79-column ps pipe width", async () => {
+  it("uses a fixture path exceeding the 79-column ps pipe width", () => {
     assert.ok(expected.length > 79);
   });
 
-  it("matches the exact absolute path", async () => {
+  it("matches the exact absolute path", () => {
     assert.equal(classifyDarwinComm(expected, expected), "match");
     assert.equal(classifyDarwinComm(`${expected}\n`, expected), "match");
   });
 
-  it("treats a truncated absolute path as unknown, never mismatch", async () => {
+  it("treats a truncated absolute path as unknown, never mismatch", () => {
     for (const truncated of [expected.slice(0, -1), expected.slice(0, 79)]) {
       assert.notEqual(truncated, expected);
       assert.equal(classifyDarwinComm(truncated, expected), "unknown");
-      assert.notEqual(classifyDarwinComm(truncated, expected), "mismatch");
     }
   });
 
-  it("reports an unrelated absolute path as mismatch", async () => {
+  it("reports an unrelated absolute path as mismatch", () => {
     assert.equal(classifyDarwinComm("/usr/sbin/sshd", expected), "mismatch");
     assert.equal(classifyDarwinComm("/bin/zsh", expected), "mismatch");
   });
 
-  it("does not treat a non-prefix path sharing the tail as truncation", async () => {
-    // Truncation only ever removes a suffix, so a longer observed path is never
-    // a truncated view of the expected one.
+  it("does not treat a longer path sharing the tail as truncation", () => {
     assert.equal(classifyDarwinComm(`${expected}-other`, expected), "mismatch");
   });
 
-  it("treats a bare matching basename as unknown", async () => {
+  it("treats a bare matching basename as unknown", () => {
     assert.equal(classifyDarwinComm("cli-proxy-api", expected), "unknown");
   });
 
-  it("reports a bare unrelated basename as mismatch", async () => {
+  it("reports a bare unrelated basename as mismatch", () => {
     assert.equal(classifyDarwinComm("sshd", expected), "mismatch");
   });
 
-  it("reports empty output as mismatch", async () => {
+  it("reports empty output as mismatch", () => {
     assert.equal(classifyDarwinComm("", expected), "mismatch");
     assert.equal(classifyDarwinComm("   \n", expected), "mismatch");
   });
@@ -114,11 +104,7 @@ describe("readProcessStartMarker", () => {
     assert.equal(second, first);
   });
 
-  it("tags darwin markers and leaves the other platform shapes untagged", async () => {
-    // Darwin is the only platform whose raw marker is timezone-dependent, so it
-    // is the only one that must be reduced to a tagged absolute instant at read
-    // time. Linux (`<boot id>:<ticks>`) and Windows (UTC tick counts) are
-    // already absolute and must keep their existing shape.
+  it("tags darwin markers and leaves other platform shapes untagged", async () => {
     const marker = await readProcessStartMarker(process.pid);
     assert.ok(marker);
     assert.equal(isTaggedStartMarker(marker), process.platform === "darwin");
@@ -126,7 +112,7 @@ describe("readProcessStartMarker", () => {
 });
 
 describe("canonicalizeStartMarker", () => {
-  it("collapses ps lstart renderings of the same instant to one value", async () => {
+  it("collapses ps lstart renderings of the same instant to one UTC value", () => {
     const padded = "Mon Jul  6 03:01:00 2026";
     const single = "Mon Jul 6 03:01:00 2026";
     assert.equal(canonicalizeStartMarker(padded), canonicalizeStartMarker(single));
@@ -137,24 +123,23 @@ describe("canonicalizeStartMarker", () => {
     );
   });
 
-  it("keeps distinct start times distinct", async () => {
+  it("keeps distinct start times distinct", () => {
     assert.notEqual(
-      canonicalizeStartMarker("Mon Jul  6 03:01:00 2026"),
-      canonicalizeStartMarker("Mon Jul  6 03:01:01 2026"),
+      canonicalizeStartMarker("Mon Jul 6 03:01:00 2026"),
+      canonicalizeStartMarker("Mon Jul 6 03:01:01 2026"),
     );
   });
 
-  it("passes non-lstart markers through unchanged", async () => {
-    assert.equal(canonicalizeStartMarker("boot-id:12345"), "boot-id:12345");
-    assert.equal(canonicalizeStartMarker("638000000000000"), "638000000000000");
-    assert.equal(canonicalizeStartMarker("lstart-utc:1785"), "lstart-utc:1785");
+  it("passes non-lstart markers through unchanged", () => {
+    for (const marker of ["boot-id:12345", "638000000000000", "lstart-utc:1785"]) {
+      assert.equal(canonicalizeStartMarker(marker), marker);
+    }
   });
 
-  it("emits a tag no marker recorded by an untagged build can collide with", async () => {
-    assert.equal(isTaggedStartMarker(canonicalizeStartMarker("Mon Jul  6 03:01:00 2026")), true);
-    // Shapes a pre-tag MiniCPA could have written, plus the other platforms.
+  it("emits a tag no marker from an untagged build can collide with", () => {
+    assert.equal(isTaggedStartMarker(canonicalizeStartMarker("Mon Jul 6 03:01:00 2026")), true);
     for (const legacy of [
-      "Mon Jul  6 03:01:00 2026",
+      "Mon Jul 6 03:01:00 2026",
       "Mo 6 Jul 03:01:00 2026",
       "boot-id:12345",
       "638000000000000",
@@ -163,248 +148,66 @@ describe("canonicalizeStartMarker", () => {
     }
   });
 
-  it("is idempotent, so re-canonicalizing a tagged marker is a no-op", async () => {
-    const canonical = canonicalizeStartMarker("Mon Jul  6 03:01:00 2026");
+  it("is idempotent for tagged markers", () => {
+    const canonical = canonicalizeStartMarker("Mon Jul 6 03:01:00 2026");
     assert.equal(canonicalizeStartMarker(canonical), canonical);
   });
 
-  it("cannot recover the timezone of wall-clock text recorded by an untagged build", async () => {
-    // This is why startMarkersProveReuse refuses to compare the two shapes:
-    // canonicalization reads wall-clock text as UTC, which is only true for text
-    // this build read under its pinned TZ=UTC probe. The same process start
-    // recorded by MiniCPA 0.1.0 in a UTC+2 zone canonicalizes to a different
-    // instant, and no amount of re-canonicalizing closes that gap.
-    const tagged = canonicalizeStartMarker("Mon Jul  6 03:01:00 2026");
-    const legacyLocal = "Mon Jul  6 05:01:00 2026";
+  it("cannot recover the timezone of legacy wall-clock text", () => {
+    const tagged = canonicalizeStartMarker("Mon Jul 6 03:01:00 2026");
+    const legacyLocal = "Mon Jul 6 05:01:00 2026";
     assert.notEqual(canonicalizeStartMarker(legacyLocal), tagged);
+    assert.equal(compareStartMarkers(legacyLocal, tagged), "unknown");
   });
 });
 
-describe("probePidReuse", () => {
-  // The instant a live CPA started, as this build reads it under TZ=UTC, and as
-  // MiniCPA 0.1.0 would have recorded the very same start in a UTC+2 zone.
-  const taggedCurrent = canonicalizeStartMarker("Mon Jul  6 03:01:00 2026");
-  const legacyLocalMarker = "Mon Jul  6 05:01:00 2026";
-
-  it("does not report reuse when the recorded marker matches", async () => {
-    const recorded = await readProcessStartMarker(process.pid);
-    const probe = await probePidReuse(process.pid, recorded);
-    assert.equal(probe.reused, false);
-    assert.equal(probe.matched, true);
-    assert.equal(probe.currentMarker, recorded);
+describe("compareStartMarkers", () => {
+  it("distinguishes identity from PID reuse in every comparable format", () => {
+    const cases = [
+      ["boot-id:12345", "boot-id:12345", "same"],
+      ["boot-id:12345", "boot-id:12346", "reused"],
+      ["boot-a:12345", "boot-b:12345", "reused"],
+      ["638000000000000", "638000000000000", "same"],
+      ["638000000000000", "638000000000001", "reused"],
+      ["lstart-utc:1783306860", "lstart-utc:1783306860", "same"],
+      ["lstart-utc:1783306860", "lstart-utc:1783306861", "reused"],
+      ["Mon Jul 6 03:01:00 2026", "Mon Jul 6 03:01:00 2026", "same"],
+      ["Mon Jul 6 03:01:00 2026", "Mon Jul 6 05:01:00 2026", "reused"],
+    ] as const;
+    for (const [recorded, current, expected] of cases) {
+      assert.equal(compareStartMarkers(recorded, current), expected);
+    }
   });
 
-  it("reports reuse when the recorded marker differs in the same shape", async () => {
-    const recorded = await readProcessStartMarker(process.pid);
-    assert.ok(recorded);
-    // Appending a digit keeps the marker in its platform's shape (tagged stays
-    // tagged, untagged stays untagged) while changing the value it encodes.
-    const probe = await probePidReuse(process.pid, `${recorded}0`);
-    assert.equal(probe.reused, true);
-    assert.equal(probe.matched, false);
-  });
-
-  it("cannot prove reuse without a recorded marker", async () => {
-    const probe = await probePidReuse(process.pid, undefined);
-    assert.equal(probe.reused, false);
-    assert.equal(probe.matched, false);
-    assert.equal((await probePidReuse(process.pid, "")).reused, false);
-    assert.equal((await probePidReuse(process.pid, "")).matched, false);
-  });
-
-  it("cannot prove reuse for a pid with no readable marker", async () => {
-    const probe = await probePidReuse(-1, "boot-id:12345");
-    assert.equal(probe.currentMarker, undefined);
-    assert.equal(probe.reused, false);
-    assert.equal(probe.matched, false);
-  });
-
-  it("cannot prove reuse from a legacy local-time marker for the same live pid", async () => {
-    // First command after upgrading on macOS: the pid record still holds the
-    // untagged wall-clock text 0.1.0 wrote, while the probe now returns a tagged
-    // instant. Reading the legacy text as UTC would shift it by the machine's
-    // UTC offset and condemn a healthy daemon as a reused PID.
-    const probe = await probePidReuse(process.pid, legacyLocalMarker, () => taggedCurrent);
-    assert.equal(probe.currentMarker, taggedCurrent);
-    assert.equal(probe.reused, false);
-    assert.equal(probe.matched, false);
-  });
-
-  it("cannot prove reuse from a non-C-locale legacy marker", async () => {
-    // A German LC_TIME rendering does not even parse as C-locale lstart text, so
-    // it would pass through raw and mismatch a tagged marker outright.
-    const probe = await probePidReuse(process.pid, "Mo 6 Jul 03:01:00 2026", () => taggedCurrent);
-    assert.equal(probe.reused, false);
-    assert.equal(probe.matched, false);
-  });
-
-  it("cannot prove reuse when only the recorded marker is tagged", async () => {
-    // The downgrade direction of the same mismatch.
-    const probe = await probePidReuse(process.pid, taggedCurrent, () => legacyLocalMarker);
-    assert.equal(probe.reused, false);
-    assert.equal(probe.matched, false);
-  });
-
-  it("still reports reuse between two different tagged markers", async () => {
-    const other = canonicalizeStartMarker("Mon Jul  6 03:01:01 2026");
-    assert.notEqual(other, taggedCurrent);
-    const probe = await probePidReuse(process.pid, other, () => taggedCurrent);
-    assert.equal(probe.reused, true);
-    assert.equal(probe.matched, false);
-  });
-
-  it("does not report reuse between identical tagged markers", async () => {
-    const probe = await probePidReuse(process.pid, taggedCurrent, () => taggedCurrent);
-    assert.equal(probe.reused, false);
-    assert.equal(probe.matched, true);
-  });
-});
-
-describe("startMarkersProveReuse", () => {
-  it("keeps linux boot-id markers comparable", async () => {
-    assert.equal(startMarkersProveReuse("boot-id:12345", "boot-id:12345"), false);
-    assert.equal(startMarkersProveReuse("boot-id:12345", "boot-id:12346"), true);
-    // A reboot changes the boot id, so identical ticks are still a new process.
-    assert.equal(startMarkersProveReuse("boot-a:12345", "boot-b:12345"), true);
-  });
-
-  it("keeps windows tick markers comparable", async () => {
-    assert.equal(startMarkersProveReuse("638000000000000", "638000000000000"), false);
-    assert.equal(startMarkersProveReuse("638000000000000", "638000000000001"), true);
-  });
-
-  it("ignores incidental whitespace", async () => {
-    assert.equal(startMarkersProveReuse(" boot-id:12345\n", "boot-id:12345"), false);
+  it("normalizes incidental whitespace before comparing", () => {
+    assert.equal(compareStartMarkers(" boot-id:12345\n", "boot-id:12345"), "same");
+    assert.equal(compareStartMarkers("  lstart-utc:100 \n", "lstart-utc:200"), "reused");
     assert.equal(
-      startMarkersProveReuse("Mon Jul  6 03:01:00 2026", " Mon Jul 6 03:01:00 2026 "),
-      false,
+      compareStartMarkers("Mon Jul  6 03:01:00 2026", " Mon Jul 6 03:01:00 2026 "),
+      "same",
     );
+    assert.equal(compareStartMarkers("boot:1", " boot:2 "), "reused");
   });
 
-  it("cannot prove reuse from a missing or empty marker", async () => {
-    assert.equal(startMarkersProveReuse(undefined, "boot-id:12345"), false);
-    assert.equal(startMarkersProveReuse("boot-id:12345", undefined), false);
-    assert.equal(startMarkersProveReuse("", "boot-id:12345"), false);
-    assert.equal(startMarkersProveReuse("boot-id:12345", "   "), false);
+  it("cannot prove identity or reuse with missing, empty or whitespace-only markers", () => {
+    for (const missing of [undefined, "", "   "]) {
+      for (const present of ["boot-id:12345", "lstart-utc:100", undefined, ""]) {
+        assert.equal(compareStartMarkers(missing, present), "unknown");
+        assert.equal(compareStartMarkers(present, missing), "unknown");
+      }
+    }
   });
 
-  it("refuses to compare a tagged marker with any untagged shape", async () => {
-    const tagged = canonicalizeStartMarker("Mon Jul  6 03:01:00 2026");
+  it("never compares tagged Darwin instants with legacy or other untagged shapes", () => {
+    const tagged = canonicalizeStartMarker("Mon Jul 6 03:01:00 2026");
     for (const untagged of [
-      "Mon Jul  6 05:01:00 2026",
+      "Mon Jul 6 05:01:00 2026",
       "Mo 6 Jul 03:01:00 2026",
       "boot-id:12345",
       "638000000000000",
     ]) {
-      assert.equal(startMarkersProveReuse(untagged, tagged), false);
-      assert.equal(startMarkersProveReuse(tagged, untagged), false);
+      assert.equal(compareStartMarkers(untagged, tagged), "unknown");
+      assert.equal(compareStartMarkers(tagged, untagged), "unknown");
     }
-  });
-});
-
-describe("areStartMarkersComparable", () => {
-  it("treats markers of the same shape as comparable", async () => {
-    assert.equal(areStartMarkersComparable("boot-id:12345", "boot-id:12346"), true);
-    assert.equal(areStartMarkersComparable("638000000000000", "638000000000001"), true);
-    assert.equal(areStartMarkersComparable("lstart-utc:100", "lstart-utc:200"), true);
-    assert.equal(
-      areStartMarkersComparable("Mon Jul  6 03:01:00 2026", "Mon Jul  6 05:01:00 2026"),
-      true,
-    );
-  });
-
-  it("ignores whitespace when determining comparability", async () => {
-    assert.equal(areStartMarkersComparable("  lstart-utc:100 \n", "lstart-utc:200"), true);
-    assert.equal(areStartMarkersComparable("boot:1", " boot:2 "), true);
-  });
-
-  it("refuses to compare a tagged Darwin marker with untagged shapes", async () => {
-    const tagged = "lstart-utc:1783306860";
-    for (const untagged of [
-      "Mon Jul  6 05:01:00 2026",
-      "Mo 6 Jul 03:01:00 2026",
-      "boot-id:12345",
-      "638000000000000",
-    ]) {
-      assert.equal(areStartMarkersComparable(untagged, tagged), false);
-      assert.equal(areStartMarkersComparable(tagged, untagged), false);
-    }
-  });
-
-  it("returns false for missing, empty, or whitespace-only markers", async () => {
-    assert.equal(areStartMarkersComparable(undefined, "lstart-utc:100"), false);
-    assert.equal(areStartMarkersComparable("lstart-utc:100", undefined), false);
-    assert.equal(areStartMarkersComparable("", "lstart-utc:100"), false);
-    assert.equal(areStartMarkersComparable("lstart-utc:100", "   "), false);
-    assert.equal(areStartMarkersComparable(undefined, undefined), false);
-  });
-});
-
-describe("startMarkersProveIdentity", () => {
-  it("proves identity only when comparable markers have identical values", async () => {
-    assert.equal(startMarkersProveIdentity("boot-id:12345", "boot-id:12345"), true);
-    assert.equal(startMarkersProveIdentity("638000000000000", "638000000000000"), true);
-    assert.equal(startMarkersProveIdentity("lstart-utc:1783306860", "lstart-utc:1783306860"), true);
-    assert.equal(
-      startMarkersProveIdentity("Mon Jul  6 03:01:00 2026", "Mon Jul  6 03:01:00 2026"),
-      true,
-    );
-  });
-
-  it("ignores incidental whitespace during comparison", async () => {
-    assert.equal(
-      startMarkersProveIdentity(" lstart-utc:1783306860 \n", "lstart-utc:1783306860"),
-      true,
-    );
-    assert.equal(
-      startMarkersProveIdentity("Mon Jul  6 03:01:00 2026", " Mon Jul 6 03:01:00 2026 "),
-      true,
-    );
-  });
-
-  it("rejects different values in the same shape", async () => {
-    assert.equal(startMarkersProveIdentity("boot-id:12345", "boot-id:12346"), false);
-    assert.equal(startMarkersProveIdentity("638000000000000", "638000000000001"), false);
-    assert.equal(
-      startMarkersProveIdentity("lstart-utc:1783306860", "lstart-utc:1783306861"),
-      false,
-    );
-  });
-
-  it("rejects incomparable shapes (legacy untagged vs tagged)", async () => {
-    const tagged = "lstart-utc:1783306860";
-    for (const legacy of [
-      "Mon Jul  6 05:01:00 2026",
-      "Mo 6 Jul 03:01:00 2026",
-      "boot-id:12345",
-      "638000000000000",
-    ]) {
-      assert.equal(startMarkersProveIdentity(legacy, tagged), false);
-      assert.equal(startMarkersProveIdentity(tagged, legacy), false);
-    }
-  });
-
-  it("cannot prove identity from missing or empty markers", async () => {
-    assert.equal(startMarkersProveIdentity(undefined, "lstart-utc:100"), false);
-    assert.equal(startMarkersProveIdentity("lstart-utc:100", undefined), false);
-    assert.equal(startMarkersProveIdentity("", "lstart-utc:100"), false);
-    assert.equal(startMarkersProveIdentity("lstart-utc:100", "   "), false);
-    assert.equal(startMarkersProveIdentity(undefined, undefined), false);
-  });
-});
-
-describe("parseTasklistImageName", () => {
-  it("parses CSV quoted image", async () => {
-    assert.equal(
-      parseTasklistImageName('"cli-proxy-api.exe","1234","Console"'),
-      "cli-proxy-api.exe",
-    );
-  });
-
-  it("returns undefined for INFO lines", async () => {
-    assert.equal(
-      parseTasklistImageName("INFO: No tasks are running which match the specified criteria."),
-      undefined,
-    );
   });
 });

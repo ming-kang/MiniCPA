@@ -1,4 +1,4 @@
-import { httpFetch, readHttpTextBounded } from "../http.js";
+import { httpFetch, HttpStatusError, readHttpTextBounded } from "../http.js";
 
 export type GhAsset = {
   id?: number;
@@ -7,11 +7,11 @@ export type GhAsset = {
   url?: string;
 };
 
-export type GhRelease = {
-  tag_name: string;
-  name: string;
-  published_at: string;
-  assets: GhAsset[];
+/** A redirect discovers only a tag; an API result also knows which assets exist. */
+export type GithubRelease = {
+  tag: string;
+  /** Undefined means public URL discovery; an empty map means an API release with no assets. */
+  assets?: Map<string, GhAsset>;
 };
 
 const API_TIMEOUT_MS = 30_000;
@@ -94,23 +94,6 @@ export function isAllowedGithubDownloadUrl(url: string): boolean {
   }
 }
 
-/** Loopback http(s) URLs used by offline unit-test fixtures only. */
-function isLoopbackDownloadUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-    const host = parsed.hostname.toLowerCase();
-    return host === "localhost" || host === "127.0.0.1" || host === "::1";
-  } catch {
-    return false;
-  }
-}
-
-function assertUsableDownloadUrl(url: string, label: string): void {
-  if (isAllowedGithubDownloadUrl(url) || isLoopbackDownloadUrl(url)) return;
-  throw new Error(`Refusing download URL with untrusted host for ${label}: ${url}`);
-}
-
 /**
  * Prefer browser release URLs (no REST quota). Fall back to API asset endpoints only when
  * no browser URL is available (e.g. partial API payloads for private assets).
@@ -126,10 +109,12 @@ export function releaseAssetDownloadUrl(repo: string, asset: GhAsset): string {
   if (asset.url?.includes("/releases/assets/") && isAllowedGithubDownloadUrl(asset.url)) {
     return asset.url;
   }
-  // Unit-test fixtures inject loopback servers; production paths never reach here
-  // with a non-GitHub host because validateReleaseMetadata rejects them first.
   if (browser) {
-    assertUsableDownloadUrl(browser, asset.name || "asset");
+    if (!isAllowedGithubDownloadUrl(browser)) {
+      throw new Error(
+        `Refusing download URL with untrusted host for ${asset.name || "asset"}: ${browser}`,
+      );
+    }
     return browser;
   }
   throw new Error(`No usable download URL for asset ${asset.name || "(unnamed)"}`);
@@ -201,77 +186,62 @@ export async function resolveLatestReleaseTag(
   );
 }
 
-/** Build a release object with browser download URLs (no API asset list needed). */
-export function synthesizePublicRelease(
-  repo: string,
-  tag: string,
-  assetNames: string[],
-): GhRelease {
-  const releaseTag = ensureReleaseTag(tag);
-  return {
-    tag_name: releaseTag,
-    name: releaseTag,
-    published_at: "",
-    assets: assetNames.map((name) => ({
-      name,
-      browser_download_url: browserReleaseAssetUrl(repo, releaseTag, name),
-    })),
-  };
-}
-
-function validateReleaseMetadata(repo: string, release: unknown): GhRelease {
-  // Narrow before touching any field: a 200 with `{}`, `[]` or null must produce
-  // this message, not a TypeError from deep inside a helper.
+function validateReleaseMetadata(repo: string, release: unknown): GithubRelease {
+  if (release === null || typeof release !== "object" || Array.isArray(release)) {
+    throw new Error(`GitHub returned invalid release metadata for ${repo}`);
+  }
+  const candidate = release as { tag_name?: unknown; assets?: unknown };
   if (
-    release === null ||
-    typeof release !== "object" ||
-    Array.isArray(release) ||
-    typeof (release as { tag_name?: unknown }).tag_name !== "string"
+    typeof candidate.tag_name !== "string" ||
+    !isSafeReleaseTag(candidate.tag_name) ||
+    !Array.isArray(candidate.assets)
   ) {
     throw new Error(`GitHub returned invalid release metadata for ${repo}`);
   }
-  const candidate = release as GhRelease;
-  if (!isSafeReleaseTag(candidate.tag_name) || !Array.isArray(candidate.assets)) {
-    throw new Error(`GitHub returned invalid release metadata for ${repo}`);
-  }
-  for (const asset of candidate.assets) {
-    if (
-      !asset ||
-      typeof asset.name !== "string" ||
-      typeof asset.browser_download_url !== "string"
-    ) {
+  const assets = new Map<string, GhAsset>();
+  for (const raw of candidate.assets) {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error(`GitHub returned an invalid release asset for ${repo}`);
+    }
+    const asset = raw as Record<string, unknown>;
+    if (typeof asset.name !== "string" || typeof asset.browser_download_url !== "string") {
       throw new Error(`GitHub returned an invalid release asset for ${repo}`);
     }
     const browserUrl = asset.browser_download_url.trim();
     if (browserUrl && !isAllowedGithubDownloadUrl(browserUrl)) {
       throw new Error(`GitHub returned an untrusted download URL for ${repo} asset ${asset.name}`);
     }
-    if (
-      typeof asset.url === "string" &&
-      asset.url.trim() &&
-      !isAllowedGithubDownloadUrl(asset.url)
-    ) {
+    const url = typeof asset.url === "string" ? asset.url : undefined;
+    if (url?.trim() && !isAllowedGithubDownloadUrl(url)) {
       throw new Error(`GitHub returned an untrusted asset API URL for ${repo} asset ${asset.name}`);
     }
+    // Preserve first-match semantics when an API payload repeats a name.
+    if (!assets.has(asset.name))
+      assets.set(asset.name, {
+        name: asset.name,
+        browser_download_url: asset.browser_download_url,
+        id: typeof asset.id === "number" ? asset.id : undefined,
+        url,
+      });
   }
-  return candidate;
+  return { tag: candidate.tag_name, assets };
 }
 
-/**
- * Fetch full latest-release metadata via the REST API, including GitHub asset digests.
- * `apiBaseUrl` is overridable for tests only.
- */
+/** Fetch bounded API metadata and reduce it to the tag and an asset lookup. */
 export async function fetchLatestReleaseViaApi(
   repo: string,
   apiBaseUrl = GITHUB_API_BASE_URL,
-): Promise<GhRelease> {
+): Promise<GithubRelease> {
   const res = await httpFetch(`${apiBaseUrl}/repos/${repo}/releases/latest`, {
     headers: githubHeaders("json"),
     signal: AbortSignal.timeout(API_TIMEOUT_MS),
   });
   if (!res.ok) {
     await res.body?.cancel().catch(() => {});
-    throw new Error(formatGitHubApiError(res.status, repo, "releases/latest"));
+    throw new HttpStatusError(
+      res.status,
+      formatGitHubApiError(res.status, repo, "releases/latest"),
+    );
   }
   return validateReleaseMetadata(
     repo,
@@ -283,7 +253,7 @@ export async function fetchLatestReleaseViaApi(
 export async function fetchReleaseByTagViaApi(
   repo: string,
   normalizedTag: string,
-): Promise<GhRelease> {
+): Promise<GithubRelease> {
   const res = await httpFetch(
     `https://api.github.com/repos/${repo}/releases/tags/${normalizedTag}`,
     {
@@ -293,8 +263,11 @@ export async function fetchReleaseByTagViaApi(
   );
   if (!res.ok) {
     await res.body?.cancel().catch(() => {});
-    if (res.status === 404) throw new Error(`Release not found: ${normalizedTag}`);
-    throw new Error(formatGitHubApiError(res.status, repo, `releases/tags/${normalizedTag}`));
+    const message =
+      res.status === 404
+        ? `Release not found: ${normalizedTag}`
+        : formatGitHubApiError(res.status, repo, `releases/tags/${normalizedTag}`);
+    throw new HttpStatusError(res.status, message);
   }
   return validateReleaseMetadata(
     repo,
@@ -302,21 +275,16 @@ export async function fetchReleaseByTagViaApi(
   );
 }
 
-/**
- * Latest release metadata. Prefers github.com redirect + synthetic browser asset URLs
- * (avoids REST rate limits). Falls back to the GitHub REST API when browser discovery fails.
- * `assetNamesForTag` supplies the asset names to synthesize for a resolved tag.
- */
+/** Discover the tag without synthesizing assets; retain real metadata only on API fallback. */
 export async function fetchLatestRelease(
   repo: string,
-  assetNamesForTag: (tag: string) => string[],
-): Promise<GhRelease> {
+  deps = { resolveLatestReleaseTag, fetchLatestReleaseViaApi },
+): Promise<GithubRelease> {
   try {
-    const tag = await resolveLatestReleaseTag(repo);
-    return synthesizePublicRelease(repo, tag, assetNamesForTag(tag));
+    return { tag: ensureReleaseTag(await deps.resolveLatestReleaseTag(repo)) };
   } catch (browserErr) {
     try {
-      return await fetchLatestReleaseViaApi(repo);
+      return await deps.fetchLatestReleaseViaApi(repo);
     } catch (apiErr) {
       const browserMsg = browserErr instanceof Error ? browserErr.message : String(browserErr);
       const apiMsg = apiErr instanceof Error ? apiErr.message : String(apiErr);

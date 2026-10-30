@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { withCliErrors } from "../cli-errors.js";
 import { compareMinicpaVersions } from "../update/minicpa-release.js";
-import type { SupportedNpmGlobalInstall } from "../update/self-upgrade.js";
+import type { SupportedNpmGlobalInstall } from "../update/npm-global-detection.js";
 import {
   runUpgrade,
   runUpgradeCheck,
@@ -25,8 +25,7 @@ function upgradeDeps(overrides: Partial<UpgradeDeps> = {}): UpgradeDeps {
     fetchLatestMinicpaVersion: async () => "1.1.0",
     compareMinicpaVersions,
     detectNpmGlobalInstall: async () => supportedDetection,
-    installMinicpaVersion: async () => undefined,
-    updateMinicpaVersion: async () => undefined,
+    executeMinicpaUpgrade: async () => undefined,
     withMiniCpaLock: async <T>(_command: string, fn: () => Promise<T>) => await fn(),
     withMiniCpaUpdateLock: async <T>(_command: string, fn: () => Promise<T>) => await fn(),
     ...overrides,
@@ -94,12 +93,12 @@ describe("runUpgrade", () => {
         events.push("detect");
         return supportedDetection;
       },
-      updateMinicpaVersion: async (detection, version) => {
+      executeMinicpaUpgrade: async (detection, version, operation) => {
         assert.equal(detection, supportedDetection);
         assert.equal(version, "1.1.0");
+        assert.equal(operation, "update");
         events.push("update");
       },
-      installMinicpaVersion: async () => assert.fail("normal upgrades must use npm update"),
       withMiniCpaUpdateLock: async <T>(_command: string, fn: () => Promise<T>) => {
         events.push("prepare-enter");
         const result = await fn();
@@ -142,12 +141,12 @@ describe("runUpgrade", () => {
     let installed = 0;
     const deps = upgradeDeps({
       fetchLatestMinicpaVersion: async () => "1.1.0",
-      installMinicpaVersion: async (detection, version) => {
+      executeMinicpaUpgrade: async (detection, version, operation) => {
         assert.equal(detection, supportedDetection);
         assert.equal(version, "1.1.0");
+        assert.equal(operation, "install");
         installed += 1;
       },
-      updateMinicpaVersion: async () => assert.fail("--force must use exact-version install"),
     });
 
     const { stdout } = await captureOutput(() =>
@@ -163,10 +162,7 @@ describe("runUpgrade", () => {
     let npmCalled = false;
     const deps = upgradeDeps({
       fetchLatestMinicpaVersion: async () => "1.1.0",
-      installMinicpaVersion: async () => {
-        npmCalled = true;
-      },
-      updateMinicpaVersion: async () => {
+      executeMinicpaUpgrade: async () => {
         npmCalled = true;
       },
       withMiniCpaLock: async <T>(_command: string, fn: () => Promise<T>) => {
@@ -212,7 +208,7 @@ describe("runUpgrade", () => {
       const deps = upgradeDeps({
         fetchLatestMinicpaVersion: async () => "1.1.0",
         detectNpmGlobalInstall: async () => ({ supported: false, ...unsupported }),
-        installMinicpaVersion: async () => {
+        executeMinicpaUpgrade: async () => {
           installCalled = true;
         },
       });
@@ -253,7 +249,7 @@ describe("runUpgrade", () => {
     assert.equal(lockCalled, false);
 
     const updateDeps = upgradeDeps({
-      updateMinicpaVersion: async () => {
+      executeMinicpaUpgrade: async () => {
         throw new Error(
           "MiniCPA upgrade failed: npm exited with status 17.\nRetry manually with:\nnpm update -g @astralyn/minicpa",
         );
@@ -267,7 +263,7 @@ describe("runUpgrade", () => {
     );
 
     const forceDeps = upgradeDeps({
-      installMinicpaVersion: async () => {
+      executeMinicpaUpgrade: async () => {
         throw new Error(
           "MiniCPA upgrade failed: npm exited with status 17.\nRetry manually with:\nnpm install -g @astralyn/minicpa@1.1.0",
         );

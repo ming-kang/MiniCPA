@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import { activeExecutablePath, cpaLayout, ensureDir, unlockProbePath } from "../paths.js";
+import { cpaLayout, ensureDir } from "../paths.js";
 import { recentRuntimeLogs as dumpRecentLogs, runtimeLogFile } from "../runtime-logs.js";
 import { clearPid, readPidRecord, writePidRecord } from "../state.js";
 import { sleep } from "../util.js";
@@ -9,21 +9,14 @@ import { buildCredentialSafeChildEnv } from "./child-env.js";
 import { readinessUrls, waitForAnyHttpOk } from "./health.js";
 import {
   inspectProcessIdentity,
-  startMarkersProveReuse,
-  startMarkersProveIdentity,
+  compareStartMarkers,
   readProcessStartMarker,
 } from "./pid-identity.js";
-import {
-  findRunnableExecutable,
-  recoverUnlockProbeBinary,
-  resolveRunnableExecutable,
-} from "./runtime.js";
+import { findRunnableExecutable, resolveRunnableExecutable } from "./runtime.js";
 
 const DEFAULT_READY_MS = 15_000;
 const STOP_GRACE_MS = 5_000;
 const STOP_KILL_WAIT_MS = 5_000;
-/** Windows antivirus / explorer can hold the exe briefly after stop. */
-const FILE_UNLOCK_WAIT_MS = 30_000;
 
 export type RunningInfo = {
   pid: number;
@@ -37,7 +30,7 @@ export type RunningInfo = {
  * Shared implementation behind resolveRunning and inspectRunning.
  *
  * With `repair` the instance home is healed as a side effect (stale pid records
- * are deleted, a crash-orphaned `.bak`/`.unlock-probe` binary is restored);
+ * are deleted and an interrupted transaction's `.bak` binary is restored);
  * without it nothing on disk is touched, so unlocked read-only commands cannot
  * race a lock-holding `cpa update` over the binary it is replacing.
  */
@@ -62,12 +55,8 @@ async function evaluateRunning(home: string, repair: boolean): Promise<RunningIn
   }
 
   const { currentMarker, identity } = await inspectProcessIdentity(record.pid, exe);
-  if (startMarkersProveReuse(record.startMarker, currentMarker)) {
-    if (repair) clearPid(home);
-    return undefined;
-  }
-  const markerVerified = startMarkersProveIdentity(record.startMarker, currentMarker);
-  if (identity === "mismatch") {
+  const marker = compareStartMarkers(record.startMarker, currentMarker);
+  if (marker === "reused" || identity === "mismatch") {
     if (repair) clearPid(home);
     return undefined;
   }
@@ -79,7 +68,7 @@ async function evaluateRunning(home: string, repair: boolean): Promise<RunningIn
   // instant) cannot prove identity, so when the executable probe is unknown we fail
   // closed to prevent terminating an unverified PID.
   const markerDegraded = !!record.startMarker && !currentMarker;
-  const identityUnknown = identity === "unknown" ? !markerVerified : markerDegraded;
+  const identityUnknown = identity === "unknown" ? marker !== "same" : markerDegraded;
 
   return {
     pid: record.pid,
@@ -116,18 +105,31 @@ async function runTaskkill(pid: number, force: boolean): Promise<boolean> {
   });
 }
 
+/** Send one platform-specific termination request; false means the graceful request failed. */
+async function signalProcess(pid: number, force: boolean): Promise<boolean> {
+  if (process.platform === "win32") return runTaskkill(pid, force);
+  try {
+    process.kill(pid, force ? "SIGKILL" : "SIGTERM");
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    return false;
+  }
+}
+
+async function waitForProcessExit(
+  pid: number,
+  timeoutMs: number,
+  intervalMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && isProcessAlive(pid)) await sleep(intervalMs);
+}
+
 /** Best-effort termination of a child MiniCPA can no longer keep track of. */
 async function killUntrackedChild(pid: number): Promise<void> {
-  if (process.platform === "win32") {
-    try {
-      await runTaskkill(pid, true);
-    } catch {
-      /* the caller is already failing; report the original cause */
-    }
-    return;
-  }
   try {
-    process.kill(pid, "SIGKILL");
+    await signalProcess(pid, true);
   } catch {
     /* the caller is already failing; report the original cause */
   }
@@ -144,46 +146,6 @@ async function assertSafeToStop(home: string, pid: number): Promise<void> {
   }
 }
 
-/** Wait until the active binary is free for replace (Windows file locks). */
-export async function waitForBinaryUnlocked(
-  home: string,
-  timeoutMs = FILE_UNLOCK_WAIT_MS,
-): Promise<void> {
-  recoverUnlockProbeBinary(home);
-  const target = activeExecutablePath(home);
-  if (!fs.existsSync(target)) return;
-  const deadline = Date.now() + timeoutMs;
-  let delay = 150;
-  while (Date.now() < deadline) {
-    recoverUnlockProbeBinary(home);
-    const probe = unlockProbePath(home);
-    try {
-      fs.renameSync(target, probe);
-      try {
-        fs.renameSync(probe, target);
-        return;
-      } catch (secondErr) {
-        // Always try to put the binary back under the canonical name.
-        try {
-          if (fs.existsSync(probe) && !fs.existsSync(target)) {
-            fs.renameSync(probe, target);
-          }
-        } catch {
-          /* leave recovery to recoverUnlockProbeBinary */
-        }
-        throw secondErr;
-      }
-    } catch {
-      await sleep(delay);
-      delay = Math.min(1_000, Math.floor(delay * 1.5));
-    }
-  }
-  recoverUnlockProbeBinary(home);
-  throw new Error(
-    `CLIProxyAPI binary is still locked after ${timeoutMs}ms: ${target}. Close programs using it and retry.`,
-  );
-}
-
 export type StartOptions = {
   /** Skip waiting for HTTP ready (default false). */
   noWait?: boolean;
@@ -192,7 +154,6 @@ export type StartOptions = {
 };
 
 export async function startDaemon(home: string, options?: StartOptions): Promise<RunningInfo> {
-  recoverUnlockProbeBinary(home);
   const layout = cpaLayout(home);
   const urls = options?.noWait ? [] : readinessUrls();
 
@@ -303,46 +264,14 @@ export async function stopDaemon(home: string): Promise<boolean> {
   // Verify ownership immediately before sending any signal (graceful or force).
   await assertSafeToStop(home, pid);
 
-  if (process.platform === "win32") {
-    // Graceful taskkill (no /F) cannot signal windowless detached children;
-    // when it reports failure, skip the grace wait and force-kill directly.
-    const graceful = await runTaskkill(pid, false);
-    if (graceful) {
-      const deadline = Date.now() + STOP_GRACE_MS;
-      while (Date.now() < deadline && isProcessAlive(pid)) {
-        await sleep(200);
-      }
-    }
-    if (isProcessAlive(pid)) {
-      await assertSafeToStop(home, pid);
-      await runTaskkill(pid, true);
-      const hardDeadline = Date.now() + STOP_KILL_WAIT_MS;
-      while (Date.now() < hardDeadline && isProcessAlive(pid)) {
-        await sleep(100);
-      }
-    }
-  } else {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ESRCH") throw err;
-    }
-    const deadline = Date.now() + STOP_GRACE_MS;
-    while (Date.now() < deadline && isProcessAlive(pid)) {
-      await sleep(200);
-    }
-    if (isProcessAlive(pid)) {
-      await assertSafeToStop(home, pid);
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== "ESRCH") throw err;
-      }
-      const hardDeadline = Date.now() + STOP_KILL_WAIT_MS;
-      while (Date.now() < hardDeadline && isProcessAlive(pid)) {
-        await sleep(100);
-      }
-    }
+  // A failed graceful taskkill cannot signal a windowless child; skip its grace wait.
+  if (await signalProcess(pid, false)) {
+    await waitForProcessExit(pid, STOP_GRACE_MS, 200);
+  }
+  if (isProcessAlive(pid)) {
+    await assertSafeToStop(home, pid);
+    await signalProcess(pid, true);
+    await waitForProcessExit(pid, STOP_KILL_WAIT_MS, 100);
   }
 
   if (isProcessAlive(pid)) {
@@ -351,8 +280,7 @@ export async function stopDaemon(home: string): Promise<boolean> {
     );
   }
 
-  // Plain stop is done once the process is dead. Only the update path needs the
-  // binary file to be unlocked (it calls waitForBinaryUnlocked itself).
+  // Stop finishes when the process is dead; updates handle their actual rename failures.
   clearPid(home);
   return true;
 }

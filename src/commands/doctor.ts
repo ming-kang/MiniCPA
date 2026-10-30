@@ -6,16 +6,11 @@ import { createContext, printHome } from "../context.js";
 import { writeFileAtomic } from "../fs-atomic.js";
 import { describeProxyEnv, hasProxyEnvConfigured } from "../http.js";
 import { readLastMiniCpaEvent, type MiniCpaEvent } from "../minicpa-log.js";
-import {
-  activeExecutablePath,
-  backupExecutablePath,
-  miniCpaTempRoot,
-  unlockProbePath,
-} from "../paths.js";
+import { activeExecutablePath, backupExecutablePath, miniCpaTempRoot } from "../paths.js";
 import { inspectAutostartState, type AutostartState } from "../process/autostart.js";
 import { readinessUrls, waitForFirstHttpOk } from "../process/health.js";
 import { inspectRunning } from "../process/lifecycle.js";
-import { inspectMiniCpaLock, listLockPreemptResidue } from "../process/lock.js";
+import { inspectMiniCpaLock } from "../process/lock.js";
 import { inspectRuntimeInstallation } from "../process/runtime.js";
 import { checkGithubReachability, type GithubReachability } from "../update/github-client.js";
 import { runtimeLogDirectory, runtimeLogFile } from "../runtime-logs.js";
@@ -238,25 +233,6 @@ export async function runDoctor(deps?: DoctorDeps, options?: { deep?: boolean })
     );
   }
 
-  const unlockProbe = unlockProbePath(ctx.home);
-  if (fs.existsSync(unlockProbe)) {
-    console.log(
-      `[warn] unlock-probe residue present (${unlockProbe}) — run cpa start to recover or rename to the active binary`,
-    );
-  }
-
-  try {
-    for (const entry of fs.readdirSync(ctx.layout.stateDir)) {
-      if (entry.endsWith(".replace.bak")) {
-        console.log(
-          `[warn] atomic-write backup residue in state dir (${entry}) — recovered automatically on next write`,
-        );
-      }
-    }
-  } catch {
-    /* state dir may not exist yet */
-  }
-
   const tempRoot = miniCpaTempRoot();
   if (options?.deep) {
     const tempSize = directorySizeBytes(tempRoot);
@@ -270,28 +246,20 @@ export async function runDoctor(deps?: DoctorDeps, options?: { deep?: boolean })
     );
   }
 
-  // Both leases are diagnostics only; preparation need not block start/stop.
+  // Inspect metadata only; kernel leases, not these records, own exclusion.
   for (const [scope, label] of [
     ["lifecycle", "MiniCPA"],
     ["update", "Update preparation"],
   ] as const) {
     const lock = inspectMiniCpaLock(scope);
-    if (lock.state === "held") {
-      const holderGone =
-        lock.holderAlive === false
-          ? " (holder process is NOT alive — safe to delete this file)"
-          : "";
+    if (lock.state === "record") {
+      const processNote = lock.holderAlive ? "" : " (recorded process exited)";
       console.log(
-        `[warn] ${label} lock held by PID=${lock.pid} (cpa ${lock.command}) since ${lock.acquiredAt || "unknown"} — ${lock.path}${holderGone}`,
+        `[info] ${label} lock record PID=${lock.pid} (cpa ${lock.command}) since ${lock.acquiredAt} — ${lock.path}${processNote}`,
       );
     } else if (lock.state === "unreadable") {
-      console.log(`[warn] ${label} lock file unreadable: ${lock.path}`);
+      console.log(`[warn] ${label} lock record unreadable: ${lock.path}`);
     }
-  }
-  for (const residue of listLockPreemptResidue()) {
-    console.log(
-      `[warn] lock preempt residue (${residue}) — safe to delete when no cpa command is running`,
-    );
   }
 
   const running = await inspectRunning(ctx.home);

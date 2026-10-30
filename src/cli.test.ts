@@ -110,7 +110,7 @@ describe("cli smoke", () => {
       stdout,
       /^ {2}auto \[mode\]\s+Toggle or set CLIProxyAPI autostart for the current user$/m,
     );
-    assert.match(stdout, /^ {2}web\s+Open the web management panel$/m);
+    assert.match(stdout, /^ {2}web\s+Print and open the Web panel URL$/m);
     assert.match(stdout, /^ {2}tui\s+Open the CLIProxyAPI terminal UI$/m);
   });
 
@@ -133,8 +133,8 @@ describe("cli smoke", () => {
     assert.equal(open.status, 0);
     assert.match(web.stdout, /Usage: cpa web/);
     assert.match(open.stdout, /Usage: cpa open/);
-    assert.match(web.stdout, /Open the web management panel/);
-    assert.match(open.stdout, /Open the web management panel/);
+    assert.match(web.stdout, /Print and open the Web panel URL/);
+    assert.match(open.stdout, /Print and open the Web panel URL/);
   });
 
   it("keeps hidden maintenance commands callable", () => {

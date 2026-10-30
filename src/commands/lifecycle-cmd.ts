@@ -4,13 +4,7 @@ import { createContext, printHome } from "../context.js";
 import { describeDownloadRoute } from "../http.js";
 import { recordMiniCpaEvent } from "../minicpa-log.js";
 import { inspectAutostartState, type AutostartState } from "../process/autostart.js";
-import {
-  apiBaseUrl,
-  managementUrl,
-  readinessUrls,
-  waitForAnyHttpOk,
-  waitForHttpOk,
-} from "../process/health.js";
+import { apiBaseUrl, managementUrl, readinessUrls, waitForAnyHttpOk } from "../process/health.js";
 import { inspectRunning, startDaemon, stopDaemon, type RunningInfo } from "../process/lifecycle.js";
 import { withMiniCpaLock } from "../process/lock.js";
 import {
@@ -136,31 +130,12 @@ function missingBrowserCommand(err: unknown): string | undefined {
   return undefined;
 }
 
+/** Open the explicit panel URL directly; CPA and the browser own loading and reachability. */
 export async function runOpen(deps?: {
   openInBrowser?: (url: string) => Promise<void>;
-  /** Test seams; production waits long enough for CLIProxyAPI's first panel download. */
-  initialPanelWaitMs?: number;
-  serverWaitMs?: number;
-  panelBootstrapWaitMs?: number;
 }): Promise<void> {
   createContext();
   const url = managementUrl();
-  let ok = await waitForHttpOk(url, deps?.initialPanelWaitMs ?? 3000);
-  if (!ok) {
-    // The first request can trigger CLIProxyAPI's own management.html download,
-    // which current upstream detaches from the client request. Distinguish an
-    // offline server quickly, then give that download its full HTTP budget.
-    const serverUp = await waitForHttpOk(`${apiBaseUrl()}/`, deps?.serverWaitMs ?? 2000);
-    if (!serverUp) {
-      throw new Error(`CLIProxyAPI is not reachable at ${url}. Run: cpa start`);
-    }
-    ok = await waitForHttpOk(url, deps?.panelBootstrapWaitMs ?? 35_000);
-    if (!ok) {
-      throw new Error(
-        `Web management panel is unavailable at ${url}. CLIProxyAPI manages this asset; check: cpa logs`,
-      );
-    }
-  }
   // Print before launching: the URL is the useful output even when no browser
   // can be started.
   console.log(url);
@@ -185,8 +160,8 @@ export type TuiDeps = {
  *
  * `cpa tui` holds no MiniCPA lock, so every step here is a read: it resolves the
  * executable with inspectRunnableExecutable instead of the repairing
- * resolveRunnableExecutable, which would rename a crashed unlock probe or copy
- * `.bak` over the very binary a lock-holding `cpa update` is replacing.
+ * resolveRunnableExecutable, which could restore `.bak` over the binary a
+ * lock-holding `cpa update` is replacing.
  */
 export async function runTui(deps?: TuiDeps): Promise<void> {
   const ctx = createContext();

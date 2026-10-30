@@ -5,7 +5,7 @@ import {
   type MinicpaVersionStatus,
 } from "../update/minicpa-release.js";
 import { detectNpmGlobalInstall } from "../update/npm-global-detection.js";
-import { installMinicpaVersion, updateMinicpaVersion } from "../update/self-upgrade.js";
+import { executeMinicpaUpgrade } from "../update/self-upgrade.js";
 
 export type UpgradeCheckDeps = {
   fetchLatestMinicpaVersion: typeof fetchLatestMinicpaVersion;
@@ -14,8 +14,7 @@ export type UpgradeCheckDeps = {
 
 export type UpgradeDeps = UpgradeCheckDeps & {
   detectNpmGlobalInstall: typeof detectNpmGlobalInstall;
-  installMinicpaVersion: typeof installMinicpaVersion;
-  updateMinicpaVersion: typeof updateMinicpaVersion;
+  executeMinicpaUpgrade: typeof executeMinicpaUpgrade;
   withMiniCpaLock: typeof withMiniCpaLock;
   withMiniCpaUpdateLock: typeof withMiniCpaUpdateLock;
 };
@@ -28,8 +27,7 @@ const realUpgradeCheckDeps: UpgradeCheckDeps = {
 const realUpgradeDeps: UpgradeDeps = {
   ...realUpgradeCheckDeps,
   detectNpmGlobalInstall,
-  installMinicpaVersion,
-  updateMinicpaVersion,
+  executeMinicpaUpgrade,
   withMiniCpaLock,
   withMiniCpaUpdateLock,
 };
@@ -103,13 +101,12 @@ export async function runUpgrade(
         );
       }
 
-      if (opts.force) {
-        console.log(`Reinstalling MiniCPA ${latestVersion} with npm…`);
-        await deps.installMinicpaVersion(detection, latestVersion);
-      } else {
-        console.log("Upgrading MiniCPA with npm…");
-        await deps.updateMinicpaVersion(detection, latestVersion);
-      }
+      console.log(
+        opts.force
+          ? `Reinstalling MiniCPA ${latestVersion} with npm…`
+          : "Upgrading MiniCPA with npm…",
+      );
+      await deps.executeMinicpaUpgrade(detection, latestVersion, opts.force ? "install" : "update");
     }),
   );
 

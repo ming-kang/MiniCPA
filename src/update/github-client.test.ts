@@ -11,11 +11,12 @@ import { withHttpFixture } from "../test-fixtures/http-server.js";
 // the first httpFetch call so the lazily created proxy agent honors it.
 process.env.NO_PROXY = "127.0.0.1";
 process.env.no_proxy = "127.0.0.1";
-import { NetworkError } from "../http.js";
+import { HttpStatusError, NetworkError } from "../http.js";
 import {
   browserReleaseAssetUrl,
   checkGithubReachability,
   ensureReleaseTag,
+  fetchLatestRelease,
   fetchLatestReleaseViaApi,
   githubAuthToken,
   githubHeaders,
@@ -26,7 +27,6 @@ import {
   parseReleaseTagFromLocation,
   releaseAssetDownloadUrl,
   resolveLatestReleaseTag,
-  type GhRelease,
 } from "./github-client.js";
 
 const tempDirs: string[] = [];
@@ -163,7 +163,13 @@ describe("githubHeaders", () => {
 
 describe("fetchLatestReleaseViaApi", () => {
   it("rejects non-release JSON bodies with an actionable message", async () => {
-    for (const body of ["{}", "[]", "null"]) {
+    for (const body of [
+      "{}",
+      "[]",
+      "null",
+      '{"tag_name":"v7.2.92"}',
+      '{"tag_name":"v7.2.92","assets":null}',
+    ]) {
       await withHttpFixture(
         {
           "/repos/owner/repo/releases/latest": (_req, res) => {
@@ -198,7 +204,32 @@ describe("fetchLatestReleaseViaApi", () => {
       async (baseUrl) => {
         await assert.rejects(
           () => fetchLatestReleaseViaApi("owner/repo", baseUrl),
-          /GitHub metadata.*size limit/,
+          (err: unknown) => {
+            assert.ok(err instanceof RangeError);
+            assert.match(err.message, /GitHub metadata.*size limit/);
+            return true;
+          },
+        );
+      },
+    );
+  });
+
+  it("throws HttpStatusError on non-2xx API response", async () => {
+    await withHttpFixture(
+      {
+        "/repos/owner/repo/releases/latest": (_req, res) => {
+          res.statusCode = 403;
+          res.end("rate limited");
+        },
+      },
+      async (baseUrl) => {
+        await assert.rejects(
+          () => fetchLatestReleaseViaApi("owner/repo", baseUrl),
+          (err: unknown) => {
+            assert.ok(err instanceof HttpStatusError);
+            assert.equal(err.status, 403);
+            return true;
+          },
         );
       },
     );
@@ -228,8 +259,63 @@ describe("fetchLatestReleaseViaApi", () => {
       },
       async (baseUrl) => {
         const release = await fetchLatestReleaseViaApi("owner/repo", baseUrl);
-        assert.equal(release.tag_name, "v7.2.92");
-        assert.equal(release.assets[0]?.name, "a.zip");
+        assert.equal(release.tag, "v7.2.92");
+        assert.equal(release.assets?.get("a.zip")?.name, "a.zip");
+        assert.deepEqual(Object.keys(release), ["tag", "assets"]);
+      },
+    );
+  });
+
+  it("keeps the first matching asset when API metadata repeats a name", async () => {
+    const first = "https://github.com/owner/repo/releases/download/v7.2.92/first.zip";
+    await withHttpFixture(
+      {
+        "/repos/owner/repo/releases/latest": (_req, res) =>
+          res.end(
+            JSON.stringify({
+              tag_name: "v7.2.92",
+              assets: [
+                { name: "a.zip", browser_download_url: first },
+                {
+                  name: "a.zip",
+                  browser_download_url:
+                    "https://github.com/owner/repo/releases/download/v7.2.92/second.zip",
+                },
+              ],
+            }),
+          ),
+      },
+      async (baseUrl) => {
+        const release = await fetchLatestReleaseViaApi("owner/repo", baseUrl);
+        assert.equal(release.assets?.size, 1);
+        assert.equal(release.assets?.get("a.zip")?.browser_download_url, first);
+      },
+    );
+  });
+
+  it("rejects untrusted API asset URLs even when the browser URL is trusted", async () => {
+    await withHttpFixture(
+      {
+        "/repos/owner/repo/releases/latest": (_req, res) =>
+          res.end(
+            JSON.stringify({
+              tag_name: "v7.2.92",
+              assets: [
+                {
+                  name: "a.zip",
+                  browser_download_url:
+                    "https://github.com/owner/repo/releases/download/v7.2.92/a.zip",
+                  url: "https://evil.example/releases/assets/42",
+                },
+              ],
+            }),
+          ),
+      },
+      async (baseUrl) => {
+        await assert.rejects(
+          () => fetchLatestReleaseViaApi("owner/repo", baseUrl),
+          /untrusted asset API URL/,
+        );
       },
     );
   });
@@ -256,6 +342,48 @@ describe("fetchLatestReleaseViaApi", () => {
           /untrusted download URL/,
         );
       },
+    );
+  });
+});
+
+describe("fetchLatestRelease", () => {
+  it("discovers only a tag on the public path, without generating any assets", async () => {
+    const release = await fetchLatestRelease("owner/repo", {
+      resolveLatestReleaseTag: async (repo) => {
+        assert.equal(repo, "owner/repo");
+        return "v7.2.92";
+      },
+      fetchLatestReleaseViaApi: async () => assert.fail("public discovery must not use the API"),
+    });
+    assert.deepEqual(release, { tag: "v7.2.92" });
+  });
+
+  it("retains the real API asset lookup when public discovery fails", async () => {
+    const api = { tag: "v7.2.92", assets: new Map() };
+    const release = await fetchLatestRelease("owner/repo", {
+      resolveLatestReleaseTag: async () => {
+        throw new Error("browser unavailable");
+      },
+      fetchLatestReleaseViaApi: async (repo) => {
+        assert.equal(repo, "owner/repo");
+        return api;
+      },
+    });
+    assert.equal(release, api);
+  });
+
+  it("reports both failures when neither discovery route works", async () => {
+    await assert.rejects(
+      () =>
+        fetchLatestRelease("owner/repo", {
+          resolveLatestReleaseTag: async () => {
+            throw new Error("browser unavailable");
+          },
+          fetchLatestReleaseViaApi: async () => {
+            throw new HttpStatusError(403, "API rate limited");
+          },
+        }),
+      /Browser path: browser unavailable\nAPI fallback: API rate limited/,
     );
   });
 });
@@ -354,9 +482,39 @@ describe("downloadToFile", () => {
     const dest = path.join(dir, "payload.bin");
     await assert.rejects(
       () => downloadToFile("data:application/octet-stream,hello", dest, { maxBytes: 4 }),
-      /exceeds 4 B limit/,
+      (err: unknown) => {
+        assert.ok(err instanceof RangeError);
+        assert.match(err.message, /exceeds 4 B limit/);
+        return true;
+      },
     );
     assert.equal(fs.existsSync(dest), false);
+  });
+
+  it("throws HttpStatusError with status on non-2xx response", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-download-"));
+    tempDirs.push(dir);
+    const dest = path.join(dir, "payload.bin");
+    await withHttpFixture(
+      {
+        "/missing.bin": (_req, res) => {
+          res.statusCode = 404;
+          res.end();
+        },
+      },
+      async (baseUrl) => {
+        await assert.rejects(
+          () => downloadToFile(`${baseUrl}/missing.bin`, dest),
+          (err: unknown) => {
+            assert.ok(err instanceof HttpStatusError);
+            assert.equal(err.status, 404);
+            assert.match(err.message, /Download failed 404/);
+            return true;
+          },
+        );
+        assert.equal(fs.existsSync(dest), false);
+      },
+    );
   });
 
   it("reports a mid-stream connection failure as an enriched NetworkError", async () => {
@@ -491,15 +649,6 @@ describe("resolveLatestReleaseTag", () => {
 });
 
 describe("fetchChecksums", () => {
-  function releaseWithChecksums(url: string): GhRelease {
-    return {
-      tag_name: "v7.0.0",
-      name: "v7.0.0",
-      published_at: "",
-      assets: [{ name: "checksums.txt", browser_download_url: url }],
-    };
-  }
-
   it("downloads and parses checksums end-to-end", async () => {
     const sum = "a".repeat(64);
     await withHttpFixture(
@@ -510,10 +659,7 @@ describe("fetchChecksums", () => {
         },
       },
       async (baseUrl) => {
-        const map = await fetchChecksums(
-          releaseWithChecksums(`${baseUrl}/checksums.txt`),
-          "owner/repo",
-        );
+        const map = await fetchChecksums(`${baseUrl}/checksums.txt`);
         assert.equal(map.get("CLIProxyAPI_7.0.0_windows_amd64.zip"), sum);
       },
     );
@@ -529,8 +675,12 @@ describe("fetchChecksums", () => {
       },
       async (baseUrl) => {
         await assert.rejects(
-          () => fetchChecksums(releaseWithChecksums(`${baseUrl}/checksums.txt`), "owner/repo"),
-          /checksums.txt.*size limit/,
+          () => fetchChecksums(`${baseUrl}/checksums.txt`),
+          (err: unknown) => {
+            assert.ok(err instanceof RangeError);
+            assert.match(err.message, /checksums\.txt.*size limit/);
+            return true;
+          },
         );
       },
     );
@@ -546,8 +696,13 @@ describe("fetchChecksums", () => {
       },
       async (baseUrl) => {
         await assert.rejects(
-          () => fetchChecksums(releaseWithChecksums(`${baseUrl}/checksums.txt`), "owner/repo"),
-          /Failed to download checksums\.txt \(HTTP 404\)/,
+          () => fetchChecksums(`${baseUrl}/checksums.txt`),
+          (err: unknown) => {
+            assert.ok(err instanceof HttpStatusError);
+            assert.equal(err.status, 404);
+            assert.match(err.message, /Failed to download checksums\.txt \(HTTP 404\)/);
+            return true;
+          },
         );
       },
     );
@@ -563,7 +718,7 @@ describe("fetchChecksums", () => {
       },
       async (baseUrl) => {
         await assert.rejects(
-          () => fetchChecksums(releaseWithChecksums(`${baseUrl}/checksums.txt`), "owner/repo"),
+          () => fetchChecksums(`${baseUrl}/checksums.txt`),
           /empty or unparseable/,
         );
       },
@@ -637,14 +792,28 @@ describe("releaseAssetDownloadUrl", () => {
     );
   });
 
-  it("rejects an off-platform browser URL with no API fallback", () => {
-    assert.throws(
-      () =>
-        releaseAssetDownloadUrl("owner/repo", {
-          name: "a.zip",
-          browser_download_url: "https://evil.example/a.zip",
-        }),
-      /untrusted host/,
+  it("accepts a trusted API endpoint supplied as the browser field without an asset id", () => {
+    const url = "https://api.github.com/repos/owner/repo/releases/assets/42";
+    assert.equal(
+      releaseAssetDownloadUrl("owner/repo", { name: "a.zip", browser_download_url: url }),
+      url,
     );
+  });
+
+  it("rejects untrusted and test-loopback browser URLs with no API fallback", () => {
+    for (const url of [
+      "https://evil.example/a.zip",
+      "http://127.0.0.1/a.zip",
+      "https://localhost/a.zip",
+    ]) {
+      assert.throws(
+        () =>
+          releaseAssetDownloadUrl("owner/repo", {
+            name: "a.zip",
+            browser_download_url: url,
+          }),
+        /untrusted host/,
+      );
+    }
   });
 });

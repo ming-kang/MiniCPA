@@ -12,27 +12,6 @@ export function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** Read at most one bounded private text file; reject growth beyond the budget as well. */
-export function readTextFileBounded(file: string, maxBytes: number): string {
-  const fd = fs.openSync(file, "r");
-  const chunks: Buffer[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes - total + 1));
-      const count = fs.readSync(fd, chunk, 0, chunk.length, null);
-      if (count === 0) break;
-      total += count;
-      if (total > maxBytes)
-        throw new Error(`${file} exceeds the ${formatBytes(maxBytes)} size limit`);
-      chunks.push(chunk.subarray(0, count));
-    }
-  } finally {
-    fs.closeSync(fd);
-  }
-  return Buffer.concat(chunks, total).toString("utf8");
-}
-
 /** Recursive size of files under dir (symlinks ignored / best-effort). */
 export function directorySizeBytes(dir: string): number {
   if (!fs.existsSync(dir)) return 0;
@@ -69,42 +48,11 @@ export function isExactSemver(version: string): boolean {
   return EXACT_SEMVER_REGEX.test(version);
 }
 
-/**
- * If `file` is at least maxBytes, rotate to file.1 .. file.keep (drop oldest).
- * Returns true when a rotation happened.
- */
-export function rotateFileIfLarge(
-  file: string,
-  options?: { maxBytes?: number; keep?: number },
-): boolean {
+/** Rotate to one generation, replacing .1 only when the rename succeeds. */
+export function rotateFileIfLarge(file: string, options?: { maxBytes?: number }): boolean {
   const maxBytes = options?.maxBytes ?? MINICPA_LOG_ROTATE_BYTES;
-  const keep = options?.keep ?? 1;
-  if (keep < 1 || maxBytes < 1) return false;
-  if (!fs.existsSync(file)) return false;
-
-  let size: number;
   try {
-    size = fs.statSync(file).size;
-  } catch {
-    return false;
-  }
-  if (size < maxBytes) return false;
-
-  tryUnlink(`${file}.${keep}`);
-  for (let i = keep - 1; i >= 1; i--) {
-    const from = `${file}.${i}`;
-    const to = `${file}.${i + 1}`;
-    if (!fs.existsSync(from)) continue;
-    try {
-      fs.renameSync(from, to);
-    } catch {
-      // Leave the un-moved sibling in place: never delete a rotated log just
-      // because it could not be shifted. rename() replaces the destination on
-      // both POSIX and Windows (MOVEFILE_REPLACE_EXISTING), so the next
-      // rotation simply overwrites this generation.
-    }
-  }
-  try {
+    if (maxBytes < 1 || fs.statSync(file).size < maxBytes) return false;
     fs.renameSync(file, `${file}.1`);
     return true;
   } catch {
@@ -126,12 +74,12 @@ export function rotateFileIfLarge(
 export function appendPrivateLogLine(
   file: string,
   line: string,
-  options?: { maxBytes?: number; keep?: number },
+  options?: { maxBytes?: number },
 ): boolean {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     const maxBytes = options?.maxBytes ?? MINICPA_LOG_ROTATE_BYTES;
-    const rotated = rotateFileIfLarge(file, { maxBytes, keep: options?.keep ?? 1 });
+    const rotated = rotateFileIfLarge(file, { maxBytes });
     if (!rotated && fs.existsSync(file) && fs.statSync(file).size >= maxBytes) {
       // A blocked rename must not turn best-effort event logging into an
       // unlimited append-only file. Keep the old record and drop this one.
@@ -185,27 +133,6 @@ export function tailFile(file: string, maxLines = 40, maxBytes = 8 * 1024 * 1024
   // one so it does not consume a slot of the requested line budget.
   if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
   return lines.slice(-maxLines).join("\n").trimEnd();
-}
-
-function tryUnlink(file: string): void {
-  try {
-    if (fs.existsSync(file)) fs.unlinkSync(file);
-  } catch {
-    /* ignore */
-  }
-}
-
-/**
- * Remove a directory tree without letting cleanup failures mask a caller's
- * result (Windows AV can hold fresh files with EBUSY/EPERM).
- */
-export function removeDirBestEffort(dir: string, warn?: (message: string) => void): void {
-  try {
-    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    warn?.(`Warning: could not remove temporary directory ${dir}: ${message}`);
-  }
 }
 
 export async function sha256File(file: string): Promise<string> {

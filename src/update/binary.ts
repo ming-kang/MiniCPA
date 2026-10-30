@@ -1,4 +1,5 @@
 import path from "node:path";
+import { HttpStatusError } from "../http.js";
 import { miniCpaTempOperationDir } from "../paths.js";
 import { withMiniCpaLock, withMiniCpaUpdateLock } from "../process/lock.js";
 import {
@@ -22,10 +23,9 @@ import { fetchChecksums } from "./checksum.js";
 import {
   CPA_REPO,
   cpaAssetNameCandidates,
-  cpaReleaseAssetNames,
   fetchCpaReleaseByTag,
-  listReleaseAssetCandidates,
-  type PickedReleaseAsset,
+  resolveCpaRelease,
+  type CpaReleaseAsset,
 } from "./cpa-release.js";
 import { downloadToFile } from "./download.js";
 import { fetchLatestRelease, normalizeTagVersion } from "./github-client.js";
@@ -74,8 +74,8 @@ export async function checkBinaryUpdate(
   deps: BinaryCheckDeps = { fetchLatestRelease },
 ): Promise<{ current?: string; latest: string; upToDate: boolean }> {
   const current = recordedVersion(home);
-  const release = await deps.fetchLatestRelease(CPA_REPO, cpaReleaseAssetNames);
-  const latest = normalizeTagVersion(release.tag_name);
+  const release = await deps.fetchLatestRelease(CPA_REPO);
+  const latest = normalizeTagVersion(release.tag);
   return { current, latest, upToDate: !!current && current === latest };
 }
 
@@ -95,12 +95,12 @@ export type BinaryPrepareDeps = {
 };
 
 async function downloadFirstAvailableAsset(
-  candidates: PickedReleaseAsset[],
+  candidates: CpaReleaseAsset[],
   downloadDir: string,
   reporter: UpdateReporter,
   download: typeof downloadToFile,
-): Promise<{ picked: PickedReleaseAsset; archivePath: string }> {
-  let lastError: Error | undefined;
+): Promise<{ picked: CpaReleaseAsset; archivePath: string }> {
+  let lastError: HttpStatusError | undefined;
   for (const picked of candidates) {
     const archivePath = path.join(downloadDir, picked.assetName);
     try {
@@ -111,11 +111,12 @@ async function downloadFirstAvailableAsset(
       });
       return { picked, archivePath };
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      if (!/Download failed 404/i.test(lastError.message)) throw lastError;
+      if (!(error instanceof HttpStatusError) || error.status !== 404) throw error;
+      lastError = error;
     }
   }
-  throw lastError ?? new Error("No release asset candidates for this platform");
+  // The caller has already rejected an empty candidate list.
+  throw lastError;
 }
 
 /**
@@ -149,27 +150,32 @@ export async function updateBinary(
     const cleanup = await cleanupTempFiles({ maxEntries: 32 });
     for (const failure of cleanup.failures) reporter.warn(`Warning: could not remove ${failure}`);
     const initialVersion = recordedVersion(home);
-    const release = options?.version
+    const discovered = options?.version
       ? await deps.fetchCpaReleaseByTag(options.version)
-      : await deps.fetchLatestRelease(CPA_REPO, cpaReleaseAssetNames);
-    const version = normalizeTagVersion(release.tag_name);
+      : await deps.fetchLatestRelease(CPA_REPO);
+    const targetVersion = normalizeTagVersion(discovered.tag);
     const maySkip = !options?.version && !options?.force;
 
     // The normal already-current path downloads nothing. If a recovered/changed
     // binary differs, release the lifecycle lock before preparing its replacement.
-    if (maySkip && initialVersion === version) {
+    if (maySkip && initialVersion === targetVersion) {
       const skipped = await withMiniCpaLock("update", async () => {
         const current = await deps.readCurrentRuntimeVersion(home);
-        if (current !== version) return undefined;
-        return { version, previousVersion: current, skipped: true, restarted: false };
+        if (current !== targetVersion) return undefined;
+        return {
+          version: targetVersion,
+          previousVersion: current,
+          skipped: true,
+          restarted: false,
+        };
       });
       if (skipped) return skipped;
     }
 
-    const candidates = listReleaseAssetCandidates(release, process.platform, process.arch);
+    const { version, candidates, checksumUrl } = resolveCpaRelease(discovered);
     if (candidates.length === 0) {
       throw new Error(
-        `No release asset for ${process.platform}/${process.arch}. Tried: ${cpaAssetNameCandidates(release.tag_name, process.platform, process.arch).join(", ")}`,
+        `No release asset for ${process.platform}/${process.arch}. Tried: ${cpaAssetNameCandidates(version, process.platform, process.arch).join(", ")}`,
       );
     }
     const operation = miniCpaTempOperationDir();
@@ -183,7 +189,7 @@ export async function updateBinary(
       );
       if (!options?.insecure) {
         await verifyArchiveChecksum(
-          await deps.fetchChecksums(release, CPA_REPO),
+          await deps.fetchChecksums(checksumUrl),
           archivePath,
           picked.assetName,
         );
@@ -203,7 +209,6 @@ export async function updateBinary(
           home,
           {
             version,
-            extractedExe,
             wasRunning,
             currentVersion,
             transaction,

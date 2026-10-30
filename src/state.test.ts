@@ -3,13 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import {
-  patchInstallState,
-  readInstallState,
-  readPidRecord,
-  writeInstallState,
-  writePidRecord,
-} from "./state.js";
+import { readInstallState, readPidRecord, writeInstallState, writePidRecord } from "./state.js";
 
 const temps: string[] = [];
 
@@ -25,7 +19,7 @@ describe("readInstallState", () => {
     temps.push(home);
     assert.equal(fs.existsSync(home), false);
     const state = readInstallState(home);
-    assert.equal(state.cpaHome, home);
+    assert.deepEqual(state, {});
     assert.equal(fs.existsSync(home), false);
   });
 
@@ -35,36 +29,77 @@ describe("readInstallState", () => {
     writeInstallState(home, { runtimeVersion: "1.2.3" });
     assert.equal(readInstallState(home).runtimeVersion, "1.2.3");
   });
+
+  it("propagates malformed JSON instead of pretending the installation is unrecorded", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-state-"));
+    temps.push(home);
+    const file = path.join(home, "state", "install.json");
+    fs.mkdirSync(path.dirname(file));
+    fs.writeFileSync(file, "{not-json");
+    assert.throws(() => readInstallState(home), SyntaxError);
+    assert.equal(fs.readFileSync(file, "utf8"), "{not-json");
+  });
+
+  it("rejects invalid metadata shapes and non-string versions at the read boundary", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-state-"));
+    temps.push(home);
+    const file = path.join(home, "state", "install.json");
+    fs.mkdirSync(path.dirname(file));
+    for (const value of [
+      null,
+      [],
+      true,
+      42,
+      "1.0.0",
+      { runtimeVersion: 123 },
+      { runtimeVersion: null },
+    ]) {
+      const raw = JSON.stringify(value);
+      fs.writeFileSync(file, raw);
+      assert.throws(() => readInstallState(home), /MiniCPA install metadata/);
+      assert.equal(fs.readFileSync(file, "utf8"), raw);
+    }
+  });
+
+  it("reads only the current field without rewriting legacy metadata", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-state-"));
+    temps.push(home);
+    const file = path.join(home, "state", "install.json");
+    fs.mkdirSync(path.dirname(file));
+    const raw = JSON.stringify({
+      runtimeVersion: "1.0.0",
+      lastUpdateCheck: "old",
+      panelVersion: "2",
+    });
+    fs.writeFileSync(file, raw);
+    assert.deepEqual(readInstallState(home), { runtimeVersion: "1.0.0" });
+    assert.equal(fs.readFileSync(file, "utf8"), raw);
+  });
+
+  it("propagates non-ENOENT filesystem failures", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-state-"));
+    temps.push(home);
+    fs.mkdirSync(path.join(home, "state", "install.json"), { recursive: true });
+    assert.throws(
+      () => readInstallState(home),
+      (error: NodeJS.ErrnoException) => error.code === "EISDIR",
+    );
+  });
 });
 
-describe("patchInstallState", () => {
-  it("merges without touching absent keys", () => {
+describe("writeInstallState", () => {
+  it("writes a complete replacement rather than merging absent keys", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-state-"));
     temps.push(home);
-    writeInstallState(home, {
-      runtimeVersion: "1.0.0",
-      lastUpdateCheck: "2026-09-01T00:00:00.000Z",
-    });
-    patchInstallState(home, { runtimeVersion: "1.1.0" });
-    const state = readInstallState(home);
-    assert.equal(state.runtimeVersion, "1.1.0");
-    assert.equal(state.lastUpdateCheck, "2026-09-01T00:00:00.000Z");
+    writeInstallState(home, { runtimeVersion: "1.0.0" });
+    writeInstallState(home, { runtimeVersion: "1.1.0" });
+    assert.deepEqual(readInstallState(home), { runtimeVersion: "1.1.0" });
+
+    writeInstallState(home, {});
+    assert.deepEqual(readInstallState(home), {});
   });
 
-  it("clears a field when the patch sets it to undefined", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-state-"));
-    temps.push(home);
-    writeInstallState(home, {
-      runtimeVersion: "1.0.0",
-      lastUpdateCheck: "2026-09-01T00:00:00.000Z",
-    });
-    patchInstallState(home, { runtimeVersion: undefined });
-    const state = readInstallState(home);
-    assert.equal(state.runtimeVersion, undefined);
-    assert.equal(state.lastUpdateCheck, "2026-09-01T00:00:00.000Z");
-  });
-
-  it("drops legacy panel metadata on the next state write", () => {
+  it("writes only current metadata fields without retaining legacy home or panel data", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-state-"));
     temps.push(home);
     const stateDir = path.join(home, "state");
@@ -74,16 +109,17 @@ describe("patchInstallState", () => {
       `${JSON.stringify({
         cpaHome: home,
         runtimeVersion: "1.0.0",
+        lastUpdateCheck: "2026-09-01T00:00:00.000Z",
         panelVersion: "2.0.0",
         panelSha256: "a".repeat(64),
       })}\n`,
     );
 
-    patchInstallState(home, { runtimeVersion: "1.1.0" });
+    writeInstallState(home, { runtimeVersion: "1.1.0" });
 
-    const raw = fs.readFileSync(path.join(stateDir, "install.json"), "utf8");
-    assert.doesNotMatch(raw, /panelVersion|panelSha256/);
-    assert.equal(readInstallState(home).runtimeVersion, "1.1.0");
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(stateDir, "install.json"), "utf8")), {
+      runtimeVersion: "1.1.0",
+    });
   });
 });
 

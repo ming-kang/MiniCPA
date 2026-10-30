@@ -20,6 +20,10 @@ remote-management:
   disable-control-panel: false
   disable-auto-update-panel: false
   panel-github-repository: "https://github.com/seakee/CPA-Manager-Plus"
+
+logging-to-file: true
+logs-max-total-size-mb: 32
+error-logs-max-files: 10
 `;
 
 let env: ReturnType<typeof createIsolatedTestEnv> | undefined;
@@ -105,6 +109,17 @@ describe("runInit", () => {
       assert.equal(fs.readFileSync(file, "utf8"), `opaque user content ${index}\n`);
       assert.equal(fs.statSync(file).mode, modes[index]);
     }
+  });
+
+  it("does not migrate native logging settings in an existing config", async () => {
+    const layout = setup();
+    fs.mkdirSync(layout.home, { recursive: true });
+    const oldConfig =
+      "logging-to-file: false\nlogs-max-total-size-mb: 0\nerror-logs-max-files: 0\n";
+    fs.writeFileSync(layout.configFile, oldConfig);
+    await captureConsole(() => runInit(currentBinary));
+    assert.equal(fs.readFileSync(layout.configFile, "utf8"), oldConfig);
+    assert.equal(fs.existsSync(layout.logsDir), false);
   });
 
   it("preserves an existing empty or oversized config without validating it", async () => {

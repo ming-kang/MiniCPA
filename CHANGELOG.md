@@ -4,6 +4,30 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-10-30
+
+### Changed
+
+- Make the kernel lease the sole authority for locking; `<cpa root>/state/cpa.lock` is strictly a diagnostic record (PID, command, timestamp) without PID-reuse arbitration, empty-lock grace periods, retry loops, or lockfile preemption. Stale, empty, corrupt, or live-PID diagnostic files do not block an available lease.
+- Retain lifecycle and update split leases and async-scoped reentrancy; do not run different MiniCPA versions concurrently.
+- Replace separate 30-second binary unlock rename probes with direct installation renames using Windows retry backoff for transient sharing locks.
+- Streamline binary update transactions to a single preparation phase with caller-owned discard cleanup; binary `.bak` rollback and crash recovery remain intact.
+- Simplify ordinary MiniCPA state file writes to temporary file plus atomic rename, removing the rename-aside `.replace.bak` protocol.
+- Streamline install metadata (`install.json`) to store only `runtimeVersion`; legacy fields are ignored on read and pruned on the next write. Missing metadata is normal on new setups; malformed JSON, non-object metadata, non-string versions and read/write errors fail visibly rather than defaulting to an unknown version.
+- Share bounded HTTP text reading for npm metadata and use HTTP status/error codes instead of message matching for asset fallback and network retries. Existing quotas, timeouts and `cpa upgrade` npm update/install commands remain unchanged.
+- Make `cpa web` (and its hidden `open` alias) print the panel URL and open the browser immediately, without HTTP probes or waiting for CPA/panel provisioning. Missing browser launchers still produce a non-fatal warning; other launcher errors remain failures.
+- Discover release tags without synthesizing all-platform GitHub releases. Resolve only the current target's download candidates and checksum URL when installation is needed, retaining REST fallback, same-architecture ordering and SHA-256 verification.
+- Unify graceful/forced process stopping and start-marker comparison without removing fresh ownership checks, PID retention on inconclusive identity, or platform-specific signal behavior.
+- Keep one bounded MiniCPA event-log generation through direct rename; a failed rotation preserves both current and previous logs and prevents further appends.
+- Enable CPA native file logging in newly created `config.yaml`, with `logs-max-total-size-mb: 32` and `error-logs-max-files: 10`. Existing configurations and logging settings remain untouched on init/update; CPA owns writing and retention.
+- Use one npm self-upgrade execution entry point for ordinary updates and exact-version forced installs, retaining installation checks, safe arguments/environment, lock ordering and post-install verification.
+
+### Removed
+
+- Remove destructive binary unlock rename probes and all `.unlock-probe` recovery logic, types, and special cases across doctor, runtime inspection, and TUI launching.
+- Remove automatic recovery and doctor handling for legacy `.unlock-probe` and `.replace.bak` residues; document manual review and restoration when canonical files are missing.
+- Remove unused bounded configuration-text reading, synchronous temp cleanup, tasklist parsing, multi-generation event-log rotation, and the unused `lastUpdateCheck` field. Drop the Web-only single-URL readiness wrapper and test-loopback exceptions from GitHub asset resolution; offline tests inject discovery/download seams instead.
+
 ## [0.4.4] - 2026-10-29
 
 ### Changed

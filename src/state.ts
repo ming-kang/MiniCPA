@@ -3,9 +3,7 @@ import { writeFileAtomic } from "./fs-atomic.js";
 import { cpaLayout, ensureDir } from "./paths.js";
 
 export type InstallState = {
-  cpaHome: string;
   runtimeVersion?: string;
-  lastUpdateCheck?: string;
 };
 
 /** Process ownership record (JSON in cpa.pid). Legacy plain PID still accepted. */
@@ -20,54 +18,33 @@ function isPositiveInt(n: unknown): n is number {
   return typeof n === "number" && Number.isInteger(n) && n > 0;
 }
 
-/** Read-only: never creates directories. */
+/** Read-only. Only a missing file means there is no recorded installation. */
 export function readInstallState(home: string): InstallState {
-  const layout = cpaLayout(home);
-  if (!fs.existsSync(layout.installStateFile)) {
-    return { cpaHome: home };
-  }
+  const file = cpaLayout(home).installStateFile;
   try {
-    const parsed = JSON.parse(fs.readFileSync(layout.installStateFile, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    return {
-      cpaHome: home,
-      runtimeVersion: typeof parsed.runtimeVersion === "string" ? parsed.runtimeVersion : undefined,
-      lastUpdateCheck:
-        typeof parsed.lastUpdateCheck === "string" ? parsed.lastUpdateCheck : undefined,
-    };
-  } catch {
-    return { cpaHome: home };
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(`Invalid MiniCPA install metadata: ${file}`);
+    }
+    if (!("runtimeVersion" in parsed)) return {};
+    if (typeof parsed.runtimeVersion !== "string") {
+      throw new Error(`Invalid runtimeVersion in MiniCPA install metadata: ${file}`);
+    }
+    return { runtimeVersion: parsed.runtimeVersion };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw error;
   }
 }
 
-export function writeInstallState(home: string, state: Omit<InstallState, "cpaHome">): void {
+/** Write the complete install metadata, without merging previous or legacy fields. */
+export function writeInstallState(home: string, state: InstallState): void {
   const layout = cpaLayout(home);
   ensureDir(layout.stateDir);
-  const clean: InstallState = {
-    cpaHome: home,
-    runtimeVersion: state.runtimeVersion,
-    lastUpdateCheck: state.lastUpdateCheck,
-  };
-  writeFileAtomic(layout.installStateFile, `${JSON.stringify(clean, null, 2)}\n`);
-}
-
-/**
- * Read-merge-write helper. A key explicitly present in `patch` with value
- * `undefined` clears that field (writeInstallState drops undefined fields);
- * keys absent from `patch` keep their current value.
- */
-export function patchInstallState(
-  home: string,
-  patch: Partial<Omit<InstallState, "cpaHome">>,
-): InstallState {
-  const merged: InstallState = { ...readInstallState(home) };
-  for (const key of Object.keys(patch) as (keyof typeof patch)[]) {
-    merged[key] = patch[key];
-  }
-  writeInstallState(home, merged);
-  return merged;
+  writeFileAtomic(
+    layout.installStateFile,
+    `${JSON.stringify({ runtimeVersion: state.runtimeVersion }, null, 2)}\n`,
+  );
 }
 
 export function readPidRecord(home: string): PidRecord | undefined {

@@ -312,7 +312,7 @@ describe("runDoctor", () => {
     assert.deepEqual(snapshotHome(home), before, "doctor must not mutate the instance home");
   });
 
-  it("surfaces a held MiniCPA lock", async () => {
+  it("surfaces a MiniCPA lock record", async () => {
     useTempRoot();
     const home = resolveCpaHome();
     ensureDir(home);
@@ -330,22 +330,8 @@ describe("runDoctor", () => {
 
     const lines = await runDoctorCapturing();
 
-    assert.ok(hasLine(lines, `MiniCPA lock held by PID=${process.pid}`), lines.join("\n"));
+    assert.ok(hasLine(lines, `MiniCPA lock record PID=${process.pid}`), lines.join("\n"));
     assert.ok(hasLine(lines, "(cpa update)"), lines.join("\n"));
-  });
-
-  it("surfaces lock preempt residue", async () => {
-    useTempRoot();
-    const home = resolveCpaHome();
-    ensureDir(home);
-    fs.writeFileSync(cpaLayout(home).configFile, "port: 8317\n");
-    const lockDir = path.join(miniCpaRoot(), "state");
-    ensureDir(lockDir);
-    fs.writeFileSync(path.join(lockDir, "cpa.lock.preempt.1.x"), "{}\n");
-
-    const lines = await runDoctorCapturing();
-
-    assert.ok(hasLine(lines, "lock preempt residue"), lines.join("\n"));
   });
 
   it("reports the authenticated GitHub quota when a token is configured", async () => {

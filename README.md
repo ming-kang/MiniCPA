@@ -30,11 +30,11 @@ cpa web    # open the Web panel and complete setup in CPA
 
 The one-time bootstrap binds CPA to `127.0.0.1:8317`, uses `auths` beside the binary, and enables the `seakee/CPA-Manager-Plus` panel with automatic updates. The initial client key is **`sk-cliproxyapi`** and the management password is **`CLIPROXYAPI`**. These are public bootstrap credentials: replace them in CPA during initial setup, especially before exposing the service beyond your machine.
 
-The bootstrap contains only the requested listener, authentication, and management settings. There is no bundled `config.example.yaml`, generated random key, operational policy, or `.env` creation. Routing, logging, TLS, provider settings, and all later changes are configured in CPA itself. See the [official CPA manual](https://help.router-for.me/cn/).
+The bootstrap contains local listener, authentication, management, and native file-log settings. Native logging starts enabled with `logs-max-total-size-mb: 32` and `error-logs-max-files: 10`; CPA owns log writing and retention. There is no bundled `config.example.yaml`, generated random key, or `.env` creation. Routing, TLS, provider settings, and all later changes (including logging) are configured in CPA itself. See the [official CPA manual](https://help.router-for.me/cn/).
 
 A repeated `cpa init` leaves an existing configuration untouched, even if it is empty or malformed. Binary download failures leave the initial configuration in place, so installation can be retried without resetting subsequent user edits. A configuration write/flush failure aborts initialization and leaves the created path for inspection; review a potentially incomplete file before retrying. **`cpa init --force` has been removed**; use `cpa update --force` only to reinstall the binary.
 
-MiniCPA uses the one directory printed by `cpa home`: `<cpa root>/instance`. `--home` and `CPA_HOME` are intentionally unsupported. It does not repair permissions or traverse existing CPA configuration, `.env`, credentials, static assets, logs, or configuration backups. MiniCPA's own directories and newly written state files remain private.
+MiniCPA uses the one directory printed by `cpa home`: `<cpa root>/instance`. `--home` and `CPA_HOME` are intentionally unsupported. It does not repair permissions or traverse existing CPA configuration, `.env`, credentials, static assets, logs, or configuration backups. MiniCPA's own directories and newly written state files remain private (`0700`/`0600` on POSIX). State writes use temporary files and atomic rename without a `.replace.bak` protocol; review and restore any legacy `.replace.bak` or `.unlock-probe` residue manually if a canonical file is missing.
 
 ## Connection target, without configuration parsing
 
@@ -50,6 +50,8 @@ cpa --api-url https://127.0.0.1:9443 update
 ```
 
 Alternatively, set **`MINICPA_API_URL`** in the invoking environment. The command-line option takes precedence. This changes only MiniCPA's connection target; it never writes or configures CPA's listener. Use an HTTP(S) base URL without embedded credentials, query, or fragment. Reverse-proxy path prefixes and IPv6 URLs are supported.
+
+`cpa web` prints the panel URL and immediately opens it in your browser. It does not probe CPA, require a local installation, or wait for panel provisioning; CPA owns the panel and the browser shows access errors. If no browser launcher is available, the URL remains usable and a warning is printed.
 
 `cpa tui` delegates to the official CPA terminal UI with the instance's config path; CPA itself reads its configuration and handles the terminal UI's connection and authentication.
 
@@ -69,15 +71,15 @@ cpa update --version 8.0.47
 cpa update --force
 ```
 
-Downloads, integrity checks, extraction, and target-volume copy/fsync finish before a running CPA process is stopped. Commit takes the lifecycle lock, re-reads the current binary/process state, and restarts only when a currently running instance's binary is replaced. A user start or stop during preparation is respected. An already-current binary is skipped unless a reinstall or explicit version is requested.
+Downloads, integrity checks, extraction, and target-volume copy/fsync finish in a single preparation phase before a running CPA process is stopped. Commit takes the lifecycle lease, re-reads the current binary/process state, and restarts only when a currently running instance's binary is replaced. A user start or stop during preparation is respected. An already-current binary is skipped unless a reinstall or explicit version is requested.
 
 **Updates never read or rewrite configuration, validate its syntax, create configuration snapshots, or delete old configuration backups.** Existing fixed-slot, timestamped, manual, and atomic-recovery config files are left untouched. This applies to ordinary updates, pinned versions, forced reinstalls, already-current checks, and failures. Remove old configuration backups manually only if desired; they may contain credentials.
 
-Binary rollback uses only the backup created by that update. A stale backup cannot replace an untouched active binary. If install metadata cannot be repaired during recovery, MiniCPA still attempts to restart the previous binary and reports the metadata error. Configuration changes or migrations made by CPA itself are **not rolled back** by MiniCPA.
+Binary rollback uses only the backup created by that update (`.bak`). A stale backup cannot replace an untouched active binary. Binary installation replaces the file directly using Windows retry backoff for transient locks instead of separate unlock probes. If install metadata cannot be repaired during recovery, MiniCPA still attempts to restart the previous binary and reports the metadata error. Configuration changes or migrations made by CPA itself are **not rolled back** by MiniCPA.
 
 Archives are verified against upstream `checksums.txt`; `--insecure` skips that verification and is unsafe. No new integrity or hash scheme is introduced. `cpa update check` exits 1 when an update is available or the check fails.
 
-Lifecycle commits use `<cpa root>/state/cpa.lock`. Preparation and cleanup use a separate lease at `<cpa root>/state/update/cpa.lock`, so downloads and cleanup do not block start/stop. The installing phase of `cpa upgrade` takes both leases to protect active package modules. Avoid running different MiniCPA versions concurrently during an upgrade.
+The kernel lease is the sole authority for synchronization; `<cpa root>/state/cpa.lock` is a diagnostic record storing PID, command, and timestamp only. Stale, empty, corrupt, or live-PID diagnostic files do not block an available lease. Preparation and cleanup use a separate lease at `<cpa root>/state/update/cpa.lock`, so downloads and cleanup do not block start/stop. Async-scoped reentrancy remains. The installing phase of `cpa upgrade` takes both leases to protect active package modules. Do not run different MiniCPA versions concurrently.
 
 ### MiniCPA upgrades
 
@@ -114,7 +116,7 @@ Upgrading MiniCPA does not stop, restart, or modify the managed CPA process or c
 | `cpa restart` | Restart the managed process |
 | `cpa auto [on\|off]` | Toggle or explicitly set login autostart |
 | `cpa status` | Show runtime/autostart state, versions, paths, connection target and HTTP reachability |
-| `cpa web` | Open CPA's Web panel at the connection target |
+| `cpa web` | Print the panel URL and open it directly in your browser |
 | `cpa tui` | Launch the official CPA terminal UI; CPA must already be running |
 | `cpa logs` | Read native logs; supports `-n`, `--err`, `--legacy`, and `-f` |
 | `cpa update` / `cpa update check` | Update or inspect the CPA binary only |
@@ -135,9 +137,9 @@ Each `cpa start` records its outcome in `<home>/state/minicpa.log` (1 MiB thresh
 
 `cpa logs` reads native `logs/main.log`; `--err` selects the ten newest `error-*.log` request-error files. `-f` follows replacement and discovers new error filenames with UTF-8/partial-line handling and backpressure. Shell `WRITABLE_PATH` / `writable_path` overrides are honored; MiniCPA does not load CPA's `.env`.
 
-**The minimal bootstrap does not enable application file logging.** New detached starts discard stdout/stderr rather than create permanent duplicate captures. Configure native file logging in CPA when you need retained application logs. Raw stderr/panic output outside native logging is not permanently captured. Old running processes keep their capture descriptors until restarted; `cpa logs --legacy` reads those old files, with a warned fallback when native files are absent.
+**New bootstraps enable native application file logging**, with a 32 MB total-size setting and ten request-error log files. Existing configurations are never migrated; enable native logging in CPA yourself if an older config has it disabled. New detached starts discard stdout/stderr rather than create permanent duplicate captures. Raw stderr/panic output outside native logging is not permanently captured. Old running processes keep their capture descriptors until restarted; `cpa logs --legacy` reads those old files, with a warned fallback when native files are absent.
 
-Status, version, doctor, and binary checks use recorded install metadata instead of executing the active binary. Doctor checks configuration presence, not its syntax or secrets. CPA reports configuration errors; MiniCPA does not try to repair them. Windows doctor uses a transient write probe to check directory access.
+Status, version, doctor, and binary checks use the recorded `runtimeVersion` instead of executing the active binary. Install metadata contains only this field; legacy fields are ignored on read and dropped on the next state write. Missing metadata is normal before the first install; malformed JSON, invalid metadata shapes/versions, or I/O errors fail visibly rather than silently defaulting to an unknown version. Doctor checks configuration presence, not its syntax or secrets. CPA reports configuration errors; MiniCPA does not try to repair them. Windows doctor uses a transient write probe to check directory access.
 
 `cpa clean` asynchronously removes private staging older than one hour, judging each legacy download by its own age. Updates clear orphaned operation directories before preparing another; blocked removal prevents further workspace growth. Neither path touches instance configuration or backups. Doctor skips recursive size statistics unless `--deep` is requested; its optional GitHub probe has one attempt and a three-second total budget.
 
@@ -147,7 +149,7 @@ GitHub/npm requests honor `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` in either 
 
 CPA readiness probes bypass environment proxies and accept self-signed certificates through an isolated dispatcher. GitHub and npm retain normal certificate verification. GitHub/npm credential environment variables are stripped from CPA children, version probes, and npm upgrades.
 
-Existing archive SHA-256 verification and process-identity protection are retained. Inputs are bounded to 1 MiB for GitHub metadata, 256 KiB for checksums, and 512 MiB for archives/executable data; extraction limits archive entry count, path depth, and actual TAR decompression. MiniCPA never loads configuration text, so it has no configuration-text size limit or YAML dependency.
+Existing archive SHA-256 verification and process-identity protection are retained. Inputs are bounded to 1 MiB for GitHub metadata, 256 KiB for checksums, 64 KiB for npm metadata, and 512 MiB for archives/executable data; npm metadata uses a shared bounded HTTP text reader and typed HTTP status decisions. Extraction limits archive entry count, path depth, and actual TAR decompression. MiniCPA never loads configuration text, so it has no configuration-text size limit or YAML dependency.
 
 ## Paths and uninstall
 

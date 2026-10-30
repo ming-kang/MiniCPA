@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import {
+  activeExecutablePath,
+  backupExecutablePath,
   cpaHome,
   cpaLayout,
   ensureDir,
@@ -151,5 +153,13 @@ describe("miniCpaTempOperationDir", () => {
     assert.equal(path.dirname(second), path.join(miniCpaTempRoot(), "operations"));
     assert.ok(first.startsWith(miniCpaTempRoot()));
     assert.ok(second.startsWith(miniCpaTempRoot()));
+  });
+});
+
+describe("executable paths", () => {
+  it("derives canonical active and backup binary paths", () => {
+    const home = path.join(os.tmpdir(), "bin-paths");
+    assert.equal(activeExecutablePath(home), path.join(home, executableName()));
+    assert.equal(backupExecutablePath(home), `${path.join(home, executableName())}.bak`);
   });
 });

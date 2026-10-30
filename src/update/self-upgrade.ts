@@ -1,7 +1,6 @@
 import type { SpawnOptions } from "node:child_process";
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import type { Readable } from "node:stream";
 import spawn from "cross-spawn";
 import { valid } from "semver";
 import { buildCredentialSafeChildEnv } from "../process/child-env.js";
@@ -9,24 +8,7 @@ import { isExactSemver } from "../util.js";
 import { MINICPA_PACKAGE_NAME, NPM_REGISTRY_BASE_URL } from "./minicpa-release.js";
 import type { SupportedNpmGlobalInstall } from "./npm-global-detection.js";
 
-// Re-export detection types and functions for backward compatibility with existing callers.
-export {
-  classifyNpmGlobalRoot,
-  detectNpmGlobalInstall,
-  inferNpmGlobalRoot,
-  type CapturedCommand,
-  type CaptureCommand,
-  type GlobalRootLayout,
-  type NpmGlobalInstallDetection,
-  type NpmGlobalInstallDetectionOptions,
-  type SelfUpgradeDetectionDependencies,
-  type SupportedNpmGlobalInstall,
-  type UnsupportedNpmGlobalInstall,
-} from "./npm-global-detection.js";
-
 interface SpawnedCommand {
-  stdout: Readable | null;
-  stderr: Readable | null;
   once(event: "error", listener: (error: Error & { code?: string }) => void): this;
   once(
     event: "close",
@@ -102,24 +84,16 @@ function errorCode(error: unknown): string | undefined {
   return typeof error.code === "string" ? error.code : undefined;
 }
 
-function npmArguments(
-  detection: SupportedNpmGlobalInstall,
-  operation: UpgradeOperation,
-  version: string,
-): string[] {
-  return buildNpmUpgradeArgs(detection.prefix, operation, version);
-}
-
-async function runNpmUpgrade(
+/** Execute one safe npm operation and verify the exact release in a proven global install. */
+export async function executeMinicpaUpgrade(
   detection: SupportedNpmGlobalInstall,
   version: string,
   operation: UpgradeOperation,
-  dependencies: Partial<SelfUpgradeInstallDependencies>,
+  dependencies: Partial<SelfUpgradeInstallDependencies> = {},
 ): Promise<void> {
   assertCanonicalExactVersion(version);
   const spawnCommand = dependencies.spawn ?? (spawn as SpawnCommand);
-  const readFile =
-    dependencies.readFile ?? ((filePath, encoding) => fs.readFile(filePath, encoding));
+  const readFile = dependencies.readFile ?? fs.readFile;
   const env = dependencies.env ?? process.env;
 
   let result: { status: number | null; signal: NodeJS.Signals | null };
@@ -127,7 +101,7 @@ async function runNpmUpgrade(
     result = await new Promise((resolve, reject) => {
       const child = spawnCommand(
         detection.npmCommand,
-        npmArguments(detection, operation, version),
+        buildNpmUpgradeArgs(detection.prefix, operation, version),
         {
           shell: false,
           stdio: "inherit",
@@ -195,22 +169,4 @@ async function runNpmUpgrade(
       manualRetryCommand(detection, "install", "latest"),
     );
   }
-}
-
-/** Install an already validated exact release into a proven direct npm global installation. */
-export async function installMinicpaVersion(
-  detection: SupportedNpmGlobalInstall,
-  version: string,
-  dependencies: Partial<SelfUpgradeInstallDependencies> = {},
-): Promise<void> {
-  await runNpmUpgrade(detection, version, "install", dependencies);
-}
-
-/** Update a proven direct npm global installation and verify the fetched release was installed. */
-export async function updateMinicpaVersion(
-  detection: SupportedNpmGlobalInstall,
-  version: string,
-  dependencies: Partial<SelfUpgradeInstallDependencies> = {},
-): Promise<void> {
-  await runNpmUpgrade(detection, version, "update", dependencies);
 }

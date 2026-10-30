@@ -194,7 +194,7 @@ export function isTaggedStartMarker(marker: string): boolean {
  * applying it to a marker recorded by an older, unpinned build would silently
  * reinterpret local wall-clock text as UTC and shift the instant by the
  * machine's UTC offset. Cross-generation comparison is handled by
- * `startMarkersProveReuse`, which refuses to compare the two shapes at all.
+ * `compareStartMarkers`, which refuses to compare the two shapes at all.
  *
  * Every other marker shape (Linux `<boot id>:<ticks>`, Windows tick counts,
  * already-tagged values) is passed through with whitespace collapsed.
@@ -217,87 +217,17 @@ export function canonicalizeStartMarker(rawMarker: string): string {
   return `${LSTART_UTC_TAG}${Math.floor(epochMs / 1000)}`;
 }
 
-/**
- * Decide whether two start markers are in a mutually comparable format.
- *
- * Missing or empty markers on either side are never comparable. A tagged
- * UTC instant (`lstart-utc:<epoch seconds>`) cannot be compared against a
- * legacy untagged Darwin wall-clock marker because the legacy marker's timezone
- * and locale are unknown.
- */
-export function areStartMarkersComparable(
+/** Missing markers and tagged/legacy Darwin pairs cannot prove identity or reuse. */
+export function compareStartMarkers(
   recordedMarker?: string,
   currentMarker?: string,
-): boolean {
+): "same" | "reused" | "unknown" {
   const recorded = collapseWhitespace(recordedMarker ?? "");
   const current = collapseWhitespace(currentMarker ?? "");
-  if (!recorded || !current) return false;
-  return isTaggedStartMarker(recorded) === isTaggedStartMarker(current);
-}
-
-/**
- * Decide whether two start markers PROVE the PID was reused.
- *
- * Deliberately fail-open, in three steps that all resolve to "cannot prove":
- * a missing marker on either side; markers of different shapes (a legacy
- * untagged Darwin wall-clock marker read back by a build that now writes tagged
- * instants, in either direction); and, only when both are comparable, equal
- * values. Reuse is reported solely for two comparable markers that differ.
- *
- * The cost is that macOS loses reuse detection for exactly one generation after
- * an upgrade, until the next `cpa start` rewrites the marker. That is the right
- * trade: an unproven reuse must never authorize terminating a process or
- * deleting a live PID record.
- */
-export function startMarkersProveReuse(recordedMarker?: string, currentMarker?: string): boolean {
-  const recorded = collapseWhitespace(recordedMarker ?? "");
-  const current = collapseWhitespace(currentMarker ?? "");
-  if (!areStartMarkersComparable(recorded, current)) return false;
-  return recorded !== current;
-}
-
-/**
- * Decide whether two start markers PROVE identity (that the PID is the same process).
- *
- * Only two comparable markers with identical values prove ownership. Incomparable
- * markers (such as a legacy untagged Darwin marker vs. a tagged UTC instant)
- * cannot prove identity. Missing markers on either side also cannot prove identity.
- */
-export function startMarkersProveIdentity(
-  recordedMarker?: string,
-  currentMarker?: string,
-): boolean {
-  const recorded = collapseWhitespace(recordedMarker ?? "");
-  const current = collapseWhitespace(currentMarker ?? "");
-  if (!areStartMarkersComparable(recorded, current)) return false;
-  return recorded === current;
-}
-
-export type PidMarkerProbeResult = {
-  currentMarker?: string;
-  reused: boolean;
-  matched: boolean;
-};
-
-/**
- * Shared PID-reuse and identity predicate for lifecycle and lock recovery.
- *
- * `readMarker` exists so tests can supply a marker shape from another platform;
- * production callers use the default probe.
- */
-export async function probePidReuse(
-  pid: number,
-  recordedMarker?: string,
-  readMarker: (
-    pid: number,
-  ) => string | undefined | Promise<string | undefined> = readProcessStartMarker,
-): Promise<PidMarkerProbeResult> {
-  const currentMarker = await readMarker(pid);
-  return {
-    currentMarker,
-    reused: startMarkersProveReuse(recordedMarker, currentMarker),
-    matched: startMarkersProveIdentity(recordedMarker, currentMarker),
-  };
+  if (!recorded || !current || isTaggedStartMarker(recorded) !== isTaggedStartMarker(current)) {
+    return "unknown";
+  }
+  return recorded === current ? "same" : "reused";
 }
 
 /** True only when full paths resolve to the same executable. */
@@ -317,16 +247,6 @@ export function exePathsMatch(observedPath: string, expectedPath: string): boole
   } catch {
     return false;
   }
-}
-
-/** Parse tasklist CSV /NH first field (image name). */
-export function parseTasklistImageName(tasklistOutput: string): string | undefined {
-  const line = tasklistOutput.trim().split(/\r?\n/)[0] ?? "";
-  if (!line || /^INFO:/i.test(line)) return undefined;
-  const quoted = line.match(/^"([^"]+)"/);
-  if (quoted?.[1]) return quoted[1];
-  const first = line.split(",")[0]?.replace(/^"|"$/g, "").trim();
-  return first || undefined;
 }
 
 /** Snapshot scope is one inspection; destructive callers must always take a fresh snapshot. */

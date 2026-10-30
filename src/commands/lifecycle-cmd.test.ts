@@ -10,7 +10,6 @@ import {
   cpaLayout,
   ensureDir,
   resolveCpaHome,
-  unlockProbePath,
 } from "../paths.js";
 import type { RunningInfo } from "../process/lifecycle.js";
 import { writeInstallState, writePidRecord } from "../state.js";
@@ -187,186 +186,146 @@ describe("configuration ownership", () => {
 });
 
 describe("runOpen", () => {
-  it("attributes an unavailable panel to CLIProxyAPI when the server itself is up", async () => {
+  it("opens immediately without probing even when the service and panel return errors", async () => {
     useTempRoot();
+    let requests = 0;
     await withHttpFixture(
       {
         "/": (_req, res) => {
-          res.statusCode = 200;
-          res.end("ok");
-        },
-      },
-      async (baseUrl) => {
-        writeHomeForBase(baseUrl);
-        await assert.rejects(
-          () => runOpen({ initialPanelWaitMs: 50, serverWaitMs: 50, panelBootstrapWaitMs: 50 }),
-          (err: Error) => {
-            assert.match(err.message, /CLIProxyAPI manages this asset/);
-            assert.equal(/cpa start/.test(err.message), false, err.message);
-            assert.equal(/cpa update --panel/.test(err.message), false, err.message);
-            return true;
-          },
-        );
-      },
-    );
-  });
-
-  it("waits for detached first-access panel provisioning after its probe times out", async () => {
-    useTempRoot();
-    let panelRequests = 0;
-    let provisioned = false;
-    await withHttpFixture(
-      {
-        "/": (_req, res) => {
-          res.statusCode = 200;
-          res.end("ok");
+          requests++;
+          res.statusCode = 503;
+          res.end();
         },
         "/management.html": (_req, res) => {
-          panelRequests += 1;
-          if (provisioned) {
-            res.statusCode = 200;
-            res.end("panel");
-            return;
-          }
-          if (panelRequests === 1) {
-            // Current CLIProxyAPI detaches provisioning from the browser request,
-            // so it continues even after MiniCPA's short probe is aborted.
-            setTimeout(() => {
-              provisioned = true;
-            }, 100);
-            return;
-          }
+          requests++;
           res.statusCode = 404;
-          res.end("missing");
+          res.end();
         },
       },
       async (baseUrl) => {
-        writeHomeForBase(baseUrl);
+        process.env.MINICPA_API_URL = baseUrl;
         const launched: string[] = [];
-
-        await runOpen({
-          initialPanelWaitMs: 50,
-          serverWaitMs: 50,
-          panelBootstrapWaitMs: 500,
-          openInBrowser: async (url) => {
-            launched.push(url);
-          },
-        });
-
-        assert.equal(provisioned, true);
-        assert.ok(panelRequests >= 2);
-        assert.deepEqual(launched, [`${baseUrl}/management.html`]);
-      },
-    );
-  });
-
-  it("opens an available native panel without interpreting the config file", async () => {
-    useTempRoot();
-    await withHttpFixture(
-      {
-        "/management.html": (_req, res) => {
-          res.end("panel");
-        },
-      },
-      async (baseUrl) => {
-        const home = writeHomeForBase(baseUrl);
-        const originalRead = fs.readFileSync;
-        fs.readFileSync = ((file: fs.PathOrFileDescriptor, ...args: unknown[]) => {
-          assert.notEqual(String(file), cpaLayout(home).configFile);
-          return (originalRead as (...args: unknown[]) => unknown)(file, ...args);
-        }) as typeof fs.readFileSync;
-        try {
-          await runOpen({
+        const output = await captureConsole(() =>
+          runOpen({
             openInBrowser: async (url) => {
-              assert.equal(url, `${baseUrl}/management.html`);
+              launched.push(url);
             },
-          });
-        } finally {
-          fs.readFileSync = originalRead;
-        }
+          }),
+        );
+        assert.deepEqual(launched, [`${baseUrl}/management.html`]);
+        assert.deepEqual(output.stdout, launched);
+        assert.equal(requests, 0, "web must leave HTTP access to the browser");
+        assert.equal(fs.existsSync(resolveCpaHome()), false, "web needs no installation or config");
       },
     );
   });
 
-  it("tells the user to start CPA when nothing answers", async () => {
+  it("opens the default URL even when CPA has not been initialized or started", async () => {
     useTempRoot();
-    let closedBase = "";
-    await withHttpFixture({}, async (baseUrl) => {
-      closedBase = baseUrl;
-    });
-    writeHomeForBase(closedBase);
+    delete process.env.MINICPA_API_URL;
+    const launched: string[] = [];
+    await captureConsole(() =>
+      runOpen({
+        openInBrowser: async (url) => {
+          launched.push(url);
+        },
+      }),
+    );
+    assert.deepEqual(launched, ["http://127.0.0.1:8317/management.html"]);
+    assert.equal(fs.existsSync(resolveCpaHome()), false);
+  });
 
-    await assert.rejects(() => runOpen({ initialPanelWaitMs: 50, serverWaitMs: 50 }), /cpa start/);
+  it("does not read existing configuration", async () => {
+    useTempRoot();
+    const home = writeHomeForBase("http://127.0.0.1:19090");
+    const originalRead = fs.readFileSync;
+    fs.readFileSync = ((file: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+      assert.notEqual(String(file), cpaLayout(home).configFile);
+      return (originalRead as (...args: unknown[]) => unknown)(file, ...args);
+    }) as typeof fs.readFileSync;
+    try {
+      await captureConsole(() =>
+        runOpen({
+          openInBrowser: async (url) => {
+            assert.equal(url, "http://127.0.0.1:19090/management.html");
+          },
+        }),
+      );
+    } finally {
+      fs.readFileSync = originalRead;
+    }
   });
 
   it("keeps a successful exit when no browser launcher exists", async () => {
     useTempRoot();
-    await withHttpFixture(
-      {
-        "/management.html": (_req, res) => {
-          res.statusCode = 200;
-          res.end("panel");
+    const output = await captureConsole(() =>
+      runOpen({
+        openInBrowser: async () => {
+          throw Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" });
         },
-      },
-      async (baseUrl) => {
-        writeHomeForBase(baseUrl);
-        const out: string[] = [];
-        const errs: string[] = [];
-        const originalLog = console.log;
-        const originalError = console.error;
-        console.log = (...args: unknown[]): void => {
-          out.push(args.map((arg) => String(arg)).join(" "));
-        };
-        console.error = (...args: unknown[]): void => {
-          errs.push(args.map((arg) => String(arg)).join(" "));
-        };
-        try {
-          await runOpen({
-            openInBrowser: async () => {
-              const err: NodeJS.ErrnoException = new Error("spawn xdg-open ENOENT");
-              err.code = "ENOENT";
-              throw err;
-            },
-          });
-        } finally {
-          console.log = originalLog;
-          console.error = originalError;
-        }
-
-        assert.ok(
-          out.some((line) => line.includes(`${baseUrl}/management.html`)),
-          out.join("\n"),
-        );
-        assert.ok(
-          errs.some((line) => line.includes("could not open a browser (xdg-open not found)")),
-          errs.join("\n"),
-        );
-        assert.ok(!process.exitCode, `exit code must stay successful, got ${process.exitCode}`);
-      },
+      }),
     );
+    assert.deepEqual(output.stdout, ["http://127.0.0.1:1/management.html"]);
+    assert.deepEqual(output.stderr, [
+      "Warning: could not open a browser (xdg-open not found)",
+      "Open the URL above manually.",
+    ]);
+    assert.ok(!process.exitCode, `exit code must stay successful, got ${process.exitCode}`);
   });
 
-  it("opens an explicitly configured HTTPS panel URL", async () => {
+  it("prints the URL before launching and propagates other browser errors", async () => {
     useTempRoot();
-    await withHttpsFixture(
-      {
-        "/management.html": (_req, res) => {
-          res.statusCode = 200;
-          res.end("panel");
+    const failure = Object.assign(new Error("browser access denied"), { code: "EACCES" });
+    const events: string[] = [];
+    const originalLog = console.log;
+    console.log = (url: string): void => {
+      events.push(url);
+    };
+    try {
+      await assert.rejects(
+        () =>
+          runOpen({
+            openInBrowser: async () => {
+              events.push("launch");
+              throw failure;
+            },
+          }),
+        (error) => error === failure,
+      );
+    } finally {
+      console.log = originalLog;
+    }
+    assert.deepEqual(events, ["http://127.0.0.1:1/management.html", "launch"]);
+  });
+
+  it("honors an explicit HTTPS, IPv6 and reverse-proxy URL without connecting", async () => {
+    useTempRoot();
+    process.env.MINICPA_API_URL = "https://[::1]:9443/proxy/prefix/";
+    const launched: string[] = [];
+    await captureConsole(() =>
+      runOpen({
+        openInBrowser: async (url) => {
+          launched.push(url);
         },
-      },
-      async (baseUrl) => {
-        writeHomeForBase(baseUrl);
-        const launched: string[] = [];
-        await runOpen({
-          openInBrowser: async (url) => {
-            launched.push(url);
-          },
-        });
-        assert.deepEqual(launched, [`${baseUrl}/management.html`]);
-        assert.ok(launched[0]?.startsWith("https://"));
-      },
+      }),
     );
+    assert.deepEqual(launched, ["https://[::1]:9443/proxy/prefix/management.html"]);
+  });
+
+  it("rejects an invalid target before printing or opening it", async () => {
+    useTempRoot();
+    process.env.MINICPA_API_URL = "http://user:secret@localhost:8317";
+    const output = await captureConsole(async () => {
+      await assert.rejects(
+        () =>
+          runOpen({
+            openInBrowser: async () => assert.fail("invalid URL must not be launched"),
+          }),
+        /without credentials/,
+      );
+    });
+    assert.deepEqual(output.stdout, []);
+    assert.deepEqual(output.stderr, []);
   });
 });
 
@@ -531,51 +490,6 @@ describe("runTui", () => {
   function fakeRunning(exe: string): RunningInfo {
     return { pid: process.pid, exe, startedAt: new Date().toISOString() };
   }
-
-  it("launches from the unlock-probe residue without repairing the home", async () => {
-    useTempRoot();
-    const home = resolveCpaHome();
-    ensureDir(home);
-    fs.writeFileSync(cpaLayout(home).configFile, `host: "127.0.0.1"\nport: 8317\n`);
-    // Crash residue from an interrupted update: the binary is on disk, but only
-    // under its unlock-probe name. Repairing that is a write, and `cpa tui`
-    // holds no lock — `cpa update` may own this very file right now.
-    fs.writeFileSync(unlockProbePath(home), "probe-binary");
-    const before = snapshotHome(home);
-
-    const launched: Array<{ exe: string; args: string[]; cwd: string }> = [];
-    const warnings: string[] = [];
-    const originalError = console.error;
-    console.error = (...args: unknown[]): void => {
-      warnings.push(args.map((arg) => String(arg)).join(" "));
-    };
-    // The home must be intact even when the launch itself fails, so the purity
-    // assertion runs before the failure is re-reported.
-    let failure: unknown;
-    try {
-      await runTui({
-        inspectRunning: async () => fakeRunning(unlockProbePath(home)),
-        runRuntimeAttached: async (exe, args, options) => {
-          launched.push({ exe, args, cwd: options.cwd });
-        },
-      });
-    } catch (err) {
-      failure = err;
-    } finally {
-      console.error = originalError;
-    }
-
-    assert.deepEqual(snapshotHome(home), before, "cpa tui must not mutate the instance home");
-    assert.equal(failure, undefined, `cpa tui must not have failed: ${failure}`);
-    assert.equal(fs.existsSync(activeExecutablePath(home)), false);
-    assert.equal(launched.length, 1);
-    assert.equal(launched[0]?.exe, unlockProbePath(home));
-    assert.deepEqual(launched[0]?.args, ["-config", cpaLayout(home).configFile, "-tui"]);
-    assert.ok(
-      warnings.some((line) => line.includes("cpa start")),
-      warnings.join("\n"),
-    );
-  });
 
   it("does not repair a .bak-only home either", async () => {
     useTempRoot();

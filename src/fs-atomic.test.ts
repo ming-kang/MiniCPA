@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { renameWithWindowsRetry, replaceBackupPath, writeFileAtomic } from "./fs-atomic.js";
+import { renameWithWindowsRetry, writeFileAtomic } from "./fs-atomic.js";
 
 const temps: string[] = [];
 
@@ -73,36 +73,24 @@ describe("writeFileAtomic", () => {
     assert.equal(fs.readFileSync(file, "utf8"), "two");
   });
 
-  it("restores an orphaned replace backup when the target is missing", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-atomic-"));
-    temps.push(dir);
-    const file = path.join(dir, "cpa.pid");
-    // Simulate a crash between move-aside and rename: only the backup remains.
-    fs.writeFileSync(replaceBackupPath(file), "orphaned-content");
-    writeFileAtomic(file, "fresh");
-    assert.equal(fs.readFileSync(file, "utf8"), "fresh");
-    assert.equal(fs.existsSync(replaceBackupPath(file)), false);
-  });
-
-  it("drops stale backup residue when the target survived the replace", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-atomic-"));
-    temps.push(dir);
+  it("leaves legacy replacement backups untouched", () => {
+    const dir = tempDir();
     const file = path.join(dir, "install.json");
-    fs.writeFileSync(file, "current");
-    fs.writeFileSync(replaceBackupPath(file), "stale");
-    writeFileAtomic(file, "next");
-    assert.equal(fs.readFileSync(file, "utf8"), "next");
-    assert.equal(fs.existsSync(replaceBackupPath(file)), false);
+    const backup = path.join(dir, ".install.json.replace.bak");
+    fs.writeFileSync(backup, "legacy");
+
+    writeFileAtomic(file, "fresh");
+
+    assert.equal(fs.readFileSync(file, "utf8"), "fresh");
+    assert.equal(fs.readFileSync(backup, "utf8"), "legacy");
+    assert.deepEqual(fs.readdirSync(dir).sort(), [".install.json.replace.bak", "install.json"]);
   });
 
-  it("lands the new content when the first rename hits a transient EPERM", () => {
+  it("retries only the actual Windows replacement on transient EPERM", () => {
     const dir = tempDir();
     const file = path.join(dir, "state.json");
     fs.writeFileSync(file, "before");
-
     const original = fs.renameSync;
-    // Two failures exceed what the single-shot rename-aside fallback can absorb,
-    // so only the Windows retry can complete this write.
     let failures = 2;
     withStubbedRename(
       (from, to) => {
@@ -116,24 +104,23 @@ describe("writeFileAtomic", () => {
         if (process.platform === "win32") {
           writeFileAtomic(file, "after");
         } else {
-          // Off Windows the transient-lock hazard does not exist and there is no
-          // retry; the fallback must still leave the original file intact.
           assert.throws(() => writeFileAtomic(file, "after"), /EPERM/);
         }
       },
     );
-
     assert.equal(fs.readFileSync(file, "utf8"), process.platform === "win32" ? "after" : "before");
-    assert.equal(fs.existsSync(replaceBackupPath(file)), false);
+    assert.deepEqual(fs.readdirSync(dir), ["state.json"]);
   });
 
-  it("restores the original file when every rename keeps failing", () => {
+  it("keeps the original in place when replacement fails and discards only the temp file", () => {
     const dir = tempDir();
     const file = path.join(dir, "state.json");
     fs.writeFileSync(file, "original");
+    const calls: { from: string; to: string }[] = [];
 
     withStubbedRename(
-      () => {
+      (from, to) => {
+        calls.push({ from: String(from), to: String(to) });
         throw errnoError("EBUSY");
       },
       () => {
@@ -141,8 +128,31 @@ describe("writeFileAtomic", () => {
       },
     );
 
+    assert.equal(calls.length, process.platform === "win32" ? 5 : 1);
+    assert.ok(calls.every(({ from, to }) => from !== file && to === file));
     assert.equal(fs.readFileSync(file, "utf8"), "original");
-    assert.equal(fs.readdirSync(dir).length, 1, "expected no temp or backup residue");
+    assert.deepEqual(fs.readdirSync(dir), ["state.json"]);
+  });
+
+  it("propagates a flush failure without publishing or retaining the temp file", () => {
+    const dir = tempDir();
+    const file = path.join(dir, "state.json");
+    fs.writeFileSync(file, "original");
+    const originalFsync = fs.fsyncSync;
+    const error = errnoError("ENOSPC");
+    fs.fsyncSync = () => {
+      throw error;
+    };
+    try {
+      assert.throws(
+        () => writeFileAtomic(file, "doomed"),
+        (actual) => actual === error,
+      );
+    } finally {
+      fs.fsyncSync = originalFsync;
+    }
+    assert.equal(fs.readFileSync(file, "utf8"), "original");
+    assert.deepEqual(fs.readdirSync(dir), ["state.json"]);
   });
 });
 

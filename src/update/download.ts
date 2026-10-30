@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { formatNetworkError, httpFetch, NetworkError } from "../http.js";
+import { formatNetworkError, httpFetch, HttpStatusError, NetworkError } from "../http.js";
 import { formatBytes } from "../util.js";
 import { githubHeaders, isApiAssetUrl } from "./github-client.js";
 
@@ -51,7 +51,7 @@ export async function downloadToFile(
         : res.status === 403 || res.status === 429
           ? " (rate limited or forbidden — try GITHUB_TOKEN/GH_TOKEN if using API URLs)"
           : "";
-    throw new Error(`Download failed ${res.status}: ${label}${hint}`);
+    throw new HttpStatusError(res.status, `Download failed ${res.status}: ${label}${hint}`);
   }
   if (!res.body) throw new Error(`Download failed (empty body): ${label}`);
 
@@ -68,7 +68,7 @@ export async function downloadToFile(
     } catch {
       /* ignore cancellation failure */
     }
-    throw new Error(`Download exceeds ${formatBytes(maxBytes)} limit: ${label}`);
+    throw new RangeError(`Download exceeds ${formatBytes(maxBytes)} limit: ${label}`);
   }
 
   try {
@@ -88,7 +88,7 @@ export async function downloadToFile(
       const n = typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
       received += n;
       if (maxBytes !== undefined && received > maxBytes) {
-        callback(new Error(`Download exceeds ${formatBytes(maxBytes)} limit: ${label}`));
+        callback(new RangeError(`Download exceeds ${formatBytes(maxBytes)} limit: ${label}`));
         return;
       }
       onProgress?.({ label, receivedBytes: received, totalBytes: total, done: false });
@@ -118,9 +118,8 @@ export async function downloadToFile(
     } catch {
       /* ignore */
     }
-    // The size limiter's own error is a policy decision, not a transport failure:
-    // callers match on its text, so it must pass through untouched.
-    if (isSizeLimitError(err)) throw err;
+    // Byte-budget failures are policy errors, not network failures.
+    if (err instanceof RangeError) throw err;
     throw new NetworkError(formatNetworkError(err, url), { cause: err, url });
   } finally {
     clearInterval(stallTimer);
@@ -135,8 +134,4 @@ export async function downloadToFile(
     }
     throw new Error(`Download failed (empty file): ${label}`);
   }
-}
-
-function isSizeLimitError(err: unknown): boolean {
-  return err instanceof Error && /^Download exceeds .* limit: /.test(err.message);
 }

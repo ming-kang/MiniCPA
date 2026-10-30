@@ -19,6 +19,10 @@ remote-management:
   disable-control-panel: false
   disable-auto-update-panel: false
   panel-github-repository: "https://github.com/seakee/CPA-Manager-Plus"
+
+logging-to-file: true
+logs-max-total-size-mb: 32
+error-logs-max-files: 10
 `;
 
 function createInitialConfig(file: string): boolean {

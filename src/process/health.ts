@@ -24,10 +24,6 @@ function isReadyStatus(status: number): boolean {
   return (status >= 200 && status < 300) || status === 304 || status === 401 || status === 403;
 }
 
-export async function waitForHttpOk(url: string, timeoutMs = 8000): Promise<boolean> {
-  return (await waitForFirstHttpOk([url], timeoutMs)) !== undefined;
-}
-
 export async function waitForAnyHttpOk(urls: string[], timeoutMs = 8000): Promise<boolean> {
   return (await waitForFirstHttpOk(urls, timeoutMs)) !== undefined;
 }

@@ -111,7 +111,7 @@ program
 
 program
   .command("web")
-  .description("Open the web management panel")
+  .description("Print and open the Web panel URL")
   .action(
     withCliErrors(async () => {
       const { runOpen } = await import("./commands/lifecycle-cmd.js");
@@ -121,7 +121,7 @@ program
 
 program
   .command("open", { hidden: true })
-  .description("Open the web management panel")
+  .description("Print and open the Web panel URL")
   .action(
     withCliErrors(async () => {
       const { runOpen } = await import("./commands/lifecycle-cmd.js");

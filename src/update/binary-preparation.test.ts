@@ -14,9 +14,8 @@ import { withMiniCpaLock } from "../process/lock.js";
 import { readInstallState, writeInstallState } from "../state.js";
 import { createIsolatedTestEnv } from "../test-fixtures/test-env.js";
 import { runClean } from "../commands/clean.js";
+import { HttpStatusError } from "../http.js";
 import { updateBinary, type BinaryPrepareDeps, type BinaryUpdateDeps } from "./binary.js";
-import { cpaReleaseAssetNames } from "./cpa-release.js";
-import { synthesizePublicRelease } from "./github-client.js";
 
 let env: ReturnType<typeof createIsolatedTestEnv> | undefined;
 afterEach(() => {
@@ -49,11 +48,7 @@ function setup(running = true): {
   const deps: BinaryUpdateDeps & BinaryPrepareDeps = {
     fetchLatestRelease: async () => {
       preparation("release");
-      return synthesizePublicRelease(
-        "router-for-me/CLIProxyAPI",
-        "v2.0.0",
-        cpaReleaseAssetNames("v2.0.0"),
-      );
+      return { tag: "v2.0.0" };
     },
     fetchCpaReleaseByTag: async () => {
       throw new Error("not used");
@@ -91,9 +86,6 @@ function setup(running = true): {
       events.push("start");
       state.running = true;
       return { pid: 12345, exe: activeExecutablePath(home) };
-    },
-    waitForBinaryUnlocked: async () => {
-      events.push("unlock");
     },
   };
   return { home, state, deps, events };
@@ -305,5 +297,93 @@ describe("binary preparation and commit", () => {
     await assert.rejects(() => updateBinary(home, { insecure: true, deps }), /not ready/);
     assert.equal(fs.readFileSync(config, "utf8"), "port: 12345\n# external edit\n");
     assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "old-binary");
+  });
+
+  it("falls back to the next candidate asset ONLY on typed HttpStatusError(404)", async () => {
+    const originalArch = process.arch;
+    Object.defineProperty(process, "arch", { value: "arm64", configurable: true });
+    try {
+      const { home, deps } = setup();
+      let downloads = 0;
+      deps.downloadToFile = async (_url, destination) => {
+        downloads++;
+        if (downloads === 1) {
+          throw new HttpStatusError(404, "Download failed 404: asset not found");
+        }
+        fs.writeFileSync(destination, "archive");
+      };
+      const result = await updateBinary(home, { insecure: true, deps });
+      assert.equal(downloads, 2, "second candidate should have been downloaded");
+      assert.equal(result.restarted, true);
+      assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "new-binary");
+    } finally {
+      Object.defineProperty(process, "arch", { value: originalArch, configurable: true });
+    }
+  });
+
+  it("does not fall back to the next candidate on a generic misleading 'Download failed 404' Error", async () => {
+    const originalArch = process.arch;
+    Object.defineProperty(process, "arch", { value: "arm64", configurable: true });
+    try {
+      const { home, deps } = setup();
+      let downloads = 0;
+      deps.downloadToFile = async (_url, destination) => {
+        downloads++;
+        if (downloads === 1) {
+          throw new Error("Download failed 404: misleading text without HttpStatusError");
+        }
+        fs.writeFileSync(destination, "archive");
+      };
+      await assert.rejects(
+        () => updateBinary(home, { insecure: true, deps }),
+        /misleading text without HttpStatusError/,
+      );
+      assert.equal(downloads, 1, "must not attempt next candidate on non-HttpStatusError");
+    } finally {
+      Object.defineProperty(process, "arch", { value: originalArch, configurable: true });
+    }
+  });
+
+  it("does not fall back on a non-404 HttpStatusError", async () => {
+    const originalArch = process.arch;
+    Object.defineProperty(process, "arch", { value: "arm64", configurable: true });
+    try {
+      const { home, deps } = setup();
+      let downloads = 0;
+      deps.downloadToFile = async (_url, destination) => {
+        downloads++;
+        if (downloads === 1) {
+          throw new HttpStatusError(500, "Download failed 500: internal server error");
+        }
+        fs.writeFileSync(destination, "archive");
+      };
+      await assert.rejects(
+        () => updateBinary(home, { insecure: true, deps }),
+        (err: unknown) => {
+          assert.ok(err instanceof HttpStatusError);
+          assert.equal(err.status, 500);
+          return true;
+        },
+      );
+      assert.equal(downloads, 1, "must not attempt next candidate on 500");
+    } finally {
+      Object.defineProperty(process, "arch", { value: originalArch, configurable: true });
+    }
+  });
+
+  it("propagates typed 404 HttpStatusError from pinned release tag lookups without fallback", async () => {
+    const { home, deps } = setup();
+    deps.fetchCpaReleaseByTag = async (tag) => {
+      throw new HttpStatusError(404, `Release not found: ${tag}`);
+    };
+    await assert.rejects(
+      () => updateBinary(home, { version: "v9.9.9", deps }),
+      (err: unknown) => {
+        assert.ok(err instanceof HttpStatusError);
+        assert.equal(err.status, 404);
+        assert.match(err.message, /Release not found: v9\.9\.9/);
+        return true;
+      },
+    );
   });
 });

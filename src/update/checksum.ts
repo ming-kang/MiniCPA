@@ -1,11 +1,5 @@
-import { httpFetch, readHttpTextBounded } from "../http.js";
-import {
-  browserReleaseAssetUrl,
-  githubHeaders,
-  isApiAssetUrl,
-  releaseAssetDownloadUrl,
-  type GhRelease,
-} from "./github-client.js";
+import { httpFetch, HttpStatusError, readHttpTextBounded } from "../http.js";
+import { githubHeaders, isApiAssetUrl } from "./github-client.js";
 
 const API_TIMEOUT_MS = 30_000;
 export const MAX_CHECKSUM_BYTES = 256 * 1024;
@@ -21,19 +15,7 @@ export function parseChecksumsText(text: string): Map<string, string> {
   return map;
 }
 
-export async function fetchChecksums(
-  release: GhRelease,
-  repo: string,
-): Promise<Map<string, string>> {
-  let asset = release.assets.find((a) => a.name === "checksums.txt");
-  if (!asset) {
-    asset = {
-      name: "checksums.txt",
-      browser_download_url: browserReleaseAssetUrl(repo, release.tag_name, "checksums.txt"),
-    };
-  }
-
-  const url = releaseAssetDownloadUrl(repo, asset);
+export async function fetchChecksums(url: string): Promise<Map<string, string>> {
   const res = await httpFetch(url, {
     headers: githubHeaders(isApiAssetUrl(url) ? "download" : "browser"),
     redirect: "follow",
@@ -41,7 +23,8 @@ export async function fetchChecksums(
   });
   if (!res.ok) {
     await res.body?.cancel().catch(() => {});
-    throw new Error(
+    throw new HttpStatusError(
+      res.status,
       `Failed to download checksums.txt (HTTP ${res.status}). Use --insecure to skip integrity check.`,
     );
   }
@@ -49,9 +32,7 @@ export async function fetchChecksums(
     await readHttpTextBounded(res, MAX_CHECKSUM_BYTES, "checksums.txt"),
   );
   if (map.size === 0) {
-    throw new Error(
-      `checksums.txt for ${release.tag_name} is empty or unparseable (use --insecure to skip)`,
-    );
+    throw new Error("checksums.txt is empty or unparseable (use --insecure to skip)");
   }
   return map;
 }

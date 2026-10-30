@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, it } from "node:test";
+import { HttpStatusError } from "../http.js";
 import { withHttpFixture } from "../test-fixtures/http-server.js";
 import {
   compareMinicpaVersions,
@@ -130,7 +131,12 @@ describe("MiniCPA npm registry metadata", () => {
       async (baseUrl) => {
         await assert.rejects(
           () => fetchLatestMinicpaVersion(baseUrl),
-          /not found in the npm registry \(HTTP 404\)/,
+          (err: unknown) => {
+            assert.ok(err instanceof HttpStatusError);
+            assert.equal(err.status, 404);
+            assert.match(err.message, /not found in the npm registry \(HTTP 404\)/);
+            return true;
+          },
         );
       },
     );
@@ -144,7 +150,12 @@ describe("MiniCPA npm registry metadata", () => {
       async (baseUrl) => {
         await assert.rejects(
           () => fetchLatestMinicpaVersion(baseUrl),
-          /failed with HTTP 500.*Retry later/,
+          (err: unknown) => {
+            assert.ok(err instanceof HttpStatusError);
+            assert.equal(err.status, 500);
+            assert.match(err.message, /failed with HTTP 500.*Retry later/);
+            return true;
+          },
         );
       },
     );
@@ -162,7 +173,11 @@ describe("MiniCPA npm registry metadata", () => {
       async (baseUrl) => {
         await assert.rejects(
           () => fetchLatestMinicpaVersion(baseUrl),
-          /exceeds the 65536-byte limit/,
+          (err: unknown) => {
+            assert.ok(err instanceof RangeError);
+            assert.match(err.message, /exceeds the 64\.0 KB size limit/);
+            return true;
+          },
         );
       },
     );

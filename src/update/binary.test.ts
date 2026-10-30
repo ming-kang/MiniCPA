@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { activeExecutablePath, backupExecutablePath } from "../paths.js";
+import { RuntimeBinaryTransaction } from "../process/runtime.js";
 import { readInstallState, writeInstallState } from "../state.js";
 import { silentUpdateReporter } from "./reporter.js";
 import {
@@ -58,11 +59,38 @@ function fakeDeps(overrides?: DepsOverrides): BinaryUpdateDeps & { calls: string
       calls.push("resolveRunning");
       return overrides?.resolveRunning ? overrides.resolveRunning(home) : undefined;
     },
-    async waitForBinaryUnlocked(home) {
-      calls.push("waitUnlock");
-      if (overrides?.waitForBinaryUnlocked) return overrides.waitForBinaryUnlocked(home);
-    },
   };
+}
+
+/** Local test fixture helper: prepares a real transaction and owns discard in finally. */
+async function runInstallPhase(
+  home: string,
+  args: {
+    version: string;
+    sourceExe: string;
+    wasRunning: boolean;
+    currentVersion?: string;
+  },
+  deps: BinaryUpdateDeps = fakeDeps(),
+  reporter = silentUpdateReporter,
+): Promise<{ restarted: boolean }> {
+  const transaction = new RuntimeBinaryTransaction(home);
+  try {
+    transaction.prepare(args.sourceExe);
+    return await installBinaryPhase(
+      home,
+      {
+        version: args.version,
+        wasRunning: args.wasRunning,
+        currentVersion: args.currentVersion,
+        transaction,
+      },
+      deps,
+      reporter,
+    );
+  } finally {
+    transaction.discard();
+  }
 }
 
 describe("checkBinaryUpdate", () => {
@@ -72,12 +100,7 @@ describe("checkBinaryUpdate", () => {
     writeInstallState(home, { runtimeVersion: "7.2.92" });
 
     const result = await checkBinaryUpdate(home, {
-      fetchLatestRelease: async () => ({
-        tag_name: "v7.2.92",
-        name: "v7.2.92",
-        published_at: "",
-        assets: [],
-      }),
+      fetchLatestRelease: async () => ({ tag: "v7.2.92" }),
     });
 
     assert.deepEqual(result, { current: "7.2.92", latest: "7.2.92", upToDate: true });
@@ -85,6 +108,30 @@ describe("checkBinaryUpdate", () => {
 });
 
 describe("installBinaryPhase", () => {
+  it("requires a caller-prepared transaction, does not internally discard it, and commits on success", async () => {
+    const home = tempHome();
+    const exe = stagedExe(home, "new-binary");
+    const transaction = new RuntimeBinaryTransaction(home);
+    transaction.prepare(exe);
+    assert.ok(fs.existsSync(`${activeExecutablePath(home)}.new`));
+    const deps = fakeDeps();
+
+    const result = await installBinaryPhase(
+      home,
+      {
+        version: "2.0.0",
+        wasRunning: false,
+        transaction,
+      },
+      deps,
+    );
+
+    assert.equal(result.restarted, false);
+    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "new-binary");
+    assert.equal(readInstallState(home).runtimeVersion, "2.0.0");
+    transaction.discard();
+  });
+
   it("keeps a half-started binary and its backup intact when recovery cannot stop it", async () => {
     const home = tempHome();
     fs.writeFileSync(activeExecutablePath(home), "old");
@@ -104,11 +151,11 @@ describe("installBinaryPhase", () => {
     });
     await assert.rejects(
       () =>
-        installBinaryPhase(
+        runInstallPhase(
           home,
           {
             version: "2.0.0",
-            extractedExe: stagedExe(home, "new"),
+            sourceExe: stagedExe(home, "new"),
             wasRunning: true,
           },
           deps,
@@ -148,11 +195,11 @@ describe("installBinaryPhase", () => {
     try {
       await assert.rejects(
         () =>
-          installBinaryPhase(
+          runInstallPhase(
             home,
             {
               version: "2.0.0",
-              extractedExe: stagedExe(home, "new"),
+              sourceExe: stagedExe(home, "new"),
               wasRunning: true,
               currentVersion: "1.0.0",
             },
@@ -173,24 +220,36 @@ describe("installBinaryPhase", () => {
     fs.writeFileSync(activeExecutablePath(home), "v2");
     fs.writeFileSync(backupExecutablePath(home), "v1");
     writeInstallState(home, { runtimeVersion: "2.0.0" });
-    await assert.rejects(
-      () =>
-        installBinaryPhase(
-          home,
-          {
-            version: "3.0.0",
-            extractedExe: stagedExe(home, "v3"),
-            wasRunning: false,
-            currentVersion: "2.0.0",
-          },
-          fakeDeps({
-            waitForBinaryUnlocked: async () => {
-              throw new Error("locked");
+
+    const originalRename = fs.renameSync;
+    fs.renameSync = (from, to) => {
+      if (
+        String(from) === activeExecutablePath(home) &&
+        String(to) === backupExecutablePath(home)
+      ) {
+        throw new Error("active binary locked");
+      }
+      return originalRename(from, to);
+    };
+
+    try {
+      await assert.rejects(
+        () =>
+          runInstallPhase(
+            home,
+            {
+              version: "3.0.0",
+              sourceExe: stagedExe(home, "v3"),
+              wasRunning: false,
+              currentVersion: "2.0.0",
             },
-          }),
-        ),
-      /locked/,
-    );
+            fakeDeps(),
+          ),
+        /active binary locked/,
+      );
+    } finally {
+      fs.renameSync = originalRename;
+    }
     assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "v2");
     assert.equal(readInstallState(home).runtimeVersion, "2.0.0");
   });
@@ -201,11 +260,11 @@ describe("installBinaryPhase", () => {
     writeInstallState(home, { runtimeVersion: "1.0.0" });
     const deps = fakeDeps();
 
-    const result = await installBinaryPhase(
+    const result = await runInstallPhase(
       home,
       {
         version: "2.0.0",
-        extractedExe: stagedExe(home, "new-binary"),
+        sourceExe: stagedExe(home, "new-binary"),
         wasRunning: false,
         currentVersion: "1.0.0",
       },
@@ -226,11 +285,11 @@ describe("installBinaryPhase", () => {
     fs.writeFileSync(activeExecutablePath(home), "old-binary");
     const deps = fakeDeps();
 
-    const result = await installBinaryPhase(
+    const result = await runInstallPhase(
       home,
       {
         version: "2.0.0",
-        extractedExe: stagedExe(home, "new-binary"),
+        sourceExe: stagedExe(home, "new-binary"),
         wasRunning: true,
         currentVersion: "1.0.0",
       },
@@ -239,7 +298,7 @@ describe("installBinaryPhase", () => {
     );
 
     assert.equal(result.restarted, true);
-    assert.deepEqual(deps.calls, ["stop", "waitUnlock", "start"]);
+    assert.deepEqual(deps.calls, ["stop", "start"]);
   });
 
   it("rolls back and restarts the previous binary when the new one fails to start", async () => {
@@ -250,11 +309,11 @@ describe("installBinaryPhase", () => {
 
     await assert.rejects(
       () =>
-        installBinaryPhase(
+        runInstallPhase(
           home,
           {
             version: "2.0.0",
-            extractedExe: stagedExe(home, "broken-binary"),
+            sourceExe: stagedExe(home, "broken-binary"),
             wasRunning: true,
             currentVersion: "1.0.0",
           },
@@ -282,11 +341,11 @@ describe("installBinaryPhase", () => {
 
     await assert.rejects(
       () =>
-        installBinaryPhase(
+        runInstallPhase(
           home,
           {
             version: "2.0.0",
-            extractedExe: stagedExe(home, "broken-binary"),
+            sourceExe: stagedExe(home, "broken-binary"),
             wasRunning: true,
             currentVersion: "1.0.0",
           },
@@ -315,11 +374,11 @@ describe("installBinaryPhase", () => {
 
     await assert.rejects(
       () =>
-        installBinaryPhase(
+        runInstallPhase(
           home,
           {
             version: "2.0.0",
-            extractedExe: stagedExe(home, "broken-binary"),
+            sourceExe: stagedExe(home, "broken-binary"),
             wasRunning: true,
             currentVersion: "1.0.0",
           },
@@ -334,7 +393,6 @@ describe("installBinaryPhase", () => {
       },
     );
 
-    // C3 regression: state must not claim a version with no binary on disk.
     assert.equal(readInstallState(home).runtimeVersion, undefined);
   });
 
@@ -343,35 +401,46 @@ describe("installBinaryPhase", () => {
     // Steady state: an intact binary and NO .bak (cleared after the last update).
     fs.writeFileSync(activeExecutablePath(home), "old-binary");
     writeInstallState(home, { runtimeVersion: "7.2.65" });
-    const deps = fakeDeps({
-      async waitForBinaryUnlocked() {
-        throw new Error("CPA binary still locked after 30000ms");
-      },
-    });
+    const deps = fakeDeps();
 
-    await assert.rejects(
-      () =>
-        installBinaryPhase(
-          home,
-          {
-            version: "7.2.66",
-            extractedExe: stagedExe(home, "new-binary"),
-            wasRunning: true,
-            currentVersion: "7.2.65",
-          },
-          deps,
-          silentUpdateReporter,
-        ),
-      (err: unknown) => {
-        assert.ok(err instanceof BinaryUpdateError);
-        assert.equal(err.previousRestarted, true);
-        // The untouched executable is still on disk, so recovery restarted it in place.
-        assert.doesNotMatch(err.message, /could be restored/);
-        assert.match(err.message, /existing CLIProxyAPI version was restarted/i);
-        assert.match(err.message, /still locked/);
-        return true;
-      },
-    );
+    const originalRename = fs.renameSync;
+    fs.renameSync = (from, to) => {
+      if (
+        String(from) === activeExecutablePath(home) &&
+        String(to) === backupExecutablePath(home)
+      ) {
+        throw new Error("CPA binary still locked after retry");
+      }
+      return originalRename(from, to);
+    };
+
+    try {
+      await assert.rejects(
+        () =>
+          runInstallPhase(
+            home,
+            {
+              version: "7.2.66",
+              sourceExe: stagedExe(home, "new-binary"),
+              wasRunning: true,
+              currentVersion: "7.2.65",
+            },
+            deps,
+            silentUpdateReporter,
+          ),
+        (err: unknown) => {
+          assert.ok(err instanceof BinaryUpdateError);
+          assert.equal(err.previousRestarted, true);
+          // The untouched executable is still on disk, so recovery restarted it in place.
+          assert.doesNotMatch(err.message, /could be restored/);
+          assert.match(err.message, /existing CLIProxyAPI version was restarted/i);
+          assert.match(err.message, /still locked/);
+          return true;
+        },
+      );
+    } finally {
+      fs.renameSync = originalRename;
+    }
 
     // A transient file lock must not leave CPA stopped…
     assert.ok(deps.calls.includes("start"));
@@ -382,25 +451,40 @@ describe("installBinaryPhase", () => {
     assert.equal(readInstallState(home).runtimeVersion, "7.2.65");
   });
 
-  it("preserves the recorded version when probing fails but rollback keeps the binary", async () => {
+  it("preserves the recorded version when rename fails but rollback keeps the binary", async () => {
     const home = tempHome();
     fs.writeFileSync(activeExecutablePath(home), "old-binary");
     writeInstallState(home, { runtimeVersion: "7.2.65" });
     const deps = fakeDeps();
 
-    await assert.rejects(() =>
-      installBinaryPhase(
-        home,
-        {
-          version: "7.2.66",
-          extractedExe: path.join(home, "missing-staged-executable"),
-          wasRunning: false,
-          currentVersion: undefined,
-        },
-        deps,
-        silentUpdateReporter,
-      ),
-    );
+    const originalRename = fs.renameSync;
+    fs.renameSync = (from, to) => {
+      if (
+        String(from) === activeExecutablePath(home) &&
+        String(to) === backupExecutablePath(home)
+      ) {
+        throw new Error("rename failed");
+      }
+      return originalRename(from, to);
+    };
+
+    try {
+      await assert.rejects(() =>
+        runInstallPhase(
+          home,
+          {
+            version: "7.2.66",
+            sourceExe: stagedExe(home, "new-binary"),
+            wasRunning: false,
+            currentVersion: undefined,
+          },
+          deps,
+          silentUpdateReporter,
+        ),
+      );
+    } finally {
+      fs.renameSync = originalRename;
+    }
 
     assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "old-binary");
     assert.equal(readInstallState(home).runtimeVersion, "7.2.65");
@@ -410,32 +494,40 @@ describe("installBinaryPhase", () => {
     const home = tempHome();
     // No binary on disk and no .bak: nothing to restart, message must say so.
     writeInstallState(home, { runtimeVersion: "7.2.65" });
-    const deps = fakeDeps({
-      async waitForBinaryUnlocked() {
-        throw new Error("CPA binary still locked after 30000ms");
-      },
-    });
+    const deps = fakeDeps();
 
-    await assert.rejects(
-      () =>
-        installBinaryPhase(
-          home,
-          {
-            version: "7.2.66",
-            extractedExe: stagedExe(home, "new-binary"),
-            wasRunning: true,
-            currentVersion: "7.2.65",
-          },
-          deps,
-          silentUpdateReporter,
-        ),
-      (err: unknown) => {
-        assert.ok(err instanceof BinaryUpdateError);
-        assert.equal(err.previousRestarted, false);
-        assert.match(err.message, /No previous CLIProxyAPI executable could be restored/);
-        return true;
-      },
-    );
+    const originalRename = fs.renameSync;
+    fs.renameSync = (from, to) => {
+      if (String(to) === activeExecutablePath(home)) {
+        throw new Error("destination unwritable");
+      }
+      return originalRename(from, to);
+    };
+
+    try {
+      await assert.rejects(
+        () =>
+          runInstallPhase(
+            home,
+            {
+              version: "7.2.66",
+              sourceExe: stagedExe(home, "new-binary"),
+              wasRunning: true,
+              currentVersion: "7.2.65",
+            },
+            deps,
+            silentUpdateReporter,
+          ),
+        (err: unknown) => {
+          assert.ok(err instanceof BinaryUpdateError);
+          assert.equal(err.previousRestarted, false);
+          assert.match(err.message, /No previous CLIProxyAPI executable could be restored/);
+          return true;
+        },
+      );
+    } finally {
+      fs.renameSync = originalRename;
+    }
 
     assert.ok(!deps.calls.includes("start"));
     assert.equal(readInstallState(home).runtimeVersion, undefined);
@@ -448,11 +540,11 @@ describe("installBinaryPhase", () => {
     const deps = fakeDeps();
     await assert.rejects(
       () =>
-        installBinaryPhase(
+        runInstallPhase(
           home,
           {
             version: "7.2.66",
-            extractedExe: path.join(home, "missing-extracted-exe"),
+            sourceExe: path.join(home, "missing-extracted-exe"),
             wasRunning: true,
             currentVersion: "7.2.65",
           },

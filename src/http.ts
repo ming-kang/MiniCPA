@@ -126,6 +126,17 @@ export function redactProxyUrl(proxyUrl: string): string {
 
 export type HttpFetchInit = UndiciRequestInit;
 
+/** HTTP failures carry their status; messages are presentation, not a control protocol. */
+export class HttpStatusError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "HttpStatusError";
+  }
+}
+
 /** Read actual response bytes with a budget; neither Content-Length nor JSON shape is trusted. */
 export async function readHttpTextBounded(
   response: Pick<UndiciResponse, "body">,
@@ -142,7 +153,7 @@ export async function readHttpTextBounded(
       if (done) break;
       bytes += value.byteLength;
       if (bytes > maxBytes)
-        throw new Error(`${label} exceeds the ${formatBytes(maxBytes)} size limit`);
+        throw new RangeError(`${label} exceeds the ${formatBytes(maxBytes)} size limit`);
       chunks.push(Buffer.from(value));
     }
     return Buffer.concat(chunks, bytes).toString("utf8");
@@ -165,28 +176,34 @@ export function isRetryableHttpStatus(status: number): boolean {
 }
 
 export function isAbortLikeError(err: unknown): boolean {
-  if (!err) return false;
-  if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
-    return true;
-  }
-  const message = err instanceof Error ? err.message : String(err);
-  return /\bAbortError\b|\bTimeoutError\b|aborted|The operation was aborted/i.test(message);
+  return err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
 }
 
-/** Transient transport failures (not 4xx application errors). */
+const RETRYABLE_NETWORK_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EAI_AGAIN",
+  "ENOTFOUND",
+  "EPIPE",
+  "ECONNABORTED",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ETIMEDOUT",
+  "ESOCKETTIMEDOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+
+/** Only known transient transport codes retry; error wording never decides policy. */
 export function isRetryableNetworkError(err: unknown): boolean {
-  if (isAbortLikeError(err)) {
-    // Hard aborts do not retry; undici connect timeouts still should.
-    const message = formatNetworkError(err);
-    if (/UND_ERR_CONNECT_TIMEOUT|Connect Timeout|ETIMEDOUT|ESOCKETTIMEDOUT/i.test(message)) {
-      return true;
-    }
-    return false;
+  if (isAbortLikeError(err)) return false;
+  for (let current = err; current instanceof Error; current = current.cause) {
+    const code = (current as NodeJS.ErrnoException).code;
+    if (code && RETRYABLE_NETWORK_CODES.has(code)) return true;
   }
-  const message = formatNetworkError(err);
-  return /timeout|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|EPIPE|ECONNABORTED|EHOSTUNREACH|ENETUNREACH|UND_ERR|fetch failed|socket|network/i.test(
-    message,
-  );
+  return false;
 }
 
 export function retryDelayMs(
@@ -218,8 +235,7 @@ export async function httpFetch(
   const minDelayMs = retry?.minDelayMs ?? 400;
   const maxDelayMs = retry?.maxDelayMs ?? 8_000;
 
-  let lastError: unknown;
-  for (let attempt = 0; attempt <= retries; attempt++) {
+  for (let attempt = 0; ; attempt++) {
     try {
       const res = await undiciFetch(input, {
         ...init,
@@ -238,12 +254,10 @@ export async function httpFetch(
       }
       return res;
     } catch (err) {
-      lastError = err;
       if (attempt >= retries || !isRetryableNetworkError(err)) {
         throw new NetworkError(formatNetworkError(err, url), { cause: err, url });
       }
       await sleep(retryDelayMs(attempt, minDelayMs, maxDelayMs));
     }
   }
-  throw new NetworkError(formatNetworkError(lastError, url), { cause: lastError, url });
 }

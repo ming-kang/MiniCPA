@@ -1,5 +1,5 @@
 import { compare, valid } from "semver";
-import { httpFetch } from "../http.js";
+import { httpFetch, HttpStatusError, readHttpTextBounded } from "../http.js";
 import { isExactSemver } from "../util.js";
 
 export const MINICPA_PACKAGE_NAME = "@astralyn/minicpa";
@@ -75,65 +75,6 @@ function assertExactSemver(version: unknown, source: "current" | "latest"): stri
   return version;
 }
 
-async function cancelBody(response: Awaited<ReturnType<typeof httpFetch>>): Promise<void> {
-  try {
-    await response.body?.cancel();
-  } catch {
-    // The status/size error is more useful than a cancellation failure.
-  }
-}
-
-async function readMetadataBody(
-  response: Awaited<ReturnType<typeof httpFetch>>,
-  requestUrl: string,
-): Promise<string> {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength !== null) {
-    const declaredBytes = Number(contentLength);
-    if (Number.isFinite(declaredBytes) && declaredBytes > NPM_METADATA_MAX_BYTES) {
-      await cancelBody(response);
-      throw new Error(
-        `npm registry metadata for ${MINICPA_PACKAGE_NAME} exceeds the ${NPM_METADATA_MAX_BYTES}-byte limit (${requestUrl}).`,
-      );
-    }
-  }
-
-  if (!response.body) return "";
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let bytesRead = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytesRead += value.byteLength;
-      if (bytesRead > NPM_METADATA_MAX_BYTES) {
-        await reader.cancel();
-        throw new Error(
-          `npm registry metadata for ${MINICPA_PACKAGE_NAME} exceeds the ${NPM_METADATA_MAX_BYTES}-byte limit (${requestUrl}).`,
-        );
-      }
-      chunks.push(value);
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("exceeds the")) throw error;
-    throw new Error(`Failed to read npm registry metadata from ${requestUrl}. Retry the request.`, {
-      cause: error,
-    });
-  } finally {
-    reader.releaseLock();
-  }
-
-  const body = new Uint8Array(bytesRead);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder().decode(body);
-}
-
 /** Fetch and validate the version behind npm's `latest` dist-tag. */
 export async function fetchLatestMinicpaVersion(
   registryBaseUrl: string = NPM_REGISTRY_BASE_URL,
@@ -155,20 +96,20 @@ export async function fetchLatestMinicpaVersion(
     },
   );
 
-  if (response.status === 404) {
-    await cancelBody(response);
-    throw new Error(
-      `MiniCPA package ${MINICPA_PACKAGE_NAME} was not found in the npm registry (HTTP 404). Check the package name and registry availability.`,
-    );
-  }
   if (!response.ok) {
-    await cancelBody(response);
-    throw new Error(
-      `npm registry request for ${MINICPA_PACKAGE_NAME} failed with HTTP ${response.status}. Retry later or check your network/proxy settings.`,
-    );
+    await response.body?.cancel().catch(() => {});
+    const message =
+      response.status === 404
+        ? `MiniCPA package ${MINICPA_PACKAGE_NAME} was not found in the npm registry (HTTP 404). Check the package name and registry availability.`
+        : `npm registry request for ${MINICPA_PACKAGE_NAME} failed with HTTP ${response.status}. Retry later or check your network/proxy settings.`;
+    throw new HttpStatusError(response.status, message);
   }
 
-  const body = await readMetadataBody(response, requestUrl);
+  const body = await readHttpTextBounded(
+    response,
+    NPM_METADATA_MAX_BYTES,
+    `npm registry metadata for ${MINICPA_PACKAGE_NAME}`,
+  );
   let metadata: unknown;
   try {
     metadata = JSON.parse(body);

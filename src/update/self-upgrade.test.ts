@@ -9,12 +9,10 @@ import {
   classifyNpmGlobalRoot,
   detectNpmGlobalInstall,
   inferNpmGlobalRoot,
-  installMinicpaVersion,
   type CaptureCommand,
-  updateMinicpaVersion,
-  type SpawnCommand,
   type SupportedNpmGlobalInstall,
-} from "./self-upgrade.js";
+} from "./npm-global-detection.js";
+import { executeMinicpaUpgrade, type SpawnCommand } from "./self-upgrade.js";
 
 const tempDirectories: string[] = [];
 const testPlatform = process.platform;
@@ -366,10 +364,10 @@ describe("detectNpmGlobalInstall", () => {
   });
 });
 
-describe("updateMinicpaVersion", () => {
+describe("executeMinicpaUpgrade (update)", () => {
   it("uses fixed safe npm update arguments and a credential-safe inherited environment", async () => {
     const detection = supportedInstall();
-    await updateMinicpaVersion(detection, "2.3.4", {
+    await executeMinicpaUpgrade(detection, "2.3.4", "update", {
       env: {
         PATH: "/custom/bin",
         https_proxy: "http://proxy.example",
@@ -403,7 +401,7 @@ describe("updateMinicpaVersion", () => {
 
   it("reports npm update failures with the correct retry command", async () => {
     await assert.rejects(
-      updateMinicpaVersion(supportedInstall(), "2.3.4", { spawn: closingSpawn(17) }),
+      executeMinicpaUpgrade(supportedInstall(), "2.3.4", "update", { spawn: closingSpawn(17) }),
       (error: Error) => {
         assert.match(error.message, /^MiniCPA upgrade failed:.*status 17/s);
         assert.match(error.message, /npm --prefix "\/global prefix" update --global/);
@@ -417,7 +415,7 @@ describe("updateMinicpaVersion", () => {
 
   it("fails when npm succeeds without installing the fetched latest version", async () => {
     await assert.rejects(
-      updateMinicpaVersion(supportedInstall(), "2.3.4", {
+      executeMinicpaUpgrade(supportedInstall(), "2.3.4", "update", {
         spawn: closingSpawn(0),
         readFile: async () => JSON.stringify({ name: "@astralyn/minicpa", version: "2.3.3" }),
       }),
@@ -432,10 +430,10 @@ describe("updateMinicpaVersion", () => {
   });
 });
 
-describe("installMinicpaVersion", () => {
+describe("executeMinicpaUpgrade (install)", () => {
   it("uses fixed safe npm arguments and a credential-safe inherited environment", async () => {
     const detection = supportedInstall();
-    await installMinicpaVersion(detection, "2.3.4", {
+    await executeMinicpaUpgrade(detection, "2.3.4", "install", {
       env: {
         PATH: "/custom/bin",
         https_proxy: "http://proxy.example",
@@ -470,7 +468,7 @@ describe("installMinicpaVersion", () => {
   it("reports nonzero npm exits with a manual recovery command", async () => {
     const detection = supportedInstall();
     await assert.rejects(
-      installMinicpaVersion(detection, "2.3.4", { spawn: closingSpawn(17) }),
+      executeMinicpaUpgrade(detection, "2.3.4", "install", { spawn: closingSpawn(17) }),
       (error: Error) => {
         assert.match(error.message, /^MiniCPA upgrade failed:.*status 17/s);
         assert.match(error.message, /npm --prefix "\/global prefix" install --global/);
@@ -495,11 +493,13 @@ describe("installMinicpaVersion", () => {
       };
     })() as SpawnCommand;
     await assert.rejects(
-      installMinicpaVersion(detection, "2.3.4", { spawn: missingSpawn }),
+      executeMinicpaUpgrade(detection, "2.3.4", "install", { spawn: missingSpawn }),
       /was not found[\s\S]*Retry manually/,
     );
     await assert.rejects(
-      installMinicpaVersion(detection, "2.3.4", { spawn: closingSpawn(null, "SIGTERM") }),
+      executeMinicpaUpgrade(detection, "2.3.4", "install", {
+        spawn: closingSpawn(null, "SIGTERM"),
+      }),
       /terminated by signal SIGTERM[\s\S]*Retry manually/,
     );
   });
@@ -507,17 +507,45 @@ describe("installMinicpaVersion", () => {
   it("strictly verifies the installed manifest and succeeds only on an exact match", async () => {
     const detection = supportedInstall();
     await assert.rejects(
-      installMinicpaVersion(detection, "2.3.4", {
+      executeMinicpaUpgrade(detection, "2.3.4", "install", {
         spawn: closingSpawn(0),
         readFile: async () => JSON.stringify({ name: "@astralyn/minicpa", version: "2.3.5" }),
       }),
       /post-upgrade verification expected/,
     );
 
-    await installMinicpaVersion(detection, "2.3.4-beta.1", {
+    await executeMinicpaUpgrade(detection, "2.3.4-beta.1", "install", {
       spawn: closingSpawn(0),
       readFile: async () => JSON.stringify({ name: "@astralyn/minicpa", version: "2.3.4-beta.1" }),
     });
+  });
+
+  it("reports unreadable, malformed and mismatched post-upgrade manifests", async () => {
+    for (const body of [
+      "{broken",
+      "null",
+      "[]",
+      JSON.stringify({ name: "wrong-package", version: "2.3.4" }),
+    ]) {
+      await assert.rejects(
+        () =>
+          executeMinicpaUpgrade(supportedInstall(), "2.3.4", "install", {
+            spawn: closingSpawn(0),
+            readFile: async () => body,
+          }),
+        /could not be read or parsed|post-upgrade verification expected/,
+      );
+    }
+    await assert.rejects(
+      () =>
+        executeMinicpaUpgrade(supportedInstall(), "2.3.4", "update", {
+          spawn: closingSpawn(0),
+          readFile: async () => {
+            throw new Error("manifest unreadable");
+          },
+        }),
+      /could not be read or parsed[\s\S]*@astralyn\/minicpa@latest/,
+    );
   });
 
   it("rejects tags, ranges, paths, and non-canonical versions before spawning", async () => {
@@ -526,11 +554,13 @@ describe("installMinicpaVersion", () => {
       spawned = true;
       throw new Error("must not spawn");
     }) as SpawnCommand;
-    for (const version of ["latest", "^2.3.4", "../package", "v2.3.4", "02.3.4"]) {
-      await assert.rejects(
-        installMinicpaVersion(supportedInstall(), version, { spawn: fakeSpawn }),
-        /non-canonical/,
-      );
+    for (const operation of ["install", "update"] as const) {
+      for (const version of ["latest", "^2.3.4", "../package", "v2.3.4", "02.3.4"]) {
+        await assert.rejects(
+          executeMinicpaUpgrade(supportedInstall(), version, operation, { spawn: fakeSpawn }),
+          /non-canonical/,
+        );
+      }
     }
     assert.equal(spawned, false);
   });

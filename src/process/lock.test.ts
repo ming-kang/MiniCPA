@@ -6,13 +6,7 @@ import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { miniCpaRoot } from "../paths.js";
-import {
-  inspectMiniCpaLock,
-  listLockPreemptResidue,
-  preemptLock,
-  withMiniCpaLock,
-} from "./lock.js";
-import { readProcessStartMarker } from "./pid-identity.js";
+import { inspectMiniCpaLock, withMiniCpaLock } from "./lock.js";
 
 const tempDirs: string[] = [];
 const childPids: number[] = [];
@@ -61,13 +55,6 @@ function spawnLiveHolder(): number {
   return child.pid;
 }
 
-function differentComparableStartMarker(marker: string): string {
-  const numericSuffix = /^(.*?)(-?\d+)$/.exec(marker);
-  return numericSuffix
-    ? `${numericSuffix[1]}${BigInt(numericSuffix[2] ?? "0") + 1n}`
-    : `${marker}:different`;
-}
-
 describe("withMiniCpaLock", () => {
   it("keeps ownership even if the diagnostic lock file disappears", async () => {
     configureIsolatedAppRoot();
@@ -107,12 +94,16 @@ describe("withMiniCpaLock", () => {
     });
     await ready;
     try {
-      await assert.rejects(() => withMiniCpaLock("second", async () => undefined), /lock|running/i);
+      await assert.rejects(
+        () => withMiniCpaLock("second", async () => undefined),
+        /Another cpa first is running|lock lease/i,
+      );
     } finally {
       release();
       await holding;
     }
   });
+
   it("uses one global lock and releases it", async () => {
     configureIsolatedAppRoot();
     let ran = false;
@@ -124,73 +115,16 @@ describe("withMiniCpaLock", () => {
     assert.equal(fs.existsSync(lockPath()), false);
   });
 
-  it("preempts a stale global lock", async () => {
+  it("records diagnostic metadata without start marker while held", async () => {
     configureIsolatedAppRoot();
-    fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
-    fs.writeFileSync(
-      lockPath(),
-      JSON.stringify({ pid: 999_999_999, command: "stale", acquiredAt: new Date().toISOString() }) +
-        "\n",
-    );
-    await withMiniCpaLock("test", async () => {
-      /* acquired */
+    await withMiniCpaLock("test-cmd", async () => {
+      const raw = fs.readFileSync(lockPath(), "utf8");
+      const record = JSON.parse(raw) as Record<string, unknown>;
+      assert.equal(record.pid, process.pid);
+      assert.equal(record.command, "test-cmd");
+      assert.ok(typeof record.acquiredAt === "string");
+      assert.equal(record.startMarker, undefined);
     });
-    assert.equal(fs.existsSync(lockPath()), false);
-  });
-
-  it("rejects a live holder globally", async () => {
-    configureIsolatedAppRoot();
-    const holderPid = spawnLiveHolder();
-    fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
-    fs.writeFileSync(
-      lockPath(),
-      `${JSON.stringify({
-        pid: holderPid,
-        command: "start",
-        acquiredAt: new Date().toISOString(),
-      })}\n`,
-    );
-    await assert.rejects(
-      () => withMiniCpaLock("update", async () => undefined),
-      /Another cpa start is running/,
-    );
-    assert.ok(fs.existsSync(lockPath()));
-  });
-
-  it("names the lock file and its age when a live unrelated PID wedges the lock", async () => {
-    configureIsolatedAppRoot();
-    // A crashed run whose PID was reused after a reboot: alive, no start marker
-    // recorded, so reuse can never be proven and the lock stays held forever.
-    const holderPid = spawnLiveHolder();
-    const acquiredAt = new Date(Date.now() - 90 * 60_000).toISOString();
-    fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
-    fs.writeFileSync(
-      lockPath(),
-      `${JSON.stringify({ pid: holderPid, command: "update", acquiredAt })}\n`,
-    );
-
-    await assert.rejects(
-      () => withMiniCpaLock("start", async () => undefined),
-      (err: unknown) => {
-        const message = (err as Error).message;
-        assert.match(message, /Another cpa update is running/);
-        assert.ok(
-          message.includes(lockPath()),
-          `expected the absolute lock path in: ${JSON.stringify(message)}`,
-        );
-        assert.ok(
-          message.includes(acquiredAt),
-          `expected the acquiredAt timestamp in: ${JSON.stringify(message)}`,
-        );
-        assert.ok(
-          message.includes("90m ago"),
-          `expected the holder age in: ${JSON.stringify(message)}`,
-        );
-        return true;
-      },
-    );
-    // Fail-closed stance preserved: the lock is still there.
-    assert.ok(fs.existsSync(lockPath()));
   });
 
   it("supports intentional re-entrant acquire in the same process", async () => {
@@ -253,7 +187,7 @@ describe("withMiniCpaLock", () => {
     child.kill("SIGKILL");
     await new Promise<void>((resolve) => child.once("exit", () => resolve()));
 
-    // Dead holder → stale preemption path → acquisition succeeds.
+    // Dead holder → lease crash-released by OS → acquisition succeeds.
     let ran = false;
     await withMiniCpaLock("update", async () => {
       ran = true;
@@ -261,13 +195,24 @@ describe("withMiniCpaLock", () => {
     assert.equal(ran, true);
   });
 
-  it("preempts a live PID whose start marker no longer matches", async () => {
+  it("does not block when an obsolete stale-PID diagnostic file exists", async () => {
+    configureIsolatedAppRoot();
+    fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
+    fs.writeFileSync(
+      lockPath(),
+      `${JSON.stringify({ pid: 999_999_999, command: "stale", acquiredAt: new Date().toISOString() })}\n`,
+    );
+    let ran = false;
+    await withMiniCpaLock("test", async () => {
+      ran = true;
+    });
+    assert.equal(ran, true);
+    assert.equal(fs.existsSync(lockPath()), false);
+  });
+
+  it("does not block when an obsolete diagnostic file contains a live PID without a lease", async () => {
     configureIsolatedAppRoot();
     const holderPid = spawnLiveHolder();
-    // Only meaningful when the platform can produce markers for the holder.
-    const currentMarker = await readProcessStartMarker(holderPid);
-    if (!currentMarker) return;
-
     fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
     fs.writeFileSync(
       lockPath(),
@@ -275,7 +220,6 @@ describe("withMiniCpaLock", () => {
         pid: holderPid,
         command: "start",
         acquiredAt: new Date().toISOString(),
-        startMarker: differentComparableStartMarker(currentMarker),
       })}\n`,
     );
 
@@ -284,9 +228,10 @@ describe("withMiniCpaLock", () => {
       ran = true;
     });
     assert.equal(ran, true);
+    assert.equal(fs.existsSync(lockPath()), false);
   });
 
-  it("waits out and recovers a fresh empty lock", async () => {
+  it("does not block when an empty diagnostic lock file exists", async () => {
     configureIsolatedAppRoot();
     fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
     fs.writeFileSync(lockPath(), "");
@@ -300,18 +245,17 @@ describe("withMiniCpaLock", () => {
     assert.equal(fs.existsSync(lockPath()), false);
   });
 
-  it("preempts a stale corrupt lock after the grace period", async () => {
+  it("does not block when a corrupt diagnostic lock file exists", async () => {
     configureIsolatedAppRoot();
     fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
     fs.writeFileSync(lockPath(), "not-json");
-    const past = new Date(Date.now() - 10_000);
-    fs.utimesSync(lockPath(), past, past);
 
     let ran = false;
     await withMiniCpaLock("update", async () => {
       ran = true;
     });
     assert.equal(ran, true);
+    assert.equal(fs.existsSync(lockPath()), false);
   });
 });
 
@@ -338,12 +282,10 @@ describe("inspectMiniCpaLock", () => {
     const status = inspectMiniCpaLock();
     assert.equal(status.state, "absent");
     assert.equal(status.path, lockPath());
-    assert.equal(status.pid, undefined);
-    // A pure read must not materialize the state directory.
     assert.equal(fs.existsSync(path.dirname(lockPath())), false);
   });
 
-  it("reports a held lock and leaves the state directory untouched", async () => {
+  it("reports a record and leaves the state directory untouched", async () => {
     configureIsolatedAppRoot();
     const acquiredAt = new Date(Date.now() - 5 * 60_000).toISOString();
     fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
@@ -356,13 +298,15 @@ describe("inspectMiniCpaLock", () => {
     const status = inspectMiniCpaLock();
     const after = snapshotStateDir();
 
-    assert.equal(status.state, "held");
+    assert.equal(status.state, "record");
     assert.equal(status.path, lockPath());
-    assert.equal(status.pid, process.pid);
-    assert.equal(status.command, "update");
-    assert.equal(status.acquiredAt, acquiredAt);
-    assert.ok((status.ageMs ?? 0) >= 5 * 60_000);
-    assert.equal(status.holderAlive, true);
+    if (status.state === "record") {
+      assert.equal(status.pid, process.pid);
+      assert.equal(status.command, "update");
+      assert.equal(status.acquiredAt, acquiredAt);
+      assert.ok((status.ageMs ?? 0) >= 5 * 60_000);
+      assert.equal(status.holderAlive, true);
+    }
     assert.equal(after, before);
   });
 
@@ -373,82 +317,7 @@ describe("inspectMiniCpaLock", () => {
 
     const status = inspectMiniCpaLock();
     assert.equal(status.state, "unreadable");
-    assert.equal(status.pid, undefined);
+    assert.equal(status.path, lockPath());
     assert.ok(fs.existsSync(lockPath()));
-  });
-});
-
-describe("listLockPreemptResidue", () => {
-  it("finds orphaned preempt files beside the lock", async () => {
-    configureIsolatedAppRoot();
-    const stateDir = path.dirname(lockPath());
-    fs.mkdirSync(stateDir, { recursive: true });
-    const residue = path.join(stateDir, "cpa.lock.preempt.123.abc");
-    fs.writeFileSync(residue, "orphan");
-    fs.writeFileSync(lockPath(), "{}");
-    fs.writeFileSync(path.join(stateDir, "cpa.pid"), "1");
-
-    assert.deepEqual(listLockPreemptResidue(), [residue]);
-  });
-
-  it("returns an empty list when the state directory does not exist", async () => {
-    configureIsolatedAppRoot();
-    assert.deepEqual(listLockPreemptResidue(), []);
-    assert.equal(fs.existsSync(path.dirname(lockPath())), false);
-  });
-});
-
-describe("preemptLock", () => {
-  it("never displaces a live replacement while examining stale content", async () => {
-    configureIsolatedAppRoot();
-    fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
-    fs.writeFileSync(lockPath(), "holder-B");
-    const originalRename = fs.renameSync;
-    let displaced = false;
-    fs.renameSync = (from, to) => {
-      originalRename(from, to);
-      if (String(from) === lockPath()) {
-        displaced = true;
-        fs.writeFileSync(lockPath(), "holder-C");
-      }
-    };
-    try {
-      assert.equal(preemptLock(lockPath(), { kind: "unreadable", raw: "stale-A" }), false);
-    } finally {
-      fs.renameSync = originalRename;
-    }
-    assert.equal(displaced, false);
-    assert.equal(fs.readFileSync(lockPath(), "utf8"), "holder-B");
-  });
-  it("restores the lock when content changed since the stale decision", async () => {
-    configureIsolatedAppRoot();
-    fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
-    const liveContent = `${JSON.stringify({ pid: process.pid, command: "live" })}\n`;
-    fs.writeFileSync(lockPath(), liveContent);
-
-    // Decision was made against different (stale) content.
-    const preempted = preemptLock(lockPath(), {
-      kind: "unreadable",
-      raw: "stale-content-from-earlier-read",
-      mtimeMs: 0,
-    });
-
-    assert.equal(preempted, false);
-    assert.equal(fs.readFileSync(lockPath(), "utf8"), liveContent);
-  });
-
-  it("deletes the lock when content matches the stale decision", async () => {
-    configureIsolatedAppRoot();
-    fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
-    fs.writeFileSync(lockPath(), "stale");
-
-    const preempted = preemptLock(lockPath(), {
-      kind: "unreadable",
-      raw: "stale",
-      mtimeMs: 0,
-    });
-
-    assert.equal(preempted, true);
-    assert.equal(fs.existsSync(lockPath()), false);
   });
 });

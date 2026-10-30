@@ -8,7 +8,6 @@ import {
   directorySizeBytes,
   formatBytes,
   rotateFileIfLarge,
-  readTextFileBounded,
   tailFile,
 } from "./util.js";
 
@@ -31,44 +30,6 @@ describe("formatBytes", () => {
     assert.equal(formatBytes(500), "500 B");
     assert.equal(formatBytes(2048), "2.0 KB");
     assert.equal(formatBytes(3 * 1024 * 1024), "3.0 MB");
-  });
-});
-
-describe("readTextFileBounded", () => {
-  it("handles empty input and exact UTF-8 byte boundaries", () => {
-    const file = path.join(tempDir(), "config.yaml");
-    fs.writeFileSync(file, "");
-    assert.equal(readTextFileBounded(file, 6), "");
-    fs.writeFileSync(file, "世界");
-    assert.equal(readTextFileBounded(file, 6), "世界");
-    assert.throws(() => readTextFileBounded(file, 5), /size limit/);
-  });
-
-  it("enforces bytes actually read when a file grows during the read", () => {
-    const file = path.join(tempDir(), "config.yaml");
-    fs.writeFileSync(file, "abc");
-    const originalRead = fs.readSync;
-    let grew = false;
-    fs.readSync = ((
-      fd: number,
-      buffer: NodeJS.ArrayBufferView,
-      offset: number,
-      length: number,
-      position: number | null,
-    ): number => {
-      const count = originalRead(fd, buffer, offset, length, position);
-      if (!grew && count > 0) {
-        grew = true;
-        fs.appendFileSync(file, "def");
-      }
-      return count;
-    }) as typeof fs.readSync;
-    try {
-      assert.throws(() => readTextFileBounded(file, 5), /size limit/);
-    } finally {
-      fs.readSync = originalRead;
-    }
-    assert.equal(grew, true);
   });
 });
 
@@ -122,19 +83,22 @@ describe("rotateFileIfLarge", () => {
     const dir = tempDir();
     const file = path.join(dir, "cpa.log");
     fs.writeFileSync(file, "small");
-    assert.equal(rotateFileIfLarge(file, { maxBytes: 100, keep: 2 }), false);
+    assert.equal(rotateFileIfLarge(file, { maxBytes: 100 }), false);
     assert.equal(fs.existsSync(file), true);
   });
 
-  it("rotates and keeps generations", () => {
+  it("replaces only the single retained generation", () => {
     const dir = tempDir();
-    const file = path.join(dir, "cpa.log");
+    const file = path.join(dir, "minicpa.log");
     fs.writeFileSync(file, "current-payload");
     fs.writeFileSync(`${file}.1`, "old-1");
-    assert.equal(rotateFileIfLarge(file, { maxBytes: 4, keep: 2 }), true);
+    assert.equal(rotateFileIfLarge(file, { maxBytes: 4 }), true);
     assert.equal(fs.existsSync(file), false);
     assert.equal(fs.readFileSync(`${file}.1`, "utf8"), "current-payload");
-    assert.equal(fs.readFileSync(`${file}.2`, "utf8"), "old-1");
+    fs.writeFileSync(file, "next-payload");
+    assert.equal(rotateFileIfLarge(file, { maxBytes: 4 }), true);
+    assert.equal(fs.readFileSync(`${file}.1`, "utf8"), "next-payload");
+    assert.equal(fs.existsSync(`${file}.2`), false);
   });
 
   it("keeps a rotated sibling that could not be renamed", () => {
@@ -145,12 +109,11 @@ describe("rotateFileIfLarge", () => {
 
     const realRename = fs.renameSync;
     try {
-      // Simulate a filesystem that refuses every rename (Windows AV / EPERM):
-      // a failed shift must never delete the log it could not move.
+      // A failed replacement must preserve both the current and previous log.
       fs.renameSync = (): never => {
         throw new Error("EPERM: operation not permitted, rename");
       };
-      assert.equal(rotateFileIfLarge(file, { maxBytes: 4, keep: 2 }), false);
+      assert.equal(rotateFileIfLarge(file, { maxBytes: 4 }), false);
     } finally {
       fs.renameSync = realRename;
     }
