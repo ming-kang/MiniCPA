@@ -4,16 +4,18 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-30
+
 ### Changed
 
-- Streamline codebase comments to retain only non-obvious invariants, OS caveats, and architectural constraints while removing redundant, self-explanatory documentation.
-- Refocus `README.md` on high-level system architecture, boundaries, and workflows instead of low-level implementation details.
-- Split the former `docs/cpa-reference.md` into focused architectural guides covering dual-lease concurrency (`docs/concurrency.md`), two-phase update pipelines (`docs/update-pipeline.md`), process supervision and autostart (`docs/process-lifecycle.md`), and security isolation boundaries (`docs/security.md`), with `docs/README.md` serving as the unified architecture index.
 - Make `cpa status` the single overview: status with PID, uptime, and the next step (`cpa init` / `cpa start`), API reachability, Web URL, an explained autostart state, CLIProxyAPI and MiniCPA versions, the instance home, a non-direct download route, and detected problems (missing or backup-only binary, unrecorded version, unreachable HTTP, last failed start). It still exits `0` only when CLIProxyAPI is running and reachable.
 - Make bare `cpa auto` show the current state without changing it; only `cpa auto on` / `cpa auto off` change the registration. Stale and OS-disabled registrations are explained with `cpa auto on` as the fix.
 - Print `CLIProxyAPI is already running` instead of reporting a fresh start, align all command output to one label column, drop the Home row from action commands, and suggest `taskkill /PID <pid> /T /F` on Windows when a stop fails.
 - Group root help into Lifecycle, Interfaces, and Updates with Commander's native help groups, hide the launcher-only `--no-wait`, and restore "Did you mean …?" suggestions for mistyped commands.
 - Make `cpa init` print the bootstrap management password and API key once, since CLIProxyAPI hashes the management secret on first start; make `cpa web` note when CLIProxyAPI is not running, still without HTTP probes.
+- Streamline codebase comments to retain only non-obvious invariants, OS caveats, and architectural constraints while removing redundant, self-explanatory documentation.
+- Refocus `README.md` on high-level system architecture, boundaries, and workflows instead of low-level implementation details.
+- Split the former `docs/cpa-reference.md` into focused architectural guides covering dual-lease concurrency (`docs/concurrency.md`), two-phase update pipelines (`docs/update-pipeline.md`), process supervision and autostart (`docs/process-lifecycle.md`), and security isolation boundaries (`docs/security.md`), with `docs/README.md` serving as the unified architecture index.
 
 ### Removed
 
