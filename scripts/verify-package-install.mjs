@@ -267,7 +267,7 @@ try {
     throw new Error(`npm did not create the platform cpa shim at ${executableBinPath}.`);
   }
 
-  for (const flag of ["-v", "-V", "--version"]) {
+  for (const flag of ["-v", "--version"]) {
     const cliVersion = runCli(executableBinPath, [flag], smokeEnvironment).trim();
     assertEqual(cliVersion, expectedVersion, `cpa ${flag} output`);
   }
@@ -275,18 +275,30 @@ try {
   const rootHelp = runCli(executableBinPath, ["--help"], smokeEnvironment);
   const bareHelp = runCli(executableBinPath, [], smokeEnvironment);
   assertEqual(bareHelp, rootHelp, "bare cpa help output");
-  for (const command of ["auto", "web", "update", "upgrade"]) {
+  for (const command of [
+    "init",
+    "start",
+    "stop",
+    "restart",
+    "status",
+    "auto",
+    "web",
+    "tui",
+    "logs",
+    "update",
+    "upgrade",
+  ]) {
     if (!new RegExp(`^\\s*${command}(?:\\s|$)`, "m").test(rootHelp)) {
       throw new Error(`cpa --help must list the ${command} command.`);
     }
   }
-  for (const hidden of ["open", "clean", "root", "temp"]) {
-    if (new RegExp(`^\\s*${hidden}(?:\\s|$)`, "m").test(rootHelp)) {
-      throw new Error(`cpa --help must not list the hidden ${hidden} command.`);
+  for (const removed of ["open", "clean", "root", "temp", "doctor", "version", "home"]) {
+    if (new RegExp(`^\\s*${removed}(?:\\s|$)`, "m").test(rootHelp)) {
+      throw new Error(`cpa --help must not list the removed ${removed} command.`);
     }
   }
-  if (!/-v, -V, --version/.test(rootHelp)) {
-    throw new Error("cpa --help must show all three MiniCPA version flags.");
+  if (!/-v, --version/.test(rootHelp)) {
+    throw new Error("cpa --help must show the MiniCPA version flags.");
   }
 
   const autoHelp = runCli(executableBinPath, ["auto", "--help"], smokeEnvironment);
@@ -300,8 +312,8 @@ try {
   }
 
   const updateHelp = runCli(executableBinPath, ["update", "--help"], smokeEnvironment);
-  if (/^\s*--all(?:\s|$)/m.test(updateHelp)) {
-    throw new Error("cpa update --help must hide the redundant --all compatibility option.");
+  if (/^\s*--(?:all|binary|panel)(?:\s|$)/m.test(updateHelp)) {
+    throw new Error("cpa update --help must not list the removed update scope options.");
   }
 
   const upgradeHelp = runCli(executableBinPath, ["upgrade", "--help"], smokeEnvironment);
