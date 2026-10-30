@@ -1,20 +1,23 @@
 import fs from "node:fs";
 import { apiBaseUrl } from "../api-url.js";
-import { createContext } from "../context.js";
-import { ensureDir, miniCpaRoot } from "../paths.js";
+import { createContext, printRow } from "../context.js";
+import { ensureDir } from "../paths.js";
 import { withMiniCpaLock, withMiniCpaUpdateLock } from "../process/lock.js";
 import { performUpdate, type UpdateDeps } from "./update-cmd.js";
+
+const INITIAL_API_KEY = "sk-cliproxyapi";
+const INITIAL_MANAGEMENT_KEY = "CLIPROXYAPI";
 
 const INITIAL_CONFIG = `host: "127.0.0.1"
 port: 8317
 
 auth-dir: "auths"
 api-keys:
-  - sk-cliproxyapi
+  - ${INITIAL_API_KEY}
 
 remote-management:
   allow-remote: false
-  secret-key: CLIPROXYAPI
+  secret-key: ${INITIAL_MANAGEMENT_KEY}
   disable-control-panel: false
   disable-auto-update-panel: false
   panel-github-repository: "https://github.com/seakee/CPA-Manager-Plus"
@@ -45,24 +48,22 @@ export async function runInit(updateDeps?: UpdateDeps): Promise<void> {
   const { layout, home } = createContext();
   apiBaseUrl();
   await withMiniCpaUpdateLock("init", async () => {
-    await withMiniCpaLock("init", async () => {
+    const created = await withMiniCpaLock("init", async () => {
       ensureDir(home);
       ensureDir(layout.stateDir);
-      if (createInitialConfig(layout.configFile)) {
-        console.log(`Created    ${layout.configFile}`);
-        console.log(
-          "Config     One-time local bootstrap; change the fixed keys in CLIProxyAPI before exposing it",
-        );
-      } else {
-        console.log(`Exists     ${layout.configFile} (left untouched)`);
-      }
+      return createInitialConfig(layout.configFile);
     });
-    console.log(`MiniCPA root  ${miniCpaRoot()}`);
-    console.log(`Home          ${home}`);
-    console.log("Component     Ensuring latest CLIProxyAPI binary");
+    if (created) {
+      printRow("Created", layout.configFile);
+      // CPA hashes secret-key on first start, so this is the only place it stays readable.
+      printRow("Panel key", `${INITIAL_MANAGEMENT_KEY}  (management password for cpa web)`);
+      printRow("API key", INITIAL_API_KEY);
+      console.log("Change both in the Web panel before exposing CLIProxyAPI beyond this machine.");
+    } else {
+      printRow("Config", `${layout.configFile} (exists, left untouched)`);
+    }
     await performUpdate(home, {}, updateDeps);
-    console.log("Next:");
-    console.log("  cpa start");
-    console.log("  cpa web");
+    console.log("");
+    console.log("Next: cpa start, then cpa web");
   });
 }

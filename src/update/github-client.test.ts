@@ -14,7 +14,6 @@ process.env.no_proxy = "127.0.0.1";
 import { HttpStatusError, NetworkError } from "../http.js";
 import {
   browserReleaseAssetUrl,
-  checkGithubReachability,
   ensureReleaseTag,
   fetchLatestRelease,
   fetchLatestReleaseViaApi,
@@ -384,93 +383,6 @@ describe("fetchLatestRelease", () => {
           },
         }),
       /Browser path: browser unavailable\nAPI fallback: API rate limited/,
-    );
-  });
-});
-
-describe("checkGithubReachability", () => {
-  const tokenKeys = ["GITHUB_TOKEN", "GH_TOKEN"] as const;
-  const savedTokens = new Map<string, string | undefined>();
-
-  afterEach(() => {
-    for (const key of tokenKeys) delete process.env[key];
-    for (const [key, value] of savedTokens) {
-      if (value !== undefined) process.env[key] = value;
-    }
-    savedTokens.clear();
-  });
-
-  function clearTokens(): void {
-    for (const key of tokenKeys) {
-      if (!savedTokens.has(key)) savedTokens.set(key, process.env[key]);
-      delete process.env[key];
-    }
-  }
-
-  it("reports core rate limit and sends the API token", async () => {
-    clearTokens();
-    process.env.GITHUB_TOKEN = "ghp_probe";
-    let seenAuth: string | undefined;
-    await withHttpFixture(
-      {
-        "/rate_limit": (req, res) => {
-          seenAuth = req.headers.authorization;
-          res.statusCode = 200;
-          res.setHeader("content-type", "application/json");
-          res.end(JSON.stringify({ resources: { core: { remaining: 4_999 } } }));
-        },
-      },
-      async (baseUrl) => {
-        const result = await checkGithubReachability(baseUrl);
-        assert.deepEqual(result, {
-          ok: true,
-          status: 200,
-          remaining: 4_999,
-          authenticated: true,
-        });
-        assert.equal(seenAuth, "Bearer ghp_probe");
-      },
-    );
-  });
-
-  it("has one short total diagnostic budget, including a stalled response body", async () => {
-    clearTokens();
-    let hits = 0;
-    await withHttpFixture(
-      {
-        "/rate_limit": (_req, res) => {
-          hits++;
-          res.flushHeaders();
-        },
-      },
-      async (baseUrl) => {
-        const started = Date.now();
-        const result = await checkGithubReachability(baseUrl, 75);
-        assert.equal(result.ok, true);
-        assert.equal(result.remaining, undefined);
-        assert.equal(hits, 1);
-        assert.ok(Date.now() - started < 1500, "doctor must not inherit a 30s update/retry budget");
-      },
-    );
-  });
-
-  it("reports an unreachable API without a rate limit", async () => {
-    clearTokens();
-    await withHttpFixture(
-      {
-        "/rate_limit": (req, res) => {
-          assert.equal(req.headers.authorization, undefined);
-          res.statusCode = 403;
-          res.end("forbidden");
-        },
-      },
-      async (baseUrl) => {
-        const result = await checkGithubReachability(baseUrl);
-        assert.equal(result.ok, false);
-        assert.equal(result.status, 403);
-        assert.equal(result.remaining, undefined);
-        assert.equal(result.authenticated, false);
-      },
     );
   });
 });

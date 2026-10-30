@@ -1,4 +1,4 @@
-import { NetworkError, formatNetworkError, hasProxyEnvConfigured } from "./network-error.js";
+import { NetworkError, formatNetworkError } from "./network-error.js";
 export { NetworkError, formatNetworkError, hasProxyEnvConfigured } from "./network-error.js";
 import {
   EnvHttpProxyAgent,
@@ -57,32 +57,6 @@ function getProxyAgent(): EnvHttpProxyAgent {
     sharedProxySignature = signature;
   }
   return sharedProxyAgent;
-}
-
-export function describeProxyEnv(env: NodeJS.ProcessEnv = process.env): string {
-  if (!hasProxyEnvConfigured(env)) return "none";
-  const parts: string[] = [];
-  for (const key of [
-    "HTTPS_PROXY",
-    "https_proxy",
-    "HTTP_PROXY",
-    "http_proxy",
-    "ALL_PROXY",
-    "all_proxy",
-  ] as const) {
-    const value = env[key];
-    if (!value) continue;
-    const note =
-      (key === "ALL_PROXY" || key === "all_proxy") && !applicableAllProxy(env)
-        ? " (scheme not applied)"
-        : "";
-    parts.push(`${key}=${redactProxyUrl(value)}${note}`);
-  }
-  const noProxy = env.NO_PROXY || env.no_proxy;
-  if (noProxy) {
-    parts.push(`NO_PROXY=(set, ${noProxy.split(/[,\s]+/).filter(Boolean).length} entries)`);
-  }
-  return parts.join(" ");
 }
 
 export function describeDownloadRoute(env: NodeJS.ProcessEnv = process.env): string {

@@ -3,7 +3,6 @@ import { Response } from "undici";
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import {
-  describeProxyEnv,
   describeDownloadRoute,
   formatNetworkError,
   hasProxyEnvConfigured,
@@ -91,41 +90,6 @@ describe("redactProxyUrl", () => {
   });
 });
 
-describe("describeProxyEnv", () => {
-  it("summarizes configured proxies", () => {
-    const text = describeProxyEnv({
-      HTTPS_PROXY: "http://user:pass@127.0.0.1:7890",
-      NO_PROXY: "localhost,127.0.0.1",
-    });
-    assert.match(text, /HTTPS_PROXY=/);
-    assert.match(text, /\*\*\*/);
-    assert.match(text, /NO_PROXY=/);
-    assert.equal(describeProxyEnv({}), "none");
-  });
-
-  it("still redacts credentials in an ALL_PROXY value", () => {
-    const text = describeProxyEnv({ ALL_PROXY: "http://user:secret@127.0.0.1:7890" });
-    assert.match(text, /ALL_PROXY=/);
-    assert.match(text, /\*\*\*/);
-    assert.doesNotMatch(text, /user|secret/);
-  });
-
-  it("marks an ALL_PROXY scheme undici cannot dial", () => {
-    assert.match(
-      describeProxyEnv({ ALL_PROXY: "socks5://127.0.0.1:1080" }),
-      /ALL_PROXY=socks5:\/\/127\.0\.0\.1:1080 \(scheme not applied\)/,
-    );
-    assert.match(
-      describeProxyEnv({ all_proxy: "socks5h://127.0.0.1:1080" }),
-      /\(scheme not applied\)/,
-    );
-    assert.doesNotMatch(
-      describeProxyEnv({ ALL_PROXY: "http://127.0.0.1:7890" }),
-      /scheme not applied/,
-    );
-  });
-});
-
 describe("proxy env application", () => {
   const proxyKeys = [
     "HTTP_PROXY",
@@ -206,7 +170,7 @@ describe("proxy env application", () => {
         const res = await httpFetch(`${baseUrl}/hello`, undefined, { retries: 0 });
         assert.equal(res.status, 200);
         assert.equal(await res.text(), "direct");
-        assert.match(describeProxyEnv(), /\(scheme not applied\)/);
+        assert.match(describeDownloadRoute(), /ALL_PROXY scheme not supported/);
       },
     );
   });

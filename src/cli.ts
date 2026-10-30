@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 import "./node-version-guard.js";
-import { Argument, Command, CommanderError, type Help, Option } from "commander";
+import { Argument, Command, CommanderError, Help, Option } from "commander";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_API_URL } from "./api-url.js";
 import { withCliErrors } from "./cli-errors.js";
-import { createContext } from "./context.js";
-import { miniCpaRoot, miniCpaTempRoot } from "./paths.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.join(__dirname, "..");
@@ -20,15 +18,20 @@ program
   .name("cpa")
   .description("MiniCPA — manage, run, and update one local CLIProxyAPI instance.")
   .version(pkg.version, "-v, --version", "Show the MiniCPA version")
-  // Commander options accept at most two flags. Keep the third version spelling as a
-  // separate hidden option, handled through its public option event below.
-  .addOption(new Option("-V", "Show the MiniCPA version").hideHelp())
   .addOption(
     new Option("--api-url <url>", "CPA API base URL for probes and Web access")
       .default(DEFAULT_API_URL)
       .env("MINICPA_API_URL"),
   )
   .helpOption("-h, --help", "Show help")
+  .helpCommand(false)
+  .configureHelp({
+    // Commander counts hidden options too, which would list `start [options]` for --no-wait alone.
+    subcommandTerm(cmd) {
+      const term = Help.prototype.subcommandTerm.call(this, cmd);
+      return cmd.options.every((option) => option.hidden) ? term.replace(" [options]", "") : term;
+    },
+  })
   .showHelpAfterError(false)
   // Without this, a program-level version flag may be matched AFTER a subcommand
   // name, so `cpa update --version 7.2.66` would print MiniCPA's version instead of
@@ -39,14 +42,15 @@ program
   })
   .exitOverride();
 
-program.on("option:V", () => {
-  console.log(pkg.version);
-  throw new CommanderError(0, "commander.version", pkg.version);
-});
+// Autostart launchers pass --no-wait; interactive use always waits for readiness.
+const noWaitOption = (): Option =>
+  new Option("--no-wait", "Do not wait for CLIProxyAPI to become ready").hideHelp();
+
+program.commandsGroup("Lifecycle:");
 
 program
   .command("init")
-  .description("Create config.yaml once and install the latest CLIProxyAPI binary")
+  .description("Create config.yaml once and install CLIProxyAPI")
   .action(
     withCliErrors(async () => {
       const { runInit } = await import("./commands/init.js");
@@ -56,8 +60,8 @@ program
 
 program
   .command("start")
-  .description("Start CLIProxyAPI in the background and wait until it is ready")
-  .option("--no-wait", "Do not wait for CLIProxyAPI to become ready")
+  .description("Start CLIProxyAPI in the background")
+  .addOption(noWaitOption())
   .action(
     withCliErrors(async (opts: { wait?: boolean }) => {
       const { runStart } = await import("./commands/lifecycle-cmd.js");
@@ -78,20 +82,28 @@ program
 program
   .command("restart")
   .description("Restart CLIProxyAPI")
-  .option("--no-wait", "Do not wait for CLIProxyAPI to become ready")
+  .addOption(noWaitOption())
   .action(
     withCliErrors(async (opts: { wait?: boolean }) => {
       const { runRestart } = await import("./commands/lifecycle-cmd.js");
-      await runRestart({
-        noWait: opts.wait === false,
-      });
+      await runRestart({ noWait: opts.wait === false });
+    }),
+  );
+
+program
+  .command("status")
+  .description("Show status, versions, endpoints, and detected problems")
+  .action(
+    withCliErrors(async () => {
+      const { runStatus } = await import("./commands/lifecycle-cmd.js");
+      await runStatus(pkg.version);
     }),
   );
 
 program
   .command("auto")
-  .description("Toggle or set CLIProxyAPI autostart for the current user")
-  .addArgument(new Argument("[mode]", "Set autostart explicitly").choices(["on", "off"]))
+  .description("Show or set CLIProxyAPI autostart at login")
+  .addArgument(new Argument("[mode]", "Turn autostart on or off").choices(["on", "off"]))
   .action(
     withCliErrors(async (mode?: "on" | "off") => {
       const { runAuto } = await import("./commands/auto-cmd.js");
@@ -99,15 +111,7 @@ program
     }),
   );
 
-program
-  .command("status")
-  .description("Show CLIProxyAPI runtime, autostart, and endpoints")
-  .action(
-    withCliErrors(async () => {
-      const { runStatus } = await import("./commands/lifecycle-cmd.js");
-      await runStatus(pkg.version);
-    }),
-  );
+program.commandsGroup("Interfaces:");
 
 program
   .command("web")
@@ -120,37 +124,6 @@ program
   );
 
 program
-  .command("open", { hidden: true })
-  .description("Print and open the Web panel URL")
-  .action(
-    withCliErrors(async () => {
-      const { runOpen } = await import("./commands/lifecycle-cmd.js");
-      await runOpen();
-    }),
-  );
-
-program
-  .command("logs")
-  .description("Show CLIProxyAPI native application or request-error logs")
-  .option("-f, --follow", "Follow log output")
-  .option("-n, --lines <n>", "Number of lines per file", "80")
-  .option("--err", "Show native request-error logs")
-  .option("--legacy", "Read old stdout/stderr captures (no longer written on new starts)")
-  .action(
-    withCliErrors(
-      async (opts: { follow?: boolean; lines: string; err?: boolean; legacy?: boolean }) => {
-        const { runLogs, parseLogLineCount } = await import("./commands/logs.js");
-        await runLogs({
-          follow: opts.follow,
-          lines: parseLogLineCount(opts.lines),
-          errOnly: opts.err,
-          legacy: opts.legacy,
-        });
-      },
-    ),
-  );
-
-program
   .command("tui")
   .description("Open the CLIProxyAPI terminal UI")
   .action(
@@ -160,86 +133,50 @@ program
     }),
   );
 
-const updateCmd = program
+program
+  .command("logs")
+  .description("Show CLIProxyAPI application or request-error logs")
+  .option("-f, --follow", "Follow log output")
+  .option("-n, --lines <n>", "Number of lines per file", "80")
+  .option("--err", "Show request-error logs")
+  .action(
+    withCliErrors(async (opts: { follow?: boolean; lines: string; err?: boolean }) => {
+      const { runLogs, parseLogLineCount } = await import("./commands/logs.js");
+      await runLogs({
+        follow: opts.follow,
+        lines: parseLogLineCount(opts.lines),
+        errOnly: opts.err,
+      });
+    }),
+  );
+
+program.commandsGroup("Updates:");
+
+program
   .command("update")
-  .description("Update the managed CLIProxyAPI binary without modifying configuration");
-
-updateCmd
-  .command("check")
-  .description("Check the CLIProxyAPI binary version without installing")
+  .description("Update CLIProxyAPI (restarts it only if replaced)")
+  .option("--version <version>", "Install a specific CLIProxyAPI version (for example, 7.2.66)")
+  .option("--force", "Reinstall even when up to date")
+  .option("--insecure", "Skip checksum verification (unsafe)")
   .action(
-    withCliErrors(async () => {
-      const { runUpdateCheck } = await import("./commands/update-cmd.js");
-      await runUpdateCheck();
+    withCliErrors(async (opts: { version?: string; force?: boolean; insecure?: boolean }) => {
+      const { runUpdate } = await import("./commands/update-cmd.js");
+      await runUpdate(opts);
     }),
+  )
+  .addHelpText(
+    "after",
+    [
+      "",
+      "CLIProxyAPI owns its configuration and Web panel; updates never touch them.",
+      "To upgrade MiniCPA itself, run cpa upgrade.",
+      "",
+    ].join("\n"),
   );
 
-updateCmd
-  .addOption(
-    new Option("--all", "Compatibility alias for a binary update")
-      .hideHelp()
-      .conflicts(["binary", "panel"]),
-  )
-  .addOption(
-    new Option("--binary", "Compatibility alias for a binary update")
-      .hideHelp()
-      .conflicts(["all", "panel"]),
-  )
-  .addOption(
-    new Option("--panel", "Legacy Web panel update option").hideHelp().conflicts(["all", "binary"]),
-  )
-  .option(
-    "--version <version>",
-    "Install a specific CLIProxyAPI binary version (for example, 7.2.66)",
-  )
-  .option("--force", "Reinstall the CLIProxyAPI binary even when up to date")
-  .option("--insecure", "Skip CLIProxyAPI checksum verification (unsafe)")
-  .action(
-    withCliErrors(
-      async (opts: { panel?: boolean; version?: string; force?: boolean; insecure?: boolean }) => {
-        if (opts.panel) {
-          throw new Error(
-            "Web panel updates are managed by CLIProxyAPI. Start or restart CLIProxyAPI, then run: cpa web",
-          );
-        }
-        const { runUpdate } = await import("./commands/update-cmd.js");
-        await runUpdate({
-          version: opts.version,
-          force: opts.force,
-          insecure: opts.insecure,
-        });
-      },
-    ),
-  );
-
-updateCmd.addHelpText(
-  "after",
-  [
-    "",
-    "CLIProxyAPI owns configuration after the one-time cpa init bootstrap.",
-    "Updates never synchronize configuration or manage configuration backups.",
-    "CLIProxyAPI provisions and updates its Web panel itself.",
-    "A running instance is restarted only when its CLIProxyAPI binary is replaced.",
-    "To upgrade MiniCPA itself, run cpa upgrade.",
-    "",
-  ].join("\n"),
-);
-
-const upgradeCmd = program
+program
   .command("upgrade")
-  .description("Upgrade the globally installed MiniCPA package through npm");
-
-upgradeCmd
-  .command("check")
-  .description("Check npm for a newer MiniCPA version without installing")
-  .action(
-    withCliErrors(async () => {
-      const { runUpgradeCheck } = await import("./commands/upgrade-cmd.js");
-      await runUpgradeCheck(pkg.version);
-    }),
-  );
-
-upgradeCmd
+  .description("Upgrade MiniCPA itself through npm")
   .option("--force", "Reinstall the latest npm version when current (never downgrade)")
   .action(
     withCliErrors(async (opts: { force?: boolean }) => {
@@ -255,156 +192,26 @@ upgradeCmd
     "after",
     [
       "",
-      "This command does not update, stop, or restart the managed CLIProxyAPI instance.",
-      "To update CLIProxyAPI, run cpa update. CLIProxyAPI manages its own Web panel.",
+      "This command never stops, restarts, or updates CLIProxyAPI.",
+      "To update CLIProxyAPI, run cpa update.",
       "",
     ].join("\n"),
   );
 
-program
-  .command("doctor")
-  .description("Diagnose CLIProxyAPI installation and runtime problems")
-  .option("--deep", "Include recursive temporary-file size statistics")
-  .action(
-    withCliErrors(async (opts: { deep?: boolean }) => {
-      const { runDoctor } = await import("./commands/doctor.js");
-      await runDoctor(undefined, { deep: opts.deep });
-    }),
-  );
-
-program
-  .command("clean", { hidden: true })
-  .description("Remove old MiniCPA staging files (never touches the CLIProxyAPI instance)")
-  .action(
-    withCliErrors(async () => {
-      const { runClean } = await import("./commands/clean.js");
-      await runClean();
-    }),
-  );
-
-program
-  .command("version")
-  .description("Show MiniCPA, CLIProxyAPI, and instance home")
-  .action(
-    withCliErrors(async () => {
-      const { runVersion } = await import("./commands/version-cmd.js");
-      await runVersion(pkg.version);
-    }),
-  );
-
-program
-  .command("home")
-  .description("Print the CLIProxyAPI instance directory")
-  .action(
-    withCliErrors(async () => {
-      const ctx = createContext();
-      console.log(ctx.home);
-    }),
-  );
-
-program
-  .command("root", { hidden: true })
-  .description("Print MiniCPA root (persistent data)")
-  .action(
-    withCliErrors(async () => {
-      console.log(miniCpaRoot());
-    }),
-  );
-
-program
-  .command("temp", { hidden: true })
-  .description("Print private staging directory")
-  .action(
-    withCliErrors(async () => {
-      console.log(miniCpaTempRoot());
-    }),
-  );
-
-const rootCommandGroups = [
-  { title: "Lifecycle", commands: ["init", "start", "stop", "restart", "auto", "status"] },
-  { title: "Interfaces", commands: ["web", "tui", "logs"] },
-  { title: "Updates", commands: ["update", "upgrade"] },
-  { title: "Diagnostics", commands: ["doctor"] },
-  { title: "Information", commands: ["version", "home"] },
-] as const;
-
-function formatRootHelp(cmd: Command, helper: Help): string {
-  const termWidth = helper.padWidth(cmd, helper);
-  const formatOption = (option: Option): string => {
-    const term = option.long === "--version" ? "-v, -V, --version" : helper.optionTerm(option);
-    return helper.formatItem(
-      helper.styleOptionTerm(term),
-      termWidth,
-      helper.styleOptionDescription(helper.optionDescription(option)),
-      helper,
-    );
-  };
-  const formatCommand = (command: Command): string =>
-    helper.formatItem(
-      helper.styleSubcommandTerm(helper.subcommandTerm(command)),
-      termWidth,
-      helper.styleSubcommandDescription(helper.subcommandDescription(command)),
-      helper,
-    );
-
-  const output = [
-    `${helper.styleTitle("Usage:")} ${helper.styleUsage(helper.commandUsage(cmd))}`,
-    "",
-    helper.boxWrap(
-      helper.styleCommandDescription(helper.commandDescription(cmd)),
-      helper.helpWidth ?? 80,
-    ),
-    "",
-    helper.styleTitle("Options:"),
-    ...helper.visibleOptions(cmd).map(formatOption),
-    "",
-  ];
-
-  for (const group of rootCommandGroups) {
-    const commands = group.commands.map((name) =>
-      cmd.commands.find((item) => item.name() === name),
-    );
-    output.push(
-      helper.styleTitle(`${group.title}:`),
-      ...commands.filter((command): command is Command => command !== undefined).map(formatCommand),
-      "",
-    );
-  }
-
-  return output.join("\n");
-}
-
-program
-  .configureHelp({ formatHelp: formatRootHelp })
-  // With a root action Commander treats a bare operand as an excess argument. Accept it
-  // through parsing so the action can preserve the clearer "unknown command" diagnostic.
-  .allowExcessArguments(true)
-  .addHelpText(
-    "after",
-    "\nQuick start:\n  cpa init\n  cpa start\n  cpa web\n\nRun cpa <command> --help for command details.\n",
-  )
-  .action(() => {
-    const unknownCommand = program.args[0];
-    if (unknownCommand !== undefined) {
-      program.error(`error: unknown command '${unknownCommand}'`, {
-        code: "commander.unknownCommand",
-        exitCode: 1,
-      });
-    }
-    program.outputHelp();
-  });
+program.addHelpText(
+  "after",
+  "\nQuick start:\n  cpa init\n  cpa start\n  cpa web\n\nRun cpa <command> --help for command details.\n",
+);
 
 try {
-  await program.parseAsync(process.argv);
+  // Commander treats a bare command group as a usage error (help on stderr, exit 1).
+  if (process.argv.length <= 2) program.outputHelp();
+  else await program.parseAsync(process.argv);
 } catch (err) {
   // Commander exitOverride throws on --help / unknown commands / version.
   const e = err as { code?: string; message?: string; exitCode?: number };
   if (e.code === "commander.helpDisplayed" || e.code === "commander.version") {
     process.exitCode = 0;
-  } else if (e.code === "commander.help") {
-    // Commander reuses this code for both `cpa help <known-cmd>` (exitCode 0) and the
-    // error path help({ error: true }) used for a missing/unknown subcommand (exitCode 1).
-    process.exitCode = typeof e.exitCode === "number" ? e.exitCode : 0;
   } else {
     // Command.error() already wrote the message to stderr before exitOverride threw,
     // so re-printing a CommanderError would duplicate every usage error.

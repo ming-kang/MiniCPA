@@ -10,6 +10,7 @@ export function createContext(): CommandContext {
   return { home, layout: cpaLayout(home) };
 }
 
-export function printHome(ctx: CommandContext): void {
-  console.log(`Home       ${ctx.home}`);
+/** One aligned `Label        value` line; every command shares the same label column. */
+export function printRow(label: string, value: string): void {
+  console.log(`${label.padEnd(13)}${value}`);
 }

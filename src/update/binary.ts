@@ -66,18 +66,6 @@ export type BinaryUpdateResult = {
   restarted: boolean;
 };
 
-export type BinaryCheckDeps = { fetchLatestRelease: typeof fetchLatestRelease };
-
-export async function checkBinaryUpdate(
-  home: string,
-  deps: BinaryCheckDeps = { fetchLatestRelease },
-): Promise<{ current?: string; latest: string; upToDate: boolean }> {
-  const current = recordedVersion(home);
-  const release = await deps.fetchLatestRelease(CPA_REPO);
-  const latest = normalizeTagVersion(release.tag);
-  return { current, latest, upToDate: !!current && current === latest };
-}
-
 function recordedVersion(home: string): string | undefined {
   const installed = inspectRuntimeInstallation(home);
   return installed.executable?.kind === "active" ? installed.state.runtimeVersion : undefined;

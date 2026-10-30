@@ -8,7 +8,13 @@ import { activeExecutablePath, backupExecutablePath, cpaLayout, ensureDir } from
 import { writePidRecord } from "../state.js";
 import { sleep } from "../util.js";
 import { isProcessAlive } from "./alive.js";
-import { inspectRunning, resolveRunning, startDaemon, stopDaemon } from "./lifecycle.js";
+import {
+  inspectRunning,
+  resolveRunning,
+  StartFailure,
+  startDaemon,
+  stopDaemon,
+} from "./lifecycle.js";
 import { isTaggedStartMarker, readProcessStartMarker } from "./pid-identity.js";
 
 const tempHomes: string[] = [];
@@ -354,14 +360,55 @@ function installFakeRuntime(home: string, pidMarker: string): void {
   fs.chmodSync(exe, 0o755);
 }
 
-describe("startDaemon", () => {
-  it("leaves old captures untouched and does not append detached stdout/stderr", async () => {
+describe("StartFailure", () => {
+  it("quotes only what this start wrote and summarizes its last line", () => {
     const home = tempHome();
     const layout = cpaLayout(home);
     ensureDir(layout.logsDir);
+    fs.writeFileSync(layout.runtimeLogFile, "[t0] [--------] [info ] [main.go:1] previous run\n");
+    const since = fs.statSync(layout.runtimeLogFile).size;
+    fs.appendFileSync(
+      layout.runtimeLogFile,
+      "[t1] [--------] [info ] [main.go:1] starting\n[t2] [--------] [error] [run.go:66] bind: address in use\n",
+    );
+
+    const failure = new StartFailure(home, "CLIProxyAPI exited immediately.", since);
+    assert.equal(
+      failure.message,
+      [
+        "CLIProxyAPI exited immediately.",
+        "--- main.log ---",
+        "[t1] [--------] [info ] [main.go:1] starting",
+        "[t2] [--------] [error] [run.go:66] bind: address in use",
+        `Full log: ${layout.runtimeLogFile}`,
+      ].join("\n"),
+    );
+    assert.equal(failure.summary, "CLIProxyAPI exited immediately. bind: address in use");
+  });
+
+  it("treats a rotated log as entirely new and omits an empty excerpt", () => {
+    const home = tempHome();
+    const layout = cpaLayout(home);
+    ensureDir(layout.logsDir);
+    const missing = new StartFailure(home, "CLIProxyAPI exited immediately.", 0);
+    assert.equal(
+      missing.message,
+      `CLIProxyAPI exited immediately.\nFull log: ${layout.runtimeLogFile}`,
+    );
+    assert.equal(missing.summary, "CLIProxyAPI exited immediately.");
+
+    fs.writeFileSync(layout.runtimeLogFile, "fatal: bad config\n");
+    const rotated = new StartFailure(home, "CLIProxyAPI exited immediately.", 1_000_000);
+    assert.match(rotated.message, /--- main\.log ---\nfatal: bad config\n/);
+    assert.equal(rotated.summary, "CLIProxyAPI exited immediately. fatal: bad config");
+  });
+});
+
+describe("startDaemon", () => {
+  it("creates logs/ before spawning and does not capture detached stdout/stderr", async () => {
+    const home = tempHome();
+    const layout = cpaLayout(home);
     fs.writeFileSync(layout.configFile, "port: 8317\n");
-    fs.writeFileSync(layout.logFile, "old stdout\n");
-    fs.writeFileSync(layout.errLogFile, "old stderr\n");
     if (process.platform === "win32") installFakeRuntime(home, path.join(home, "pid-marker"));
     else {
       fs.writeFileSync(
@@ -376,8 +423,9 @@ describe("startDaemon", () => {
     } catch (error) {
       assert.match(String(error), /exited immediately/);
     }
-    assert.equal(fs.readFileSync(layout.logFile, "utf8"), "old stdout\n");
-    assert.equal(fs.readFileSync(layout.errLogFile, "utf8"), "old stderr\n");
+    // Without ./logs CPA silently writes to <auth-dir>/logs instead.
+    assert.ok(fs.statSync(layout.logsDir).isDirectory());
+    assert.deepEqual(fs.readdirSync(layout.logsDir), []);
   });
 
   it("terminates the new process when its PID record cannot be written", async () => {

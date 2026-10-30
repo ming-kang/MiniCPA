@@ -83,4 +83,5 @@ MiniCPA separates service application output from CLI supervisor diagnostics:
 ```
 
 - **Native Logging**: CLIProxyAPI directly manages application file logging and continuous log rotation (`main.log` and `error-*.log`). MiniCPA streams these files via `cpa logs` without redirecting daemon standard output.
-- **Supervisor Events**: Startup outcomes (especially non-interactive login autostart failures) are recorded in `state/minicpa.log` outside CLIProxyAPI's log retention tree, ensuring startup failures remain inspectable via `cpa doctor`.
+- **Log Directory**: CLIProxyAPI writes to `<home>/logs` only if that directory already exists; otherwise it silently falls back to `<auth-dir>/logs`. MiniCPA therefore creates `<home>/logs` before every start, so `cpa logs` and startup failure reports (which append the `main.log` tail) read the file CLIProxyAPI is actually writing.
+- **Supervisor Events**: Startup outcomes (especially non-interactive login autostart failures) are recorded in `state/minicpa.log` outside CLIProxyAPI's log retention tree, ensuring the last failed start stays visible in `cpa status`.

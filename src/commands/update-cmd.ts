@@ -1,67 +1,7 @@
 import { apiBaseUrl } from "../api-url.js";
-import { formatCliError } from "../cli-errors.js";
-import { createContext, printHome } from "../context.js";
-import { checkBinaryUpdate, updateBinary, type BinaryUpdateResult } from "../update/binary.js";
+import { createContext } from "../context.js";
+import { updateBinary, type BinaryUpdateResult } from "../update/binary.js";
 import { consoleUpdateReporter } from "../update/reporter.js";
-
-export function updateCheckExitCode(result: {
-  binaryUpToDate: boolean;
-  binaryError: boolean;
-}): number {
-  return result.binaryUpToDate && !result.binaryError ? 0 : 1;
-}
-
-export type UpdateCheckDeps = {
-  checkBinaryUpdate: typeof checkBinaryUpdate;
-};
-
-const realUpdateCheckDeps: UpdateCheckDeps = { checkBinaryUpdate };
-
-const CHECK_LABEL_WIDTH = 13;
-
-function checkLabel(name: string): string {
-  return name.padEnd(CHECK_LABEL_WIDTH);
-}
-
-function checkRow(
-  component: string,
-  current: string | undefined,
-  latest: string,
-  status: string,
-): string {
-  return `${checkLabel(component)}current=${current ?? "(not installed)"}  latest=${latest}  ${status}`;
-}
-
-export async function runUpdateCheck(deps: UpdateCheckDeps = realUpdateCheckDeps): Promise<void> {
-  const ctx = createContext();
-  printHome(ctx);
-
-  try {
-    const binary = await deps.checkBinaryUpdate(ctx.home);
-    console.log(
-      checkRow(
-        "CLIProxyAPI",
-        binary.current,
-        binary.latest,
-        binary.upToDate ? "up to date" : "update available",
-      ),
-    );
-    if (!binary.upToDate) {
-      console.log("");
-      console.log("Run: cpa update");
-    }
-    process.exitCode = updateCheckExitCode({
-      binaryUpToDate: binary.upToDate,
-      binaryError: false,
-    });
-  } catch (err) {
-    console.log(`${checkLabel("CLIProxyAPI")}check failed: ${formatCliError(err)}`);
-    process.exitCode = updateCheckExitCode({
-      binaryUpToDate: false,
-      binaryError: true,
-    });
-  }
-}
 
 function updateResultLine(
   result: {
@@ -121,6 +61,5 @@ export async function runUpdate(
 ): Promise<void> {
   const ctx = createContext();
   apiBaseUrl();
-  printHome(ctx);
   await performUpdate(ctx.home, opts, deps);
 }

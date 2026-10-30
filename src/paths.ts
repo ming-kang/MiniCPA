@@ -55,8 +55,6 @@ export type CpaLayout = {
   stateDir: string;
   pidFile: string;
   installStateFile: string;
-  logFile: string;
-  errLogFile: string;
   runtimeLogFile: string;
   minicpaLogFile: string;
 };
@@ -71,8 +69,6 @@ export function cpaLayout(home: string): CpaLayout {
     stateDir: path.join(home, "state"),
     pidFile: path.join(home, "state", "cpa.pid"),
     installStateFile: path.join(home, "state", "install.json"),
-    logFile: path.join(home, "logs", "cpa.log"),
-    errLogFile: path.join(home, "logs", "cpa.err.log"),
     runtimeLogFile: path.join(home, "logs", "main.log"),
     minicpaLogFile: path.join(home, "state", "minicpa.log"),
   };

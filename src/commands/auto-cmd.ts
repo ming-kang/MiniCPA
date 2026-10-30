@@ -1,7 +1,8 @@
 import { lingerHint } from "../process/autostart-linux.js";
 import fs from "node:fs";
-import { createContext } from "../context.js";
+import { createContext, printRow } from "../context.js";
 import {
+  describeAutostartState,
   inspectAutostartState,
   type AutostartState,
   setAutostartEnabled,
@@ -39,11 +40,6 @@ export function startPreconditionNotes(): string[] {
   return notes;
 }
 
-function nextAutostartEnabled(current: AutostartState): boolean {
-  // Stale and disabled registrations start nothing, so a toggle repairs and enables them.
-  return current !== "on";
-}
-
 export async function runAuto(
   options: { packageRoot: string; mode?: AutoMode },
   deps?: AutoCommandDependencies,
@@ -55,32 +51,36 @@ export async function runAuto(
   const hintLinger = deps?.lingerHint ?? lingerHint;
   const preconditionNotes = deps?.preconditionNotes ?? startPreconditionNotes;
 
-  const enabled = await withLock("auto", async () => {
-    const next =
-      options.mode === undefined ? nextAutostartEnabled(await inspect()) : options.mode === "on";
-
-    if (next) {
-      const installation = await detectGlobalInstall(
-        options.packageRoot,
-        {},
-        { requireWritable: false },
-      );
-      if (!installation.supported) {
-        throw new Error(
-          [
-            "Autostart requires a stable direct npm-global MiniCPA installation.",
-            installation.message,
-            "Install globally with:",
-            "npm install -g @astralyn/minicpa@latest",
-          ].join("\n"),
+  let state: AutostartState;
+  if (options.mode === undefined) {
+    // Read-only: showing the state must never change the registration.
+    state = await inspect();
+  } else {
+    const enabled = options.mode === "on";
+    await withLock("auto", async () => {
+      if (enabled) {
+        const installation = await detectGlobalInstall(
+          options.packageRoot,
+          {},
+          { requireWritable: false },
         );
+        if (!installation.supported) {
+          throw new Error(
+            [
+              "Autostart requires a stable direct npm-global MiniCPA installation.",
+              installation.message,
+              "Install globally with:",
+              "npm install -g @astralyn/minicpa@latest",
+            ].join("\n"),
+          );
+        }
       }
-    }
-    await set(next);
-    return next;
-  });
-  console.log(`Autostart ${enabled ? "on" : "off"}`);
-  if (!enabled) return;
+      await set(enabled);
+    });
+    state = options.mode;
+  }
+  printRow("Autostart", describeAutostartState(state));
+  if (state !== "on") return;
   for (const note of preconditionNotes()) console.error(`Note: ${note}`);
   const hint = await hintLinger();
   if (hint) console.error(`Note: ${hint}`);

@@ -15,36 +15,21 @@ export async function runLogs(opts: {
   follow?: boolean;
   lines?: number;
   errOnly?: boolean;
-  legacy?: boolean;
 }): Promise<void> {
-  const { home, layout } = createContext();
-  const main = runtimeLogFile(home);
-  const nativeFiles = opts.legacy
-    ? []
-    : opts.errOnly
-      ? runtimeErrorLogFiles(home)
-      : [main].filter((file) => fs.existsSync(file));
-  const legacyFiles = (
-    opts.errOnly ? [layout.errLogFile] : [layout.logFile, layout.errLogFile]
-  ).filter((file) => fs.existsSync(file));
-  const useLegacy =
-    opts.legacy || (!fs.existsSync(main) && nativeFiles.length === 0 && legacyFiles.length > 0);
-  const files = useLegacy ? legacyFiles : nativeFiles;
-  if (useLegacy && !opts.legacy) {
-    console.error(
-      "Warning: showing legacy stdout/stderr history. New starts use CLIProxyAPI native logs.",
-    );
-  }
-  if (opts.follow && opts.errOnly && !useLegacy && fs.existsSync(runtimeLogDirectory(home))) {
+  const { home } = createContext();
+  const directory = runtimeLogDirectory(home);
+  if (opts.follow && opts.errOnly && fs.existsSync(directory)) {
     // Dynamic error-log polling discovers newly created request error log files.
     await tailFollowMany(() => runtimeErrorLogFiles(home));
     return;
   }
+  const main = runtimeLogFile(home);
+  const files = opts.errOnly ? runtimeErrorLogFiles(home) : fs.existsSync(main) ? [main] : [];
   if (files.length === 0) {
     throw new Error(
       opts.errOnly
-        ? `Log not found: ${useLegacy ? layout.errLogFile : `${runtimeLogDirectory(home)}/error-*.log`}`
-        : `No log files yet under ${useLegacy ? layout.logsDir : runtimeLogDirectory(home)} (configure native logging in CLIProxyAPI)`,
+        ? `No request-error logs in ${directory}`
+        : `No CLIProxyAPI log in ${directory} yet. It appears once CLIProxyAPI runs with logging-to-file enabled (cpa init enables it).`,
     );
   }
   if (opts.follow) {
@@ -53,7 +38,7 @@ export async function runLogs(opts: {
   }
   for (const [index, file] of files.entries()) {
     if (index > 0) console.log("");
-    if (!(useLegacy && opts.errOnly)) console.log(`=== ${file} ===`);
+    console.log(`=== ${file} ===`);
     console.log(tailFile(file, opts.lines ?? 80));
   }
 }

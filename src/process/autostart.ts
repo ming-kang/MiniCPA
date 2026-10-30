@@ -22,6 +22,18 @@ function assertCliPath(deps?: AutostartDependencies): void {
   }
 }
 
+export function describeAutostartState(state: AutostartState): string {
+  switch (state) {
+    case "on":
+    case "off":
+      return state;
+    case "stale":
+      return "stale (registered for a different MiniCPA launcher — run: cpa auto on)";
+    case "disabled":
+      return "disabled by the OS (run: cpa auto on)";
+  }
+}
+
 export async function inspectAutostartState(deps?: AutostartDependencies): Promise<AutostartState> {
   const platform = platformOf(deps);
   assertSupportedPlatform(platform);

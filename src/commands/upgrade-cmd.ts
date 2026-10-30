@@ -7,25 +7,18 @@ import {
 import { detectNpmGlobalInstall } from "../update/npm-global-detection.js";
 import { executeMinicpaUpgrade } from "../update/self-upgrade.js";
 
-export type UpgradeCheckDeps = {
+export type UpgradeDeps = {
   fetchLatestMinicpaVersion: typeof fetchLatestMinicpaVersion;
   compareMinicpaVersions: typeof compareMinicpaVersions;
-};
-
-export type UpgradeDeps = UpgradeCheckDeps & {
   detectNpmGlobalInstall: typeof detectNpmGlobalInstall;
   executeMinicpaUpgrade: typeof executeMinicpaUpgrade;
   withMiniCpaLock: typeof withMiniCpaLock;
   withMiniCpaUpdateLock: typeof withMiniCpaUpdateLock;
 };
 
-const realUpgradeCheckDeps: UpgradeCheckDeps = {
+const realUpgradeDeps: UpgradeDeps = {
   fetchLatestMinicpaVersion,
   compareMinicpaVersions,
-};
-
-const realUpgradeDeps: UpgradeDeps = {
-  ...realUpgradeCheckDeps,
   detectNpmGlobalInstall,
   executeMinicpaUpgrade,
   withMiniCpaLock,
@@ -46,17 +39,6 @@ function printVersionStatus(
       `MiniCPA is newer than the latest published version (${currentVersion} > ${latestVersion}). No changes made.`,
     );
   }
-}
-
-export async function runUpgradeCheck(
-  currentVersion: string,
-  deps: UpgradeCheckDeps = realUpgradeCheckDeps,
-): Promise<void> {
-  const latestVersion = await deps.fetchLatestMinicpaVersion();
-  const status = deps.compareMinicpaVersions(currentVersion, latestVersion);
-  printVersionStatus(currentVersion, latestVersion, status);
-  if (status === "outdated") console.log("Run: cpa upgrade");
-  process.exitCode = status === "outdated" ? 1 : 0;
 }
 
 export async function runUpgrade(

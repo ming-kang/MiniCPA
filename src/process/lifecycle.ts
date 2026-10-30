@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { cpaLayout, ensureDir } from "../paths.js";
-import { recentRuntimeLogs as dumpRecentLogs, runtimeLogFile } from "../runtime-logs.js";
+import { recentRuntimeLogs, runtimeLogFile, runtimeLogSize } from "../runtime-logs.js";
 import { clearPid, readPidRecord, writePidRecord } from "../state.js";
 import { sleep } from "../util.js";
 import { isProcessAlive } from "./alive.js";
@@ -72,8 +72,26 @@ export async function inspectRunning(home: string): Promise<RunningInfo | undefi
   return evaluateRunning(home, false);
 }
 
-function logPathsHint(home: string): string {
-  return `Check logs:\n  ${runtimeLogFile(home)}\n  ${cpaLayout(home).minicpaLogFile}`;
+/** A failed start whose message carries the main.log excerpt; `summary` is one line for the event log. */
+export class StartFailure extends Error {
+  readonly summary: string;
+
+  constructor(home: string, headline: string, logsSince?: number) {
+    const excerpt = recentRuntimeLogs(home, logsSince);
+    super(
+      [
+        headline,
+        ...(excerpt ? ["--- main.log ---", excerpt] : []),
+        `Full log: ${runtimeLogFile(home)}`,
+      ].join("\n"),
+    );
+    // The last line a dying CPA writes is usually its reason; drop the [time] [level] prefix.
+    const lastLine = excerpt
+      .split("\n")
+      .at(-1)
+      ?.replace(/^(\[[^\]]*\]\s*)+/, "");
+    this.summary = lastLine ? `${headline} ${lastLine}` : headline;
+  }
 }
 
 async function runTaskkill(pid: number, force: boolean): Promise<boolean> {
@@ -131,7 +149,9 @@ export type StartOptions = {
   readyTimeoutMs?: number;
 };
 
-export async function startDaemon(home: string, options?: StartOptions): Promise<RunningInfo> {
+export type StartResult = RunningInfo & { alreadyRunning: boolean };
+
+export async function startDaemon(home: string, options?: StartOptions): Promise<StartResult> {
   const layout = cpaLayout(home);
   const urls = options?.noWait ? [] : readinessUrls();
 
@@ -140,21 +160,26 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
     if (!options?.noWait) {
       const ready = await waitForAnyHttpOk(urls, options?.readyTimeoutMs ?? DEFAULT_READY_MS);
       if (!ready) {
-        throw new Error(
-          `CLIProxyAPI is running (PID=${existing.pid}) but HTTP is not reachable. Try: cpa restart${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
+        throw new StartFailure(
+          home,
+          `CLIProxyAPI is running (PID=${existing.pid}) but HTTP is not reachable. Try: cpa restart`,
         );
       }
     }
-    return existing;
+    return { ...existing, alreadyRunning: true };
   }
 
   ensureDir(layout.stateDir);
+  // CPA writes to ./logs only if it already exists; otherwise it silently falls back to
+  // <auth-dir>/logs, where neither `cpa logs` nor startup failure reports would look.
+  ensureDir(layout.logsDir);
 
   if (!fs.existsSync(layout.configFile)) {
     throw new Error(`Missing config: ${layout.configFile}. Run: cpa init`);
   }
 
   const exe = resolveRunnableExecutable(home);
+  const logsSince = runtimeLogSize(home);
   const child = spawn(exe, ["-config", layout.configFile], {
     cwd: home,
     detached: true,
@@ -195,9 +220,7 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
 
   if (!isProcessAlive(child.pid)) {
     clearPid(home);
-    throw new Error(
-      `CLIProxyAPI exited immediately.${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
-    );
+    throw new StartFailure(home, "CLIProxyAPI exited immediately.", logsSince);
   }
 
   if (!options?.noWait) {
@@ -206,17 +229,17 @@ export async function startDaemon(home: string, options?: StartOptions): Promise
     if (!ready) {
       if (!isProcessAlive(child.pid)) {
         clearPid(home);
-        throw new Error(
-          `CLIProxyAPI exited before becoming ready.${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
-        );
+        throw new StartFailure(home, "CLIProxyAPI exited before becoming ready.", logsSince);
       }
-      throw new Error(
-        `CLIProxyAPI started (PID=${child.pid}) but was not ready within ${readyMs}ms. Try: cpa restart${dumpRecentLogs(home)}\n${logPathsHint(home)}`,
+      throw new StartFailure(
+        home,
+        `CLIProxyAPI started (PID=${child.pid}) but was not ready within ${readyMs}ms. Try: cpa restart`,
+        logsSince,
       );
     }
   }
 
-  return { pid: child.pid, exe, startedAt };
+  return { pid: child.pid, exe, startedAt, alreadyRunning: false };
 }
 
 export async function stopDaemon(home: string): Promise<boolean> {
@@ -246,8 +269,10 @@ export async function stopDaemon(home: string): Promise<boolean> {
   }
 
   if (isProcessAlive(pid)) {
+    const forceStop =
+      process.platform === "win32" ? `taskkill /PID ${pid} /T /F` : `kill -9 ${pid}`;
     throw new Error(
-      `CLIProxyAPI is still running after stop (PID=${pid}). The PID file was kept. Try: taskkill /PID ${pid} /F (Windows) or kill -9 ${pid}`,
+      `CLIProxyAPI is still running after stop (PID=${pid}). The PID file was kept. Try: ${forceStop}`,
     );
   }
 

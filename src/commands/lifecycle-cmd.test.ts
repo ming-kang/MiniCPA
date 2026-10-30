@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { readLastMiniCpaEvent } from "../minicpa-log.js";
+import { readLastMiniCpaEvent, recordMiniCpaEvent } from "../minicpa-log.js";
 import {
   activeExecutablePath,
   backupExecutablePath,
@@ -11,12 +11,19 @@ import {
   ensureDir,
   resolveCpaHome,
 } from "../paths.js";
+import type { AutostartState } from "../process/autostart.js";
 import type { RunningInfo } from "../process/lifecycle.js";
 import { writeInstallState, writePidRecord } from "../state.js";
 import { withHttpFixture, withHttpsFixture } from "../test-fixtures/http-server.js";
 import { captureConsole } from "../test-fixtures/test-env.js";
-import { runOpen, runStart, runStatus, runTui } from "./lifecycle-cmd.js";
-import { parseLogLineCount, runLogs } from "./logs.js";
+import {
+  formatLocalTime,
+  formatUptime,
+  runOpen,
+  runStart,
+  runStatus,
+  runTui,
+} from "./lifecycle-cmd.js";
 
 const originalLocalAppData = process.env.LOCALAPPDATA;
 const originalXdgDataHome = process.env.XDG_DATA_HOME;
@@ -86,18 +93,6 @@ afterEach(() => {
   process.exitCode = originalExitCode;
 });
 
-describe("parseLogLineCount", () => {
-  it("accepts positive whole numbers", () => {
-    assert.equal(parseLogLineCount("80"), 80);
-  });
-
-  it("rejects invalid values", () => {
-    for (const value of ["0", "-1", "12.5", "12logs", "", "999999999999999999999"]) {
-      assert.throws(() => parseLogLineCount(value), /positive whole number/);
-    }
-  });
-});
-
 describe("runStart", () => {
   it("records the failure an autostart launch would otherwise swallow", async () => {
     useTempRoot();
@@ -127,7 +122,12 @@ describe("runStart", () => {
       startedAt: new Date().toISOString(),
     });
 
-    await captureConsole(() => runStart({ noWait: true }));
+    const output = await captureConsole(() => runStart({ noWait: true }));
+    assert.deepEqual(output.stdout, [
+      `CLIProxyAPI is already running (PID ${process.pid})`,
+      `API          ${closedBase}`,
+      `Web          ${closedBase}/management.html`,
+    ]);
 
     const recorded = readLastMiniCpaEvent(home);
     assert.equal(recorded?.level, "info");
@@ -267,10 +267,23 @@ describe("runOpen", () => {
     );
     assert.deepEqual(output.stdout, ["http://127.0.0.1:1/management.html"]);
     assert.deepEqual(output.stderr, [
+      "Note: CLIProxyAPI is not running — run: cpa start",
       "Warning: could not open a browser (xdg-open not found)",
       "Open the URL above manually.",
     ]);
     assert.ok(!process.exitCode, `exit code must stay successful, got ${process.exitCode}`);
+  });
+
+  it("omits the not-running note while the recorded process is alive", async () => {
+    useTempRoot();
+    const home = writeHomeForBase("http://127.0.0.1:1");
+    writePidRecord(home, {
+      pid: process.pid,
+      exe: process.execPath,
+      startedAt: new Date().toISOString(),
+    });
+    const output = await captureConsole(() => runOpen({ openInBrowser: async () => {} }));
+    assert.deepEqual(output.stderr, []);
   });
 
   it("prints the URL before launching and propagates other browser errors", async () => {
@@ -329,23 +342,72 @@ describe("runOpen", () => {
   });
 });
 
+describe("formatUptime", () => {
+  const now = Date.parse("2026-01-10T12:00:00Z");
+  it("rounds down to the two most significant units", () => {
+    assert.equal(formatUptime("2026-01-10T11:59:30Z", now), "up <1m");
+    assert.equal(formatUptime("2026-01-10T11:55:00Z", now), "up 5m");
+    assert.equal(formatUptime("2026-01-10T09:30:00Z", now), "up 2h 30m");
+    assert.equal(formatUptime("2026-01-07T07:00:00Z", now), "up 3d 5h");
+  });
+
+  it("omits uptime it cannot trust", () => {
+    assert.equal(formatUptime(undefined, now), undefined);
+    assert.equal(formatUptime("not a date", now), undefined);
+    assert.equal(formatUptime("2026-01-11T00:00:00Z", now), undefined);
+  });
+});
+
+describe("formatLocalTime", () => {
+  it("renders stored UTC timestamps in local time to the minute", () => {
+    assert.equal(formatLocalTime(new Date(2026, 8, 3, 7, 4, 59).toISOString()), "2026-09-03 07:04");
+    assert.equal(formatLocalTime("garbage"), "garbage");
+  });
+});
+
+/** Run `cpa status` with a fixed autostart state and return its output. */
+async function status(
+  autostart: () => Promise<AutostartState> = async () => "off",
+): Promise<{ stdout: string[]; stderr: string[] }> {
+  return captureConsole(() => runStatus("0.4.3", { inspectAutostartState: autostart }));
+}
+
 describe("runStatus", () => {
-  it("prints aligned versions, configuration source and endpoints even while stopped", async () => {
+  it("prints one aligned block with the next step even while stopped", async () => {
     useTempRoot();
     const home = writeHomeForBase("http://127.0.0.1:19090");
-    const output = await captureConsole(() =>
-      runStatus("0.4.3", { inspectAutostartState: async () => "off" }),
-    );
-    for (const line of [
-      "Source           Local File",
-      "MiniCPA Version  0.4.3",
-      "Local API        http://127.0.0.1:19090",
-      `Core Config      ${cpaLayout(home).configFile}`,
-      "Status           stopped",
-    ])
-      assert.ok(output.stdout.includes(line), output.stdout.join("\n"));
-    assert.ok(output.stdout.some((line) => line.startsWith("Download Via     ")));
+    const output = await status();
+    assert.deepEqual(output.stdout.slice(0, 7), [
+      "Status       stopped (run: cpa start)",
+      "API          http://127.0.0.1:19090",
+      "Web          http://127.0.0.1:19090/management.html",
+      "Autostart    off",
+      "CLIProxyAPI  not installed",
+      "MiniCPA      0.4.3",
+      `Home         ${home}`,
+    ]);
+    assert.ok(output.stdout.includes("! CLIProxyAPI binary missing — run: cpa update"));
     assert.equal(process.exitCode, 1);
+  });
+
+  it("points a fresh machine at cpa init without listing problems", async () => {
+    useTempRoot();
+    const output = await status();
+    assert.equal(output.stdout[0], "Status       not initialized (run: cpa init)");
+    assert.ok(!output.stdout.some((line) => line.startsWith("!")), output.stdout.join("\n"));
+  });
+
+  it("surfaces the last failed start that an autostart launch left behind", async () => {
+    useTempRoot();
+    const home = writeHomeForBase("http://127.0.0.1:19090");
+    fs.writeFileSync(activeExecutablePath(home), "binary");
+    writeInstallState(home, { runtimeVersion: "7.2.92" });
+    recordMiniCpaEvent(home, "error", "start failed: port in use", new Date(2026, 0, 10, 8, 5));
+    const output = await status();
+    assert.deepEqual(output.stdout.slice(-2), [
+      "",
+      "! last start failed (2026-01-10 08:05): port in use",
+    ]);
   });
 
   it("never repairs the instance home while reporting on it", async () => {
@@ -367,20 +429,11 @@ describe("runStatus", () => {
     });
     const before = snapshotHome(home);
 
-    const lines: string[] = [];
-    const originalLog = console.log;
-    console.log = (...args: unknown[]): void => {
-      lines.push(args.map((arg) => String(arg)).join(" "));
-    };
-    try {
-      await runStatus("0.4.3", { inspectAutostartState: async () => "off" });
-    } finally {
-      console.log = originalLog;
-    }
+    const output = await status();
 
     assert.ok(
-      lines.some((line) => line.includes("Autostart        off")),
-      lines.join("\n"),
+      output.stdout.some((line) => line.startsWith("! only the backup binary is left")),
+      output.stdout.join("\n"),
     );
     assert.deepEqual(snapshotHome(home), before, "cpa status must not mutate the instance home");
     assert.equal(fs.existsSync(activeExecutablePath(home)), false);
@@ -389,21 +442,12 @@ describe("runStatus", () => {
   it("continues reporting runtime status when autostart inspection fails", async () => {
     useTempRoot();
 
-    const output = await captureConsole(() =>
-      runStatus("0.4.3", {
-        inspectAutostartState: async () => {
-          throw new Error("user manager unavailable");
-        },
-      }),
-    );
+    const output = await status(async () => {
+      throw new Error("user manager unavailable");
+    });
 
-    assert.ok(
-      output.stdout.some((line) => line.startsWith("Home             ")),
-      output.stdout.join("\n"),
-    );
-    assert.ok(output.stdout.includes("Core Version     (not installed)"), output.stdout.join("\n"));
-    assert.ok(output.stdout.includes("Autostart        unknown"), output.stdout.join("\n"));
-    assert.ok(output.stdout.includes("Status           stopped"), output.stdout.join("\n"));
+    assert.ok(output.stdout.includes("Autostart    unknown"), output.stdout.join("\n"));
+    assert.ok(output.stdout.includes("CLIProxyAPI  not installed"), output.stdout.join("\n"));
     assert.deepEqual(output.stderr, [
       "Warning: could not inspect autostart: user manager unavailable",
     ]);
@@ -417,22 +461,26 @@ describe("runStatus", () => {
     fs.writeFileSync(activeExecutablePath(home), "not a real binary");
     writeInstallState(home, { runtimeVersion: "7.2.92" });
 
-    const output = await captureConsole(() =>
-      runStatus("0.4.3", { inspectAutostartState: async () => "off" }),
-    );
+    const output = await status();
 
-    assert.ok(output.stdout.includes("Core Version     7.2.92"), output.stdout.join("\n"));
+    assert.ok(output.stdout.includes("CLIProxyAPI  7.2.92"), output.stdout.join("\n"));
   });
 
-  it("does not collapse stale or OS-disabled registrations into off", async () => {
+  it("explains stale and OS-disabled registrations instead of collapsing them into off", async () => {
     useTempRoot();
 
-    for (const state of ["stale", "disabled"] as const) {
-      const output = await captureConsole(() =>
-        runStatus("0.4.3", { inspectAutostartState: async () => state }),
-      );
-      assert.ok(output.stdout.includes(`Autostart        ${state}`), output.stdout.join("\n"));
-    }
+    const stale = await status(async () => "stale");
+    assert.ok(
+      stale.stdout.includes(
+        "Autostart    stale (registered for a different MiniCPA launcher — run: cpa auto on)",
+      ),
+      stale.stdout.join("\n"),
+    );
+    const disabled = await status(async () => "disabled");
+    assert.ok(
+      disabled.stdout.includes("Autostart    disabled by the OS (run: cpa auto on)"),
+      disabled.stdout.join("\n"),
+    );
   });
 
   it("reports explicit HTTPS URLs and readiness without inspecting TLS settings", async () => {
@@ -452,33 +500,21 @@ describe("runStatus", () => {
           startedAt: new Date().toISOString(),
         });
 
-        const lines: string[] = [];
-        const originalLog = console.log;
-        console.log = (...args: unknown[]): void => {
-          lines.push(args.map((arg) => String(arg)).join(" "));
-        };
-        try {
-          await runStatus("0.4.3", { inspectAutostartState: async () => "on" });
-        } finally {
-          console.log = originalLog;
-        }
+        const output = await status(async () => "on");
 
-        assert.ok(
-          lines.some((l) => l.includes("Autostart        on")),
-          lines.join("\n"),
+        assert.match(
+          output.stdout[0] ?? "",
+          new RegExp(`^Status +running \\(PID ${process.pid}, up`),
         );
         assert.ok(
-          lines.some((l) => l.includes(`Local API        ${baseUrl}`)),
-          lines.join("\n"),
+          output.stdout.includes(`API          ${baseUrl} (reachable)`),
+          output.stdout.join("\n"),
         );
         assert.ok(
-          lines.some((l) => l.includes(`Web Panel        ${baseUrl}/management.html`)),
-          lines.join("\n"),
+          output.stdout.includes(`Web          ${baseUrl}/management.html`),
+          output.stdout.join("\n"),
         );
-        assert.ok(
-          lines.some((l) => l.includes("HTTP             ok")),
-          lines.join("\n"),
-        );
+        assert.ok(output.stdout.includes("Autostart    on"), output.stdout.join("\n"));
         assert.equal(process.exitCode, 0);
       },
     );
@@ -539,33 +575,5 @@ describe("runTui", () => {
       /cpa update/,
     );
     assert.equal(launched, false);
-  });
-});
-
-describe("runLogs", () => {
-  it("throws when no log files exist", async () => {
-    useTempRoot();
-    await assert.rejects(() => runLogs({}), /No log files yet/);
-    await assert.rejects(() => runLogs({ errOnly: true }), /Log not found/);
-    await assert.rejects(() => runLogs({ follow: true }), /No log files yet/);
-  });
-
-  it("prints log tails when files exist", async () => {
-    useTempRoot();
-    const home = resolveCpaHome();
-    const layout = cpaLayout(home);
-    ensureDir(layout.logsDir);
-    fs.writeFileSync(layout.logFile, "line 1\nline 2\nline 3\n");
-    fs.writeFileSync(layout.errLogFile, "err 1\n");
-
-    const { stdout: stdoutAll } = await captureConsole(() => runLogs({ lines: 2 }));
-    assert.ok(stdoutAll.some((l) => l.includes("===") && l.includes("cpa.log")));
-    assert.ok(stdoutAll.some((l) => l.includes("line 2")));
-    assert.ok(stdoutAll.some((l) => l.includes("===") && l.includes("cpa.err.log")));
-    assert.ok(stdoutAll.some((l) => l.includes("err 1")));
-
-    const { stdout: stdoutErr } = await captureConsole(() => runLogs({ errOnly: true, lines: 1 }));
-    assert.equal(stdoutErr.length, 1);
-    assert.equal(stdoutErr[0], "err 1");
   });
 });

@@ -118,7 +118,6 @@ describe("cpaLayout", () => {
     assert.equal(layout.pidFile, path.join(home, "state", "cpa.pid"));
     assert.equal(layout.minicpaLogFile, path.join(home, "state", "minicpa.log"));
     assert.equal(layout.runtimeLogFile, path.join(home, "logs", "main.log"));
-    assert.notEqual(layout.minicpaLogFile, layout.errLogFile);
     assert.ok(!("runtimeDir" in layout));
   });
 });

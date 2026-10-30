@@ -5,7 +5,7 @@ import { afterEach, describe, it } from "node:test";
 import { cpaHome, cpaLayout } from "../paths.js";
 import { captureConsole, createIsolatedTestEnv } from "../test-fixtures/test-env.js";
 import type { BinaryUpdateResult } from "../update/binary.js";
-import { runUpdate, runUpdateCheck, updateCheckExitCode } from "./update-cmd.js";
+import { runUpdate } from "./update-cmd.js";
 
 let env: ReturnType<typeof createIsolatedTestEnv> | undefined;
 afterEach(() => {
@@ -27,15 +27,6 @@ const UPDATED: BinaryUpdateResult = {
   restarted: true,
 };
 
-describe("updateCheckExitCode", () => {
-  it("exits 0 only when the binary is current and the check succeeded", () => {
-    assert.equal(updateCheckExitCode({ binaryUpToDate: true, binaryError: false }), 0);
-    assert.equal(updateCheckExitCode({ binaryUpToDate: false, binaryError: false }), 1);
-    assert.equal(updateCheckExitCode({ binaryUpToDate: true, binaryError: true }), 1);
-    assert.equal(updateCheckExitCode({ binaryUpToDate: false, binaryError: true }), 1);
-  });
-});
-
 describe("runUpdate", () => {
   it("updates the binary without initializing configuration", async () => {
     const layout = setup();
@@ -45,6 +36,7 @@ describe("runUpdate", () => {
       /CLIProxyAPI updated: 8\.0\.46 → 8\.0\.47 \(restarted\)/,
     );
     assert.deepEqual(output.stderr, []);
+    assert.doesNotMatch(output.stdout.join("\n"), /^Home\s/m);
     assert.equal(fs.existsSync(layout.configFile), false);
     assert.equal(fs.existsSync(path.join(layout.home, ".env")), false);
   });
@@ -161,47 +153,5 @@ describe("runUpdate", () => {
       );
       assert.match(output.stdout.join("\n"), expected);
     }
-  });
-});
-
-describe("runUpdateCheck", () => {
-  it("reports only the binary and exits 0 when it is current", async () => {
-    setup();
-    const output = await captureConsole(() =>
-      runUpdateCheck({
-        checkBinaryUpdate: async () => ({ current: "8.0.47", latest: "8.0.47", upToDate: true }),
-      }),
-    );
-    assert.match(
-      output.stdout.join("\n"),
-      /CLIProxyAPI\s+current=8\.0\.47\s+latest=8\.0\.47\s+up to date/,
-    );
-    assert.doesNotMatch(output.stdout.join("\n"), /Web panel|Config synchronized/i);
-    assert.equal(process.exitCode, 0);
-  });
-
-  it("prints the update command and exits 1 when a binary update is available", async () => {
-    setup();
-    const output = await captureConsole(() =>
-      runUpdateCheck({
-        checkBinaryUpdate: async () => ({ current: "8.0.46", latest: "8.0.47", upToDate: false }),
-      }),
-    );
-    assert.match(output.stdout.join("\n"), /update available/);
-    assert.match(output.stdout.join("\n"), /Run: cpa update$/);
-    assert.equal(process.exitCode, 1);
-  });
-
-  it("reports a failed check inline", async () => {
-    setup();
-    const output = await captureConsole(() =>
-      runUpdateCheck({
-        checkBinaryUpdate: async () => {
-          throw new Error("GitHub API 403: rate limit exhausted");
-        },
-      }),
-    );
-    assert.match(output.stdout.join("\n"), /check failed: GitHub API 403/);
-    assert.equal(process.exitCode, 1);
   });
 });

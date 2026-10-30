@@ -3,13 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import {
-  appendPrivateLogLine,
-  directorySizeBytes,
-  formatBytes,
-  rotateFileIfLarge,
-  tailFile,
-} from "./util.js";
+import { appendPrivateLogLine, formatBytes, rotateFileIfLarge, tailFile } from "./util.js";
 
 const temps: string[] = [];
 
@@ -30,16 +24,6 @@ describe("formatBytes", () => {
     assert.equal(formatBytes(500), "500 B");
     assert.equal(formatBytes(2048), "2.0 KB");
     assert.equal(formatBytes(3 * 1024 * 1024), "3.0 MB");
-  });
-});
-
-describe("directorySizeBytes", () => {
-  it("sums nested files", () => {
-    const dir = tempDir();
-    fs.mkdirSync(path.join(dir, "a"), { recursive: true });
-    fs.writeFileSync(path.join(dir, "a", "f.txt"), "hello");
-    fs.writeFileSync(path.join(dir, "b.txt"), "world!");
-    assert.equal(directorySizeBytes(dir), 5 + 6);
   });
 });
 

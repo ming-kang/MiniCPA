@@ -5,37 +5,54 @@ import { afterEach, describe, it } from "node:test";
 import { cpaHome, cpaLayout } from "../paths.js";
 import { runtimeErrorLogFiles } from "../runtime-logs.js";
 import { captureConsole, createIsolatedTestEnv } from "../test-fixtures/test-env.js";
-import { runLogs } from "./logs.js";
+import { parseLogLineCount, runLogs } from "./logs.js";
 
 let env: ReturnType<typeof createIsolatedTestEnv> | undefined;
 afterEach(() => {
   env?.cleanup();
   env = undefined;
+  delete process.env.writable_path;
 });
 function setup(): ReturnType<typeof cpaLayout> {
   env = createIsolatedTestEnv("minicpa-native-logs-");
   const layout = cpaLayout(cpaHome());
   fs.mkdirSync(layout.logsDir, { recursive: true });
-  fs.writeFileSync(layout.logFile, "old stdout\n");
-  fs.writeFileSync(layout.errLogFile, "old stderr\n");
   fs.writeFileSync(layout.runtimeLogFile, "native one\nnative two\n");
   return layout;
 }
 
-describe("native logs", () => {
-  it("defaults to main.log without mixing in stale stdout/stderr", async () => {
-    const layout = setup();
-    const output = await captureConsole(() => runLogs({ lines: 1 }));
-    assert.match(output.stdout.join("\n"), /main.log[\s\S]*native two/);
-    assert.doesNotMatch(output.stdout.join("\n"), /old stdout|old stderr|native one/);
-    assert.equal(fs.readFileSync(layout.logFile, "utf8"), "old stdout\n");
+describe("parseLogLineCount", () => {
+  it("accepts positive whole numbers", () => {
+    assert.equal(parseLogLineCount("80"), 80);
   });
 
-  it("keeps explicit legacy output readable even when native logs exist", async () => {
-    setup();
-    const output = await captureConsole(() => runLogs({ legacy: true, errOnly: true }));
-    assert.deepEqual(output.stdout, ["old stderr"]);
-    assert.deepEqual(output.stderr, []);
+  it("rejects invalid values", () => {
+    for (const value of ["0", "-1", "12.5", "12logs", "", "999999999999999999999"]) {
+      assert.throws(() => parseLogLineCount(value), /positive whole number/);
+    }
+  });
+});
+
+describe("native logs", () => {
+  it("explains where logs will appear when none exist yet", async () => {
+    env = createIsolatedTestEnv("minicpa-native-logs-");
+    await assert.rejects(() => runLogs({}), /No CLIProxyAPI log in .* yet[\s\S]*logging-to-file/);
+    await assert.rejects(() => runLogs({ follow: true }), /No CLIProxyAPI log/);
+    await assert.rejects(() => runLogs({ errOnly: true }), /No request-error logs in /);
+  });
+
+  it("tails main.log under a file header", async () => {
+    const layout = setup();
+    const output = await captureConsole(() => runLogs({ lines: 1 }));
+    assert.deepEqual(output.stdout, [`=== ${layout.runtimeLogFile} ===`, "native two"]);
+  });
+
+  it("ignores stdout/stderr captures left by MiniCPA 0.4.3 and earlier", async () => {
+    const layout = setup();
+    fs.writeFileSync(path.join(layout.logsDir, "cpa.log"), "old stdout\n");
+    fs.writeFileSync(path.join(layout.logsDir, "cpa.err.log"), "old stderr\n");
+    const output = await captureConsole(() => runLogs({}));
+    assert.doesNotMatch(output.stdout.join("\n"), /old stdout|old stderr/);
   });
 
   it("selects only the ten newest native error logs by modification time", async () => {
@@ -51,7 +68,7 @@ describe("native logs", () => {
     assert.deepEqual(runtimeErrorLogFiles(cpaHome()), files.slice(-10));
     const output = await captureConsole(() => runLogs({ errOnly: true }));
     assert.match(output.stdout.join("\n"), /request 11/);
-    assert.doesNotMatch(output.stdout.join("\n"), /native one|old stderr/);
+    assert.doesNotMatch(output.stdout.join("\n"), /native one/);
   });
 
   it("honors the upstream lowercase writable_path override", async () => {

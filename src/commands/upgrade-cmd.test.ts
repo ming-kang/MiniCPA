@@ -3,12 +3,7 @@ import { afterEach, describe, it } from "node:test";
 import { withCliErrors } from "../cli-errors.js";
 import { compareMinicpaVersions } from "../update/minicpa-release.js";
 import type { SupportedNpmGlobalInstall } from "../update/npm-global-detection.js";
-import {
-  runUpgrade,
-  runUpgradeCheck,
-  type UpgradeCheckDeps,
-  type UpgradeDeps,
-} from "./upgrade-cmd.js";
+import { runUpgrade, type UpgradeDeps } from "./upgrade-cmd.js";
 
 const savedExitCode = process.exitCode;
 
@@ -278,40 +273,17 @@ describe("runUpgrade", () => {
   });
 });
 
-describe("runUpgradeCheck", () => {
-  it("uses exit 0 for current and ahead, and exit 1 for outdated", async () => {
-    const cases: Array<[string, number, string]> = [
-      ["1.1.0", 0, "MiniCPA is already up to date (1.1.0)"],
-      ["1.0.0", 1, "MiniCPA upgrade available: 1.0.0 → 1.1.0\nRun: cpa upgrade"],
-      [
-        "2.0.0",
-        0,
-        "MiniCPA is newer than the latest published version (2.0.0 > 1.1.0). No changes made.",
-      ],
-    ];
-
-    for (const [currentVersion, expectedExit, expectedOutput] of cases) {
-      const deps: UpgradeCheckDeps = {
-        fetchLatestMinicpaVersion: async () => "1.1.0",
-        compareMinicpaVersions,
-      };
-      const { stdout } = await captureOutput(() => runUpgradeCheck(currentVersion, deps));
-      assert.equal(process.exitCode, expectedExit);
-      assert.equal(stdout, expectedOutput);
-    }
-  });
-
+describe("runUpgrade errors", () => {
   it("lets withCliErrors turn registry failures into exit 1", async () => {
-    const deps: UpgradeCheckDeps = {
+    const deps = upgradeDeps({
       fetchLatestMinicpaVersion: async () => {
         throw new Error("registry unavailable");
       },
-      compareMinicpaVersions,
-    };
+    });
 
     const { stderr } = await captureOutput(() =>
       withCliErrors(async () => {
-        await runUpgradeCheck("1.0.0", deps);
+        await runUpgrade({ currentVersion: "1.0.0", packageRoot: "/package" }, deps);
       })(),
     );
 

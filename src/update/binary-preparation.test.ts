@@ -13,7 +13,6 @@ import {
 import { withMiniCpaLock } from "../process/lock.js";
 import { readInstallState, writeInstallState } from "../state.js";
 import { createIsolatedTestEnv } from "../test-fixtures/test-env.js";
-import { runClean } from "../commands/clean.js";
 import { HttpStatusError } from "../http.js";
 import { updateBinary, type BinaryPrepareDeps, type BinaryUpdateDeps } from "./binary.js";
 
@@ -157,7 +156,7 @@ describe("binary preparation and commit", () => {
     assert.deepEqual(fs.readdirSync(path.join(miniCpaTempRoot(), "operations")), []);
   });
 
-  it("respects a user stop during download, excludes duplicate updates and protects staging from clean", async () => {
+  it("respects a user stop during download, and excludes duplicate updates", async () => {
     const { home, deps, state, events } = setup();
     const network = blockDownload(deps);
     const updating = updateBinary(home, { insecure: true, deps });
@@ -166,7 +165,6 @@ describe("binary preparation and commit", () => {
       await withMiniCpaLock("stop", async () => {
         state.running = false;
       });
-      await assert.rejects(() => runClean({ minAgeMs: 0 }), /lock|running/i);
       await assert.rejects(() => updateBinary(home, { insecure: true, deps }), /lock|running/i);
     } finally {
       network.release();

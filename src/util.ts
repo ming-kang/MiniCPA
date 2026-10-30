@@ -12,30 +12,6 @@ export function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function directorySizeBytes(dir: string): number {
-  if (!fs.existsSync(dir)) return 0;
-  let total = 0;
-  const walk = (current: string): void => {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const full = path.join(current, entry.name);
-      try {
-        if (entry.isDirectory()) walk(full);
-        else if (entry.isFile()) total += fs.statSync(full).size;
-      } catch {
-        /* best-effort */
-      }
-    }
-  };
-  walk(dir);
-  return total;
-}
-
 export const MINICPA_LOG_ROTATE_BYTES = 1024 * 1024;
 
 const EXACT_SEMVER_REGEX =

@@ -26,13 +26,67 @@ function supportedInstall(packageRoot: string) {
  */
 const noPreconditionNotes = (): string[] => [];
 
+const packageRoot = "/npm/lib/node_modules/@astralyn/minicpa";
+const lockedOut = async <T>(): Promise<T> => {
+  throw new Error("showing the state must not take the lock");
+};
+const unlocked = async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn();
+
 describe("runAuto", () => {
-  it("toggles an absent registration on and an active registration off", async () => {
+  it("shows the current state without taking the lock or changing it", async () => {
+    const expected: Record<AutostartState, string> = {
+      on: "Autostart    on",
+      off: "Autostart    off",
+      stale: "Autostart    stale (registered for a different MiniCPA launcher — run: cpa auto on)",
+      disabled: "Autostart    disabled by the OS (run: cpa auto on)",
+    };
+    for (const [state, line] of Object.entries(expected) as [AutostartState, string][]) {
+      const output = await captureConsole(() =>
+        runAuto(
+          { packageRoot },
+          {
+            inspectState: async () => state,
+            setEnabled: async () => {
+              throw new Error("showing the state must not change it");
+            },
+            withLock: lockedOut,
+            detectGlobalInstall: async () => {
+              throw new Error("showing the state must not inspect the installation");
+            },
+            lingerHint: async () => undefined,
+            preconditionNotes: noPreconditionNotes,
+          },
+        ),
+      );
+      assert.deepEqual(output.stdout, [line]);
+      assert.deepEqual(output.stderr, []);
+    }
+  });
+
+  it("still reports missing preconditions when showing an active registration", async () => {
+    const output = await captureConsole(() =>
+      runAuto(
+        { packageRoot },
+        {
+          inspectState: async () => "on",
+          withLock: lockedOut,
+          lingerHint: async () => undefined,
+          preconditionNotes: () => ["no config.yaml yet — run: cpa init"],
+        },
+      ),
+    );
+    assert.deepEqual(output.stdout, ["Autostart    on"]);
+    assert.deepEqual(output.stderr, ["Note: no config.yaml yet — run: cpa init"]);
+  });
+
+  it("sets on and off under the lock and checks the installation only when enabling", async () => {
     let state: AutostartState = "off";
     const lockCommands: string[] = [];
     const inspectedRoots: string[] = [];
     const deps: AutoCommandDependencies = {
-      inspectState: async (): Promise<AutostartState> => state,
+      inspectState: async () => {
+        throw new Error("an explicit mode needs no inspection");
+      },
       setEnabled: async (next: boolean): Promise<void> => {
         state = next ? "on" : "off";
       },
@@ -40,177 +94,72 @@ describe("runAuto", () => {
         lockCommands.push(command);
         return fn();
       },
-      detectGlobalInstall: async (packageRoot, _dependencies, options) => {
-        inspectedRoots.push(packageRoot);
+      detectGlobalInstall: async (root, _dependencies, options) => {
+        inspectedRoots.push(root);
         assert.equal(options?.requireWritable, false);
-        return supportedInstall(packageRoot);
+        return supportedInstall(root);
       },
       lingerHint: async () => LINGER_HINT,
       preconditionNotes: noPreconditionNotes,
     };
 
-    const options = { packageRoot: "/npm/lib/node_modules/@astralyn/minicpa" };
-    const first = await captureConsole(() => runAuto(options, deps));
+    const first = await captureConsole(() => runAuto({ packageRoot, mode: "on" }, deps));
     assert.equal(state, "on");
-    assert.deepEqual(first.stdout, ["Autostart on"]);
+    assert.deepEqual(first.stdout, ["Autostart    on"]);
     assert.deepEqual(first.stderr, [`Note: ${LINGER_HINT}`]);
 
-    const second = await captureConsole(() => runAuto(options, deps));
+    const second = await captureConsole(() => runAuto({ packageRoot, mode: "off" }, deps));
     assert.equal(state, "off");
-    assert.deepEqual(second.stdout, ["Autostart off"]);
+    assert.deepEqual(second.stdout, ["Autostart    off"]);
+    assert.deepEqual(second.stderr, []);
     assert.deepEqual(lockCommands, ["auto", "auto"]);
-    assert.deepEqual(inspectedRoots, [options.packageRoot]);
+    assert.deepEqual(inspectedRoots, [packageRoot]);
   });
 
-  it("repairs a stale registration instead of silently disabling it", async () => {
-    let state: AutostartState = "stale";
-    let detectionCalled = false;
-    const output = await captureConsole(() =>
-      runAuto(
-        { packageRoot: "/npm/lib/node_modules/@astralyn/minicpa" },
-        {
-          inspectState: async () => state,
-          setEnabled: async (enabled) => {
-            assert.equal(enabled, true);
-            state = "on";
-          },
-          withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
-          detectGlobalInstall: async () => {
-            detectionCalled = true;
-            return supportedInstall("/npm/lib/node_modules/@astralyn/minicpa");
-          },
-          lingerHint: async () => undefined,
-          preconditionNotes: noPreconditionNotes,
-        },
-      ),
-    );
-
-    assert.equal(state, "on");
-    assert.equal(detectionCalled, true);
-    assert.deepEqual(output.stdout, ["Autostart on"]);
-  });
-
-  it("re-enables an OS-disabled registration on an argument-free toggle", async () => {
-    let state: AutostartState = "disabled";
-    let detectionCalled = false;
-    const packageRoot = "/npm/lib/node_modules/@astralyn/minicpa";
-    const output = await captureConsole(() =>
-      runAuto(
-        { packageRoot },
-        {
-          inspectState: async () => state,
-          setEnabled: async (enabled) => {
-            assert.equal(enabled, true);
-            state = "on";
-          },
-          withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
-          detectGlobalInstall: async () => {
-            detectionCalled = true;
-            return supportedInstall(packageRoot);
-          },
-          lingerHint: async () => undefined,
-          preconditionNotes: noPreconditionNotes,
-        },
-      ),
-    );
-
-    assert.equal(state, "on");
-    assert.equal(detectionCalled, true);
-    assert.deepEqual(output.stdout, ["Autostart on"]);
-  });
-
-  it("prints the shared linger hint after enabling", async () => {
-    const packageRoot = "/npm/lib/node_modules/@astralyn/minicpa";
+  it("is idempotent for repeated explicit modes", async () => {
+    const changes: boolean[] = [];
     const deps: AutoCommandDependencies = {
-      inspectState: async () => "off",
-      setEnabled: async () => {},
-      withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
+      setEnabled: async (enabled) => {
+        changes.push(enabled);
+      },
+      withLock: unlocked,
       detectGlobalInstall: async () => supportedInstall(packageRoot),
-      // The full policy (Linux gating included) lives in autostart.ts; the
-      // command only decides whether to show the returned hint.
-      lingerHint: async () => LINGER_HINT,
+      lingerHint: async () => undefined,
       preconditionNotes: noPreconditionNotes,
     };
-    const output = await captureConsole(() => runAuto({ packageRoot }, deps));
-    assert.deepEqual(output.stdout, ["Autostart on"]);
-    assert.deepEqual(output.stderr, [`Note: ${LINGER_HINT}`]);
+
+    for (const mode of ["on", "on", "off", "off"] as const) {
+      await captureConsole(() => runAuto({ packageRoot, mode }, deps));
+    }
+    assert.deepEqual(changes, [true, true, false, false]);
   });
 
   it("falls back to the real linger policy when a dependency is explicitly undefined", async () => {
     // `deps` is spread from partial objects at call sites, so an explicitly
     // undefined entry must resolve to the real implementation rather than
     // being called as a function.
-    const packageRoot = "/npm/lib/node_modules/@astralyn/minicpa";
     const output = await captureConsole(() =>
       runAuto(
-        { packageRoot },
+        { packageRoot, mode: "on" },
         {
-          inspectState: async () => "off",
           setEnabled: async () => {},
-          withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
+          withLock: unlocked,
           detectGlobalInstall: async () => supportedInstall(packageRoot),
           lingerHint: undefined,
           preconditionNotes: noPreconditionNotes,
         },
       ),
     );
-    assert.deepEqual(output.stdout, ["Autostart on"]);
-  });
-
-  it("stays quiet when no hint applies", async () => {
-    const packageRoot = "/npm/lib/node_modules/@astralyn/minicpa";
-    const output = await captureConsole(() =>
-      runAuto(
-        { packageRoot },
-        {
-          inspectState: async () => "off",
-          setEnabled: async () => {},
-          withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
-          detectGlobalInstall: async () => supportedInstall(packageRoot),
-          lingerHint: async () => undefined,
-          preconditionNotes: noPreconditionNotes,
-        },
-      ),
-    );
-    assert.deepEqual(output.stdout, ["Autostart on"]);
-    assert.deepEqual(output.stderr, []);
-  });
-
-  it("supports deterministic explicit on/off without requiring inspection", async () => {
-    let state: AutostartState = "disabled";
-    const changes: boolean[] = [];
-    const packageRoot = "/npm/lib/node_modules/@astralyn/minicpa";
-    const deps: AutoCommandDependencies = {
-      inspectState: async () => {
-        throw new Error("inspection unavailable");
-      },
-      setEnabled: async (enabled) => {
-        changes.push(enabled);
-        state = enabled ? "on" : "off";
-      },
-      withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
-      detectGlobalInstall: async () => supportedInstall(packageRoot),
-      lingerHint: async () => undefined,
-      preconditionNotes: noPreconditionNotes,
-    };
-
-    await captureConsole(() => runAuto({ packageRoot, mode: "on" }, deps));
-    await captureConsole(() => runAuto({ packageRoot, mode: "on" }, deps));
-    await captureConsole(() => runAuto({ packageRoot, mode: "off" }, deps));
-    await captureConsole(() => runAuto({ packageRoot, mode: "off" }, deps));
-
-    assert.deepEqual(changes, [true, true, false, false]);
-    assert.equal(state, "off");
+    assert.deepEqual(output.stdout, ["Autostart    on"]);
   });
 
   it("rejects transient installations before enabling autostart", async () => {
     let setCalled = false;
     const deps: AutoCommandDependencies = {
-      inspectState: async () => "off",
       setEnabled: async () => {
         setCalled = true;
       },
-      withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
+      withLock: unlocked,
       detectGlobalInstall: async () => ({
         supported: false,
         reason: "npx",
@@ -219,18 +168,16 @@ describe("runAuto", () => {
     };
 
     await assert.rejects(
-      () => runAuto({ packageRoot: "/tmp/_npx/package" }, deps),
+      () => runAuto({ packageRoot: "/tmp/_npx/package", mode: "on" }, deps),
       /Autostart requires a stable direct npm-global MiniCPA installation/,
     );
     assert.equal(setCalled, false);
   });
 
   it("notes the preconditions a login start would still be missing", async () => {
-    const packageRoot = "/npm/lib/node_modules/@astralyn/minicpa";
     const base: AutoCommandDependencies = {
-      inspectState: async () => "off",
       setEnabled: async () => {},
-      withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
+      withLock: unlocked,
       detectGlobalInstall: async () => supportedInstall(packageRoot),
       lingerHint: async () => undefined,
     };
@@ -239,17 +186,17 @@ describe("runAuto", () => {
     // order, and the note is what keeps the gap from surfacing only at next login.
     const enabling = await captureConsole(() =>
       runAuto(
-        { packageRoot },
+        { packageRoot, mode: "on" },
         { ...base, preconditionNotes: () => ["no config.yaml yet — run: cpa init"] },
       ),
     );
-    assert.deepEqual(enabling.stdout, ["Autostart on"]);
+    assert.deepEqual(enabling.stdout, ["Autostart    on"]);
     assert.deepEqual(enabling.stderr, ["Note: no config.yaml yet — run: cpa init"]);
 
     // Preconditions come before the linger hint, which is the less urgent of the two.
     const both = await captureConsole(() =>
       runAuto(
-        { packageRoot },
+        { packageRoot, mode: "on" },
         {
           ...base,
           lingerHint: async () => LINGER_HINT,
@@ -264,15 +211,13 @@ describe("runAuto", () => {
   });
 
   it("never probes preconditions while turning autostart off", async () => {
-    const packageRoot = "/npm/lib/node_modules/@astralyn/minicpa";
     let probed = false;
     const output = await captureConsole(() =>
       runAuto(
         { packageRoot, mode: "off" },
         {
-          inspectState: async () => "on",
           setEnabled: async () => {},
-          withLock: async <T>(_command: string, fn: () => Promise<T>): Promise<T> => fn(),
+          withLock: unlocked,
           detectGlobalInstall: async () => supportedInstall(packageRoot),
           lingerHint: async () => LINGER_HINT,
           preconditionNotes: () => {
@@ -284,7 +229,7 @@ describe("runAuto", () => {
     );
 
     assert.equal(probed, false);
-    assert.deepEqual(output.stdout, ["Autostart off"]);
+    assert.deepEqual(output.stdout, ["Autostart    off"]);
     assert.deepEqual(output.stderr, []);
   });
 });

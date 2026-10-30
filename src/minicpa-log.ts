@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { cpaLayout } from "./paths.js";
 import { appendPrivateLogLine, tailFile } from "./util.js";
 
@@ -45,9 +43,7 @@ export function recordMiniCpaEvent(
 export function readLastMiniCpaEvent(home: string): MiniCpaEvent | undefined {
   let tail: string;
   try {
-    const current = cpaLayout(home).minicpaLogFile;
-    const file = fs.existsSync(current) ? current : path.join(home, "logs", "minicpa.log");
-    tail = tailFile(file, SCAN_LINES);
+    tail = tailFile(cpaLayout(home).minicpaLogFile, SCAN_LINES);
   } catch {
     return undefined;
   }

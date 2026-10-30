@@ -64,8 +64,9 @@ describe("runInit", () => {
     assert.equal(installed, true);
     assert.deepEqual(output.stderr, []);
     assert.match(output.stdout.join("\n"), /CLIProxyAPI installed: 8\.0\.47/);
-    assert.match(output.stdout.join("\n"), /Next:[\s\S]*cpa start[\s\S]*cpa web/);
-    assert.doesNotMatch(output.stdout.join("\n"), /sk-cliproxyapi|CLIPROXYAPI/);
+    assert.match(output.stdout.join("\n"), /Next: cpa start, then cpa web/);
+    assert.match(output.stdout.join("\n"), /^Panel key\s+CLIPROXYAPI\b/m);
+    assert.match(output.stdout.join("\n"), /^API key\s+sk-cliproxyapi$/m);
     assert.equal(fs.existsSync(path.join(layout.home, ".env")), false);
     assert.equal(fs.existsSync(path.join(layout.home, "backups")), false);
     assert.equal(fs.existsSync(layout.authsDir), false);
@@ -117,9 +118,15 @@ describe("runInit", () => {
     const oldConfig =
       "logging-to-file: false\nlogs-max-total-size-mb: 0\nerror-logs-max-files: 0\n";
     fs.writeFileSync(layout.configFile, oldConfig);
-    await captureConsole(() => runInit(currentBinary));
+    const output = await captureConsole(() => runInit(currentBinary));
     assert.equal(fs.readFileSync(layout.configFile, "utf8"), oldConfig);
     assert.equal(fs.existsSync(layout.logsDir), false);
+    assert.match(output.stdout.join("\n"), /\(exists, left untouched\)/);
+    assert.doesNotMatch(
+      output.stdout.join("\n"),
+      /sk-cliproxyapi|CLIPROXYAPI/,
+      "existing keys may have changed, so bootstrap defaults are not repeated",
+    );
   });
 
   it("preserves an existing empty or oversized config without validating it", async () => {

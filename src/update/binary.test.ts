@@ -7,12 +7,7 @@ import { activeExecutablePath, backupExecutablePath } from "../paths.js";
 import { RuntimeBinaryTransaction } from "../process/runtime.js";
 import { readInstallState, writeInstallState } from "../state.js";
 import { silentUpdateReporter } from "./reporter.js";
-import {
-  BinaryUpdateError,
-  checkBinaryUpdate,
-  installBinaryPhase,
-  type BinaryUpdateDeps,
-} from "./binary.js";
+import { BinaryUpdateError, installBinaryPhase, type BinaryUpdateDeps } from "./binary.js";
 
 const temps: string[] = [];
 
@@ -92,20 +87,6 @@ async function runInstallPhase(
     transaction.discard();
   }
 }
-
-describe("checkBinaryUpdate", () => {
-  it("uses health-verified install metadata without executing the active binary", async () => {
-    const home = tempHome();
-    fs.writeFileSync(activeExecutablePath(home), "not a real binary");
-    writeInstallState(home, { runtimeVersion: "7.2.92" });
-
-    const result = await checkBinaryUpdate(home, {
-      fetchLatestRelease: async () => ({ tag: "v7.2.92" }),
-    });
-
-    assert.deepEqual(result, { current: "7.2.92", latest: "7.2.92", upToDate: true });
-  });
-});
 
 describe("installBinaryPhase", () => {
   it("requires a caller-prepared transaction, does not internally discard it, and commits on success", async () => {

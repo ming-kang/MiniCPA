@@ -64,7 +64,7 @@ MiniCPA separates mutual exclusion into two distinct leases to maximize service 
      Scope:                                           Scope:
        - start, stop, restart                           - Release discovery & download
        - Commit phase of binary update                  - SHA-256 verification & extraction
-       - Self-upgrade package execution                 - Temporary file cleanup (cpa clean)
+       - Self-upgrade package execution                 - Stale staging cleanup (per update)
 ```
 
 ### Scope Interactions & Reentrancy

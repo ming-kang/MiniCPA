@@ -71,79 +71,51 @@ describe("cli smoke", () => {
     );
     assert.match(noArgs.stdout, /Quick start:[\s\S]*cpa init[\s\S]*cpa start[\s\S]*cpa web/);
     assert.doesNotMatch(noArgs.stdout, /Quick start:[\s\S]*cpa update/);
-    assert.match(noArgs.stdout, /-v, -V, --version\s+Show the MiniCPA version/);
+    assert.match(noArgs.stdout, /-v, --version\s+Show the MiniCPA version/);
+    assert.doesNotMatch(noArgs.stdout, /--no-wait/);
   });
 
-  it("groups only the approved visible commands in root help", () => {
+  it("groups exactly the visible commands in root help", () => {
     const { status, stdout } = runCli(["--help"]);
     assert.equal(status, 0);
 
-    for (const heading of ["Lifecycle", "Interfaces", "Updates", "Diagnostics", "Information"]) {
+    for (const heading of ["Lifecycle", "Interfaces", "Updates"]) {
       assert.match(stdout, new RegExp(`^${heading}:$`, "m"));
     }
-    for (const command of [
+    const listed = [...stdout.matchAll(/^ {2}([a-z]+)(?: \[[^\]]+\])*\s{2,}\S/gm)].map(
+      (match) => match[1],
+    );
+    assert.deepEqual(listed, [
       "init",
       "start",
       "stop",
       "restart",
-      "auto",
       "status",
+      "auto",
       "web",
       "tui",
       "logs",
       "update",
       "upgrade",
-      "doctor",
-      "version",
-      "home",
-    ]) {
-      assert.match(stdout, new RegExp(`^  ${command}(?: \\[[^\\]]+\\])*\\s{2,}`, "m"));
-    }
-    for (const hidden of ["open", "clean", "root", "temp"]) {
-      assert.doesNotMatch(stdout, new RegExp(`^  ${hidden}(?: \\[options\\])?\\s{2,}`, "m"));
-    }
+    ]);
     assert.match(
       stdout,
-      /^ {2}init(?: \[options\])?\s+Create config\.yaml once and install the latest CLIProxyAPI\s+binary$/m,
+      /^ {2}start\s+Start CLIProxyAPI in the background$/m,
+      "--no-wait is hidden",
     );
-    assert.match(
-      stdout,
-      /^ {2}auto \[mode\]\s+Toggle or set CLIProxyAPI autostart for the current user$/m,
-    );
+    assert.match(stdout, /^ {2}logs \[options\]\s+/m);
+    assert.match(stdout, /^ {2}auto \[mode\]\s+Show or set CLIProxyAPI autostart at login$/m);
     assert.match(stdout, /^ {2}web\s+Print and open the Web panel URL$/m);
-    assert.match(stdout, /^ {2}tui\s+Open the CLIProxyAPI terminal UI$/m);
   });
 
-  it("shows help for the autostart toggle without changing its state", () => {
+  it("shows help for autostart without changing its state", () => {
     const auto = runCli(["auto", "--help"]);
 
     assert.equal(auto.status, 0);
     assert.equal(auto.stderr, "");
     assert.match(auto.stdout, /Usage: cpa auto/);
-    assert.match(auto.stdout, /Toggle or set CLIProxyAPI autostart for the current user/);
-    assert.match(auto.stdout, /Arguments:\s+mode\s+Set autostart explicitly/);
+    assert.match(auto.stdout, /Arguments:\s+mode\s+Turn autostart on or off/);
     assert.match(auto.stdout, /choices: "on", "off"/);
-  });
-
-  it("keeps web canonical and open as a hidden compatibility command", () => {
-    const web = runCli(["web", "--help"]);
-    const open = runCli(["open", "--help"]);
-
-    assert.equal(web.status, 0);
-    assert.equal(open.status, 0);
-    assert.match(web.stdout, /Usage: cpa web/);
-    assert.match(open.stdout, /Usage: cpa open/);
-    assert.match(web.stdout, /Print and open the Web panel URL/);
-    assert.match(open.stdout, /Print and open the Web panel URL/);
-  });
-
-  it("keeps hidden maintenance commands callable", () => {
-    for (const command of ["clean", "root", "temp"]) {
-      const { status, stdout, stderr } = runCli([command, "--help"]);
-      assert.equal(status, 0);
-      assert.match(stdout, new RegExp(`Usage: cpa ${command}`));
-      assert.equal(stderr, "");
-    }
   });
 
   it("describes update and upgrade scopes and links between them", () => {
@@ -152,34 +124,52 @@ describe("cli smoke", () => {
 
     assert.equal(update.status, 0);
     assert.equal(update.stderr, "");
-    assert.match(
-      update.stdout,
-      /Update the managed CLIProxyAPI binary without modifying\s+configuration/,
-    );
-    assert.match(
-      update.stdout,
-      /Updates never synchronize configuration or manage configuration backups\./,
-    );
-    assert.match(update.stdout, /CLIProxyAPI provisions and updates its Web panel itself\./);
+    assert.match(update.stdout, /Update CLIProxyAPI \(restarts it only if replaced\)/);
+    assert.match(update.stdout, /owns its configuration and Web panel; updates never touch them/);
     assert.match(update.stdout, /To upgrade MiniCPA itself, run cpa upgrade\./);
-    for (const hidden of ["all", "binary", "panel"]) {
-      assert.doesNotMatch(update.stdout, new RegExp(`^ {2}--${hidden}(?:\\s|$)`, "m"));
-    }
 
     assert.equal(upgrade.status, 0);
     assert.equal(upgrade.stderr, "");
-    assert.match(upgrade.stdout, /Upgrade the globally installed MiniCPA package through npm/);
-    assert.match(upgrade.stdout, /does not update, stop, or restart the managed CLIProxyAPI/);
+    assert.match(upgrade.stdout, /Upgrade MiniCPA itself through npm/);
+    assert.match(upgrade.stdout, /never stops, restarts, or updates CLIProxyAPI/);
     assert.match(upgrade.stdout, /To update CLIProxyAPI, run cpa update/);
-    assert.match(upgrade.stdout, /CLIProxyAPI manages its own Web panel/);
     assert.match(upgrade.stdout, /--force/);
   });
 
-  it("rejects removed init --force without creating or overwriting configuration", () => {
-    const result = runCli(["init", "--force"]);
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /unknown option '--force'/);
-    assert.deepEqual(fs.readdirSync(result.root), []);
+  it("rejects removed commands, subcommands, and flags without touching the root", () => {
+    for (const args of [
+      ["open"],
+      ["clean"],
+      ["root"],
+      ["temp"],
+      ["version"],
+      ["home"],
+      ["doctor"],
+      ["help", "start"],
+      ["update", "check"],
+      ["upgrade", "check"],
+      ["update", "--all"],
+      ["update", "--binary"],
+      ["update", "--panel"],
+      ["logs", "--legacy"],
+      ["init", "--force"],
+      ["-V"],
+    ]) {
+      const result = runCli(args);
+      assert.equal(result.status, 1, args.join(" "));
+      assert.equal(result.stdout, "", args.join(" "));
+      assert.match(result.stderr, /unknown (command|option)|too many arguments/, args.join(" "));
+      assert.deepEqual(fs.readdirSync(result.root), [], args.join(" "));
+    }
+  });
+
+  it("reports an unknown command exactly once with a suggestion", () => {
+    // Commander's Command.error() already writes to stderr before exitOverride throws,
+    // so the top-level catch must not print the same message a second time.
+    const { status, stderr } = runCli(["stop-it"]);
+    assert.equal(status, 1);
+    assert.equal(stderr.match(/unknown command/g)?.length, 1);
+    assert.match(stderr, /Did you mean stop\?/);
   });
 
   it("uses an explicit API URL before a subcommand instead of reading configuration", () => {
@@ -187,14 +177,22 @@ describe("cli smoke", () => {
       MINICPA_API_URL: "http://env.example:18080",
     });
     assert.equal(result.status, 1, "a new instance is stopped");
-    assert.match(result.stdout, /Local API\s+https:\/\/\[::1\]:19443/);
-    assert.match(result.stdout, /Web Panel\s+https:\/\/\[::1\]:19443\/management\.html/);
+    assert.match(result.stdout, /^API\s+https:\/\/\[::1\]:19443$/m);
+    assert.match(result.stdout, /^Web\s+https:\/\/\[::1\]:19443\/management\.html$/m);
     assert.doesNotMatch(result.stdout, /env\.example/);
   });
 
   it("accepts the MiniCPA connection URL through the environment", () => {
     const result = runCli(["status"], { MINICPA_API_URL: "http://127.0.0.1:19444/" });
-    assert.match(result.stdout, /Local API\s+http:\/\/127\.0\.0\.1:19444/);
+    assert.match(result.stdout, /^API\s+http:\/\/127\.0\.0\.1:19444$/m);
+  });
+
+  it("shows both versions and the home in status", () => {
+    const { stdout, root } = runCli(["status"]);
+    assert.match(stdout, /^Status\s+not initialized \(run: cpa init\)$/m);
+    assert.match(stdout, new RegExp(`^MiniCPA\\s+${pkgVersion.replaceAll(".", "\\.")}$`, "m"));
+    assert.match(stdout, /^CLIProxyAPI\s+not installed$/m);
+    assert.ok(stdout.includes(`Home         ${root}`), stdout);
   });
 
   it("rejects credential-bearing connection URLs before initializing anything", () => {
@@ -205,41 +203,7 @@ describe("cli smoke", () => {
     assert.deepEqual(fs.readdirSync(result.root), []);
   });
 
-  it("keeps the legacy --panel spelling as non-network migration guidance", () => {
-    const { status, stdout, stderr } = runCli(["update", "--panel"]);
-    assert.equal(status, 1);
-    assert.equal(stdout, "");
-    assert.match(stderr, /Web panel updates are managed by CLIProxyAPI/);
-    assert.match(stderr, /cpa web/);
-  });
-
-  it("continues to reject conflicting legacy update scopes", () => {
-    for (const args of [
-      ["update", "--all", "--binary"],
-      ["update", "--all", "--panel"],
-      ["update", "--binary", "--panel"],
-    ]) {
-      const { status, stdout, stderr } = runCli(args);
-      assert.equal(status, 1);
-      assert.equal(stdout, "");
-      assert.match(stderr, /cannot be used with option/);
-    }
-  });
-
-  it("reports an unknown command exactly once with exit 1", () => {
-    // Commander's Command.error() already writes to stderr before exitOverride throws,
-    // so the top-level catch must not print the same message a second time.
-    const { status, stderr } = runCli(["definitely-not-a-command"]);
-    assert.equal(status, 1);
-    assert.equal(stderr.match(/unknown command/g)?.length, 1);
-  });
-
-  it("exits non-zero for `help <unknown-command>`", () => {
-    const { status } = runCli(["help", "nosuchcommand"]);
-    assert.notEqual(status, 0);
-  });
-
-  for (const flag of ["-v", "-V", "--version"]) {
+  for (const flag of ["-v", "--version"]) {
     it(`prints exactly the package version for ${flag}`, () => {
       const { status, stdout, stderr } = runCli([flag]);
       assert.equal(status, 0);
@@ -248,58 +212,17 @@ describe("cli smoke", () => {
     });
   }
 
-  it("shows the MiniCPA and CLIProxyAPI versions without tracking the Web panel", () => {
-    const { status, stdout, stderr, root } = runCli(["version"]);
-    assert.equal(status, 0);
-    assert.equal(stderr, "");
-    assert.match(stdout, new RegExp(`^MiniCPA\\s+${pkgVersion.replaceAll(".", "\\.")}$`, "m"));
-    assert.match(stdout, /^CLIProxyAPI\s+\(not installed\)$/m);
-    assert.doesNotMatch(stdout, /^Web panel\s+/m);
-    assert.ok(stdout.includes(`Home         ${root}`), stdout);
-  });
-
-  it("treats the hidden -V spelling like the other version flags before a command", () => {
-    const { status, stdout, stderr } = runCli(["-V", "web"]);
-    assert.equal(status, 0);
-    assert.equal(stdout, `${pkgVersion}\n`);
-    assert.equal(stderr, "");
-  });
-
   it("does not intercept global version flags after a subcommand", () => {
-    for (const flag of ["-v", "-V"]) {
-      const { status, stdout, stderr } = runCli(["update", flag]);
-      assert.equal(status, 1);
-      assert.equal(stdout, "");
-      assert.match(stderr, new RegExp(`unknown option '${flag}'`));
-      assert.doesNotMatch(stderr, new RegExp(`^${pkgVersion}$`, "m"));
-    }
-  });
-
-  it("parses the update version pin without treating it as the global version flag", () => {
-    // The legacy --panel branch fails locally after Commander parses --version.
-    const { status, stdout, stderr } = runCli(["update", "--panel", "--version", "7.2.66"]);
+    const { status, stdout, stderr } = runCli(["update", "-v"]);
     assert.equal(status, 1);
     assert.equal(stdout, "");
-    assert.match(stderr, /Web panel updates are managed by CLIProxyAPI/);
-    assert.doesNotMatch(stderr, new RegExp(`^${pkgVersion}$`, "m"));
+    assert.match(stderr, /unknown option '-v'/);
   });
 
-  it("prints the resolved instance home for `home`", () => {
-    const { status, stdout, root } = runCli(["home"]);
-    assert.equal(status, 0);
-    assert.ok(stdout.trim().startsWith(root), `${stdout.trim()} should live under ${root}`);
-    assert.match(stdout.trim(), /[\\/]instance$/);
-  });
-
-  it("prints the MiniCPA root for `root`", () => {
-    const { status, stdout } = runCli(["root"]);
-    assert.equal(status, 0);
-    assert.match(stdout.trim(), /MiniCPA/);
-  });
-
-  it("prints the staging directory for `temp`", () => {
-    const { status, stdout } = runCli(["temp"]);
-    assert.equal(status, 0);
-    assert.match(stdout.trim(), /temp/);
+  it("parses update --version as the CLIProxyAPI pin, not the global version flag", () => {
+    const { status, stdout, stderr } = runCli(["update", "--version"]);
+    assert.equal(status, 1);
+    assert.equal(stdout, "");
+    assert.match(stderr, /option '--version <version>' argument missing/);
   });
 });

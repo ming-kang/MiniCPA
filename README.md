@@ -28,12 +28,13 @@ npx @astralyn/minicpa --help
 ## Quick Start
 
 ```bash
-cpa init   # Create the minimal bootstrap config and install the latest CPA binary
-cpa start  # Start CLIProxyAPI in the background
-cpa web    # Open the management Web panel in your browser
+cpa init    # Create the minimal bootstrap config and install the latest CPA binary
+cpa start   # Start CLIProxyAPI in the background
+cpa web     # Open the management Web panel in your browser
+cpa status  # Check the service, versions, and any detected problems
 ```
 
-The bootstrap configuration listens on `127.0.0.1:8317` with default bootstrap credentials (`sk-cliproxyapi` client key, `CLIPROXYAPI` management password) and enables native file logging. All subsequent configuration is performed directly inside CLIProxyAPI.
+The bootstrap configuration listens on `127.0.0.1:8317` with default bootstrap credentials (`sk-cliproxyapi` client key, `CLIPROXYAPI` management password) and enables native file logging. `cpa init` prints both credentials once; CLIProxyAPI hashes the management password on first start, so change both in the Web panel before exposing the instance beyond this machine. All subsequent configuration is performed directly inside CLIProxyAPI.
 
 ## Connection Target
 
@@ -52,17 +53,15 @@ Alternatively, set the `MINICPA_API_URL` environment variable.
 MiniCPA maintains a strict distinction between the managed daemon and the management CLI:
 
 - **CLIProxyAPI Binary Updates (`cpa update`)**:
-  Fetches, verifies, and stages the latest or pinned CLIProxyAPI binary release from upstream GitHub, restarting the service only if replacement succeeds.
+  Fetches, verifies, and stages the latest or pinned CLIProxyAPI binary release from upstream GitHub, restarting the service only if the binary was replaced.
   ```bash
-  cpa update check
   cpa update
   cpa update --version 8.0.47
   ```
 
 - **MiniCPA CLI Upgrades (`cpa upgrade`)**:
-  Checks the npm registry and updates the globally installed `@astralyn/minicpa` npm package in place.
+  Checks the npm registry and updates the globally installed `@astralyn/minicpa` npm package in place. It never stops, restarts, or updates CLIProxyAPI.
   ```bash
-  cpa upgrade check
   cpa upgrade
   ```
 
@@ -70,30 +69,29 @@ MiniCPA maintains a strict distinction between the managed daemon and the manage
 
 | Command | Category | Purpose |
 |---------|----------|---------|
-| `cpa init` | Lifecycle | Generate initial bootstrap config and install CLIProxyAPI |
-| `cpa start` | Lifecycle | Start CLIProxyAPI daemon in background and await readiness |
-| `cpa stop` | Lifecycle | Gracefully terminate the running CLIProxyAPI daemon |
-| `cpa restart` | Lifecycle | Restart the running daemon |
-| `cpa auto [on\|off]` | Lifecycle | Toggle or set login autostart (Windows Task/Registry, systemd, launchd) |
-| `cpa status` | Lifecycle | Inspect service status, version metadata, and HTTP reachability |
-| `cpa web` | Interface | Open the CLIProxyAPI management Web panel in browser |
-| `cpa tui` | Interface | Attach to the native CLIProxyAPI terminal UI |
-| `cpa logs` | Diagnostics | View native CLIProxyAPI logs (supports `-f`, `-n`, `--err`, `--legacy`) |
-| `cpa doctor` | Diagnostics | Non-invasive health and environment diagnostic check |
-| `cpa update` | Maintenance | Check or install updates for CLIProxyAPI binary |
-| `cpa upgrade` | Maintenance | Check or upgrade the MiniCPA npm package |
-| `cpa version` | Information | Display MiniCPA version, CPA version, and instance home |
-| `cpa home` | Information | Print the active instance home directory |
+| `cpa init` | Lifecycle | Create the bootstrap config once and install CLIProxyAPI |
+| `cpa start` | Lifecycle | Start CLIProxyAPI in the background and wait for readiness |
+| `cpa stop` | Lifecycle | Stop the running CLIProxyAPI |
+| `cpa restart` | Lifecycle | Restart CLIProxyAPI |
+| `cpa status` | Lifecycle | Show status, uptime, endpoints, autostart, versions, home, and detected problems |
+| `cpa auto [on\|off]` | Lifecycle | Show or set login autostart (Windows Task/Registry, systemd, launchd) |
+| `cpa web` | Interfaces | Print and open the management Web panel |
+| `cpa tui` | Interfaces | Attach to the native CLIProxyAPI terminal UI |
+| `cpa logs` | Interfaces | Show native CLIProxyAPI logs (`-f` follow, `-n <lines>`, `--err` request-error logs) |
+| `cpa update` | Updates | Update the CLIProxyAPI binary (`--version`, `--force`) |
+| `cpa upgrade` | Updates | Upgrade the MiniCPA npm package |
+
+`cpa status` exits with `0` only when CLIProxyAPI is running and answering HTTP, so scripts can use it as a health check.
 
 ## Directory Layout
 
 | Path Target | Windows | macOS | Linux |
 |-------------|---------|-------|-------|
-| Root (`cpa root`) | `%LOCALAPPDATA%\MiniCPA` | `~/Library/Application Support/MiniCPA` | `$XDG_DATA_HOME/MiniCPA` |
-| Instance (`cpa home`) | `<root>\instance` | `<root>/instance` | `<root>/instance` |
-| Temp (`cpa temp`) | `<root>\temp` | `<root>/temp` | `<root>/temp` |
+| Root | `%LOCALAPPDATA%\MiniCPA` | `~/Library/Application Support/MiniCPA` | `$XDG_DATA_HOME/MiniCPA` |
+| Instance | `<root>\instance` | `<root>/instance` | `<root>/instance` |
+| Temp | `<root>\temp` | `<root>/temp` | `<root>/temp` |
 
-Instance data (configuration, authentication credentials, native logs) resides permanently under `<root>/instance`. Uninstalling MiniCPA never removes your instance data or credentials.
+Instance data (configuration, authentication credentials, native logs) resides permanently under `<root>/instance`; `cpa status` prints its exact path. Uninstalling MiniCPA never removes your instance data or credentials.
 
 For detailed architecture, concurrency, and security models, see [docs/README.md](docs/README.md).
 

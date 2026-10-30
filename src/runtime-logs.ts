@@ -39,15 +39,18 @@ export function runtimeErrorLogFiles(home: string): string[] {
   }
 }
 
-export function recentRuntimeLogs(home: string): string {
-  const main = runtimeLogFile(home);
-  const layout = cpaLayout(home);
-  const files = fs.existsSync(main)
-    ? [main, ...runtimeErrorLogFiles(home).slice(-1)]
-    : [layout.errLogFile, layout.logFile];
-  const tails = files.flatMap((file) => {
-    const text = tailFile(file, 30);
-    return text ? [`--- ${path.basename(file)} (tail) ---\n${text}`] : [];
-  });
-  return tails.length > 0 ? `\n${tails.join("\n")}` : "";
+export function runtimeLogSize(home: string): number {
+  try {
+    return fs.statSync(runtimeLogFile(home)).size;
+  } catch {
+    return 0;
+  }
+}
+
+/** The last main.log lines, limited to what was written after byte offset `since`. */
+export function recentRuntimeLogs(home: string, since = 0): string {
+  const size = runtimeLogSize(home);
+  // A file smaller than `since` was rotated in between, so all of it is new.
+  const fresh = size >= since ? size - since : size;
+  return fresh > 0 ? tailFile(runtimeLogFile(home), 30, fresh) : "";
 }
