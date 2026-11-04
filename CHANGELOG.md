@@ -13,6 +13,7 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ### Changed
 
+- Stop publishing `.js.map` files. They pointed at TypeScript sources that are not part of the package, so they could not resolve and only added size.
 - Run every Windows PowerShell query — process identity and autostart registration — through one helper that uses the built-in `powershell.exe` and falls back to `pwsh.exe` only when it cannot be started. A process probe for an exited PID no longer launches a second shell, and `cpa auto` now works where only PowerShell 7 is available.
 - Validate `--api-url` / `MINICPA_API_URL` once, before any command that probes or prints it (`init`, `start`, `restart`, `status`, `web`, `update`) changes anything. `logs`, `tui`, `auto`, `stop`, and `upgrade` no longer fail because of an unrelated invalid connection URL.
 - Document the residual availability risks of kernel lock leases (macOS port collisions, Windows named-pipe squatting, Linux network namespaces) and how to find the endpoint owner.
