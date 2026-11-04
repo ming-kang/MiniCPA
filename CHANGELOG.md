@@ -11,6 +11,7 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ### Changed
 
+- Document that the bootstrap `config.yaml` selects the auto-updating `seakee/CPA-Manager-Plus` Web panel, what that panel is trusted with, and how to change or pin it.
 - Run the full Ubuntu, Windows, and macOS CI inside the Publish npm workflow on the commit being published, then wait until npm serves the new version, tag that commit, and create the GitHub Release from its CHANGELOG section. Each job holds only the permissions it needs, and a request for an already published version or existing tag fails before anything runs.
 - Add `npm run release:prepare -- x.y.z` to bump `package.json` and `package-lock.json` and date the Unreleased notes in one step.
 - Limit the package install smoke test to packaging concerns (contents, shim, `--version`, `--help`); the command surface stays covered by the CLI tests, so CLI changes no longer need a second update there.

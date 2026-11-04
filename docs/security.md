@@ -72,3 +72,14 @@ Binary updates accept compressed archives (`.zip`, `.tar.gz`) from upstream rele
   - Entry count bounding (preventing zip bomb metadata exhaustion).
   - Path depth bounding (preventing deeply nested directory recursion).
   - Decompressed byte bounding (limiting actual decompressed stream size regardless of declared entry header sizes).
+
+---
+
+## 5. Bootstrap Configuration & Web Panel Source
+
+`cpa init` writes a minimal `config.yaml` once. Two of its defaults are trust decisions rather than plain settings:
+
+- **Bootstrap Credentials**: The client API key (`sk-cliproxyapi`) and management password (`CLIPROXYAPI`) are well-known values. The instance listens on `127.0.0.1` with `allow-remote: false`, so they are only reachable locally; change both in the Web panel before exposing CLIProxyAPI beyond this machine.
+- **Web Panel Repository**: `panel-github-repository` points at [`seakee/CPA-Manager-Plus`](https://github.com/seakee/CPA-Manager-Plus) instead of CLIProxyAPI's built-in default, and `disable-auto-update-panel: false` lets CLIProxyAPI download and refresh that panel automatically. The panel runs in the browser with the management password, so its publisher is trusted with management access. MiniCPA chose this panel deliberately and considers its maintainer trustworthy; MiniCPA itself never downloads or verifies panel assets — CLIProxyAPI does.
+
+To use a different panel, or to pin the current one, change `panel-github-repository` or set `disable-auto-update-panel: true` in the Web panel or `config.yaml`. MiniCPA never rewrites an existing configuration, so the change persists across `cpa init` and `cpa update`.

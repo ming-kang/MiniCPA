@@ -34,7 +34,7 @@ cpa web     # Open the management Web panel in your browser
 cpa status  # Check the service, versions, and any detected problems
 ```
 
-The bootstrap configuration listens on `127.0.0.1:8317` with default bootstrap credentials (`sk-cliproxyapi` client key, `CLIPROXYAPI` management password) and enables native file logging. `cpa init` prints both credentials once; CLIProxyAPI hashes the management password on first start, so change both in the Web panel before exposing the instance beyond this machine. All subsequent configuration is performed directly inside CLIProxyAPI.
+The bootstrap configuration listens on `127.0.0.1:8317` with default bootstrap credentials (`sk-cliproxyapi` client key, `CLIPROXYAPI` management password) and enables native file logging. `cpa init` prints both credentials once; CLIProxyAPI hashes the management password on first start, so change both in the Web panel before exposing the instance beyond this machine. The bootstrap config also selects the [CPA-Manager-Plus](https://github.com/seakee/CPA-Manager-Plus) Web panel, which CLIProxyAPI downloads and keeps updated; see [docs/security.md](docs/security.md#5-bootstrap-configuration--web-panel-source) for this trust decision and how to change it. All subsequent configuration is performed directly inside CLIProxyAPI.
 
 ## Connection Target
 

@@ -8,6 +8,7 @@ import { performUpdate, type UpdateDeps } from "./update-cmd.js";
 const INITIAL_API_KEY = "sk-cliproxyapi";
 const INITIAL_MANAGEMENT_KEY = "CLIPROXYAPI";
 
+// The panel repository is a deliberate trust decision; see docs/security.md §5.
 const INITIAL_CONFIG = `host: "127.0.0.1"
 port: 8317
 
