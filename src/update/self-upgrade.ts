@@ -36,45 +36,38 @@ function assertCanonicalExactVersion(version: string): void {
   }
 }
 
-type UpgradeOperation = "install" | "update";
-
-function buildNpmUpgradeArgs(
-  prefix: string,
-  operation: UpgradeOperation,
-  version: string,
-): string[] {
+// Always an exact `install`: `npm update -g` resolves its own "wanted" version, which
+// can differ from the one fetched (0.x ranges, or a publish in between) and then fails
+// the exact post-install verification.
+function buildNpmInstallArgs(prefix: string, version: string): string[] {
   return [
     "--prefix",
     prefix,
-    operation,
+    "install",
     "--global",
     "--ignore-scripts",
     "--no-audit",
     "--no-fund",
     `--registry=${NPM_REGISTRY_BASE_URL}`,
-    operation === "install" ? `${MINICPA_PACKAGE_NAME}@${version}` : MINICPA_PACKAGE_NAME,
+    `${MINICPA_PACKAGE_NAME}@${version}`,
   ];
 }
 
-function manualRetryCommand(
-  detection: SupportedNpmGlobalInstall,
-  operation: UpgradeOperation,
-  version: string,
-): string {
-  const args = buildNpmUpgradeArgs(JSON.stringify(detection.prefix), operation, version);
+function manualRetryCommand(detection: SupportedNpmGlobalInstall, version: string): string {
+  const args = buildNpmInstallArgs(JSON.stringify(detection.prefix), version);
   return [detection.npmCommand, ...args].join(" ");
 }
 
 function upgradeFailure(
   detection: SupportedNpmGlobalInstall,
-  operation: UpgradeOperation,
-  version: string,
+  retryVersion: string,
   detail: string,
   cause?: unknown,
-  retryCommand = manualRetryCommand(detection, operation, version),
 ): Error {
   return new Error(
-    `MiniCPA upgrade failed: ${detail}\nRetry manually with:\n${retryCommand}`,
+    `MiniCPA upgrade failed: ${detail}
+Retry manually with:
+${manualRetryCommand(detection, retryVersion)}`,
     cause === undefined ? undefined : { cause },
   );
 }
@@ -87,7 +80,6 @@ function errorCode(error: unknown): string | undefined {
 export async function executeMinicpaUpgrade(
   detection: SupportedNpmGlobalInstall,
   version: string,
-  operation: UpgradeOperation,
   dependencies: Partial<SelfUpgradeInstallDependencies> = {},
 ): Promise<void> {
   assertCanonicalExactVersion(version);
@@ -100,7 +92,7 @@ export async function executeMinicpaUpgrade(
     result = await new Promise((resolve, reject) => {
       const child = spawnCommand(
         detection.npmCommand,
-        buildNpmUpgradeArgs(detection.prefix, operation, version),
+        buildNpmInstallArgs(detection.prefix, version),
         {
           shell: false,
           stdio: "inherit",
@@ -116,24 +108,14 @@ export async function executeMinicpaUpgrade(
       errorCode(error) === "ENOENT"
         ? `${detection.npmCommand} was not found. Reinstall npm or restore MiniCPA with the command below.`
         : `could not start npm (${error instanceof Error ? error.message : String(error)}).`;
-    throw upgradeFailure(detection, operation, version, detail, error);
+    throw upgradeFailure(detection, version, detail, error);
   }
 
   if (result.signal !== null) {
-    throw upgradeFailure(
-      detection,
-      operation,
-      version,
-      `npm was terminated by signal ${result.signal}.`,
-    );
+    throw upgradeFailure(detection, version, `npm was terminated by signal ${result.signal}.`);
   }
   if (result.status !== 0) {
-    throw upgradeFailure(
-      detection,
-      operation,
-      version,
-      `npm exited with status ${String(result.status)}.`,
-    );
+    throw upgradeFailure(detection, version, `npm exited with status ${String(result.status)}.`);
   }
 
   let installedManifest: { name?: unknown; version?: unknown };
@@ -151,21 +133,16 @@ export async function executeMinicpaUpgrade(
   } catch (error) {
     throw upgradeFailure(
       detection,
-      operation,
-      version,
+      "latest",
       "npm exited successfully, but the installed package.json could not be read or parsed.",
       error,
-      manualRetryCommand(detection, "install", "latest"),
     );
   }
   if (installedManifest.name !== MINICPA_PACKAGE_NAME || installedManifest.version !== version) {
     throw upgradeFailure(
       detection,
-      operation,
-      version,
+      "latest",
       `post-upgrade verification expected ${MINICPA_PACKAGE_NAME}@${version}, received ${String(installedManifest.name)}@${String(installedManifest.version)}.`,
-      undefined,
-      manualRetryCommand(detection, "install", "latest"),
     );
   }
 }

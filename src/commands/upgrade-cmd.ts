@@ -84,7 +84,7 @@ export async function runUpgrade(
           ? `Reinstalling MiniCPA ${latestVersion} with npm…`
           : "Upgrading MiniCPA with npm…",
       );
-      await deps.executeMinicpaUpgrade(detection, latestVersion, opts.force ? "install" : "update");
+      await deps.executeMinicpaUpgrade(detection, latestVersion);
     }),
   );
 

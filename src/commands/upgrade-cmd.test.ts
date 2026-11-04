@@ -88,10 +88,9 @@ describe("runUpgrade", () => {
         events.push("detect");
         return supportedDetection;
       },
-      executeMinicpaUpgrade: async (detection, version, operation) => {
+      executeMinicpaUpgrade: async (detection, version) => {
         assert.equal(detection, supportedDetection);
         assert.equal(version, "1.1.0");
-        assert.equal(operation, "update");
         events.push("update");
       },
       withMiniCpaUpdateLock: async <T>(_command: string, fn: () => Promise<T>) => {
@@ -136,10 +135,9 @@ describe("runUpgrade", () => {
     let installed = 0;
     const deps = upgradeDeps({
       fetchLatestMinicpaVersion: async () => "1.1.0",
-      executeMinicpaUpgrade: async (detection, version, operation) => {
+      executeMinicpaUpgrade: async (detection, version) => {
         assert.equal(detection, supportedDetection);
         assert.equal(version, "1.1.0");
-        assert.equal(operation, "install");
         installed += 1;
       },
     });

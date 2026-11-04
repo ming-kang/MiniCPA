@@ -60,7 +60,7 @@ MiniCPA maintains a strict distinction between the managed daemon and the manage
   ```
 
 - **MiniCPA CLI Upgrades (`cpa upgrade`)**:
-  Checks the npm registry and updates the globally installed `@astralyn/minicpa` npm package in place. It never stops, restarts, or updates CLIProxyAPI.
+  Checks the npm registry and installs that exact latest version of the globally installed `@astralyn/minicpa` npm package in place. It never stops, restarts, or updates CLIProxyAPI.
   ```bash
   cpa upgrade
   ```
