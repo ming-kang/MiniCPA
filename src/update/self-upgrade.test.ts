@@ -9,9 +9,9 @@ import {
   classifyNpmGlobalRoot,
   detectNpmGlobalInstall,
   inferNpmGlobalRoot,
-  type CaptureCommand,
   type SupportedNpmGlobalInstall,
 } from "./npm-global-detection.js";
+import type { runCommand } from "../process/runtime.js";
 import { executeMinicpaUpgrade, type SpawnCommand } from "./self-upgrade.js";
 
 const tempDirectories: string[] = [];
@@ -50,15 +50,13 @@ async function makeGlobalInstall(prefixName = "prefix with spaces"): Promise<{
   return { prefix, globalRoot, packageRoot };
 }
 
-function captureRoot(globalRoot: string): CaptureCommand {
-  return async (command, args, options) => {
+function captureRoot(globalRoot: string): typeof runCommand {
+  return async (command, args) => {
     assert.equal(command, testPlatform === "win32" ? "npm.cmd" : "npm");
     const layout = classifyNpmGlobalRoot(globalRoot, testPlatform);
     assert.equal(layout.supported, true);
     assert.deepEqual(args, ["--prefix", layout.prefix, "root", "-g"]);
-    assert.equal(options.shell, false);
-    assert.equal(options.windowsHide, true);
-    return { status: 0, signal: null, stdout: `${globalRoot}\n`, stderr: "" };
+    return { code: 0, stdout: `${globalRoot}\n`, stderr: "" };
   };
 }
 
@@ -147,10 +145,10 @@ describe("detectNpmGlobalInstall", () => {
     const result = await detectNpmGlobalInstall(packageRoot, {
       platform: "linux",
       env: { PATH: "/usr/bin" },
-      capture: async (command, args) => {
+      runCommand: async (command, args) => {
         assert.equal(command, "npm");
         assert.deepEqual(args, ["--prefix", prefix, "root", "-g"]);
-        return { status: 0, signal: null, stdout: globalRoot, stderr: "" };
+        return { code: 0, stdout: globalRoot, stderr: "" };
       },
       fs: {
         readFile: async (filePath) => {
@@ -189,7 +187,7 @@ describe("detectNpmGlobalInstall", () => {
     const installation = await makeGlobalInstall();
     const result = await detectNpmGlobalInstall(installation.packageRoot, {
       platform: testPlatform,
-      capture: captureRoot(installation.globalRoot),
+      runCommand: captureRoot(installation.globalRoot),
       env: {
         PATH: "/usr/bin",
         HTTPS_PROXY: "http://proxy.example",
@@ -217,7 +215,7 @@ describe("detectNpmGlobalInstall", () => {
 
     const result = await detectNpmGlobalInstall(installation.packageRoot, {
       platform: testPlatform,
-      capture: captureRoot(installation.globalRoot),
+      runCommand: captureRoot(installation.globalRoot),
     });
 
     assert.equal(result.supported, false);
@@ -237,12 +235,13 @@ describe("detectNpmGlobalInstall", () => {
         Gh_ToKeN: "secret",
         NODE_TLS_REJECT_UNAUTHORIZED: "0",
       },
-      capture: async (_command, _args, options) => {
+      runCommand: async (_command, _args, options) => {
+        assert.ok(options?.env);
         assert.equal(options.env.PATH, "/custom/bin");
         assert.equal(options.env.HTTPS_PROXY, "http://proxy.example");
         assert.equal(options.env.NODE_TLS_REJECT_UNAUTHORIZED, "0");
         assert.equal(options.env.Gh_ToKeN, undefined);
-        return { status: 0, signal: null, stdout: installation.globalRoot, stderr: "" };
+        return { code: 0, stdout: installation.globalRoot, stderr: "" };
       },
     });
     assert.equal(result.supported, true);
@@ -252,7 +251,7 @@ describe("detectNpmGlobalInstall", () => {
     const installation = await makeGlobalInstall();
     const npx = await detectNpmGlobalInstall("/tmp/_npx/123/node_modules/@astralyn/minicpa", {
       platform: testPlatform,
-      capture: async () => assert.fail("npx must be rejected before npm is run"),
+      runCommand: async () => assert.fail("npx must be rejected before npm is run"),
     });
     assert.equal(npx.supported, false);
     if (!npx.supported) assert.equal(npx.reason, "npx");
@@ -266,9 +265,8 @@ describe("detectNpmGlobalInstall", () => {
     );
     const local = await detectNpmGlobalInstall(localPackage, {
       platform: testPlatform,
-      capture: async () => ({
-        status: 0,
-        signal: null,
+      runCommand: async () => ({
+        code: 0,
         stdout: installation.globalRoot,
         stderr: "",
       }),
@@ -278,7 +276,7 @@ describe("detectNpmGlobalInstall", () => {
 
     const linked = await detectNpmGlobalInstall(installation.packageRoot, {
       platform: testPlatform,
-      capture: captureRoot(installation.globalRoot),
+      runCommand: captureRoot(installation.globalRoot),
       fs: {
         readFile: (filePath, encoding) => fs.readFile(filePath, encoding),
         realpath: (filePath) => fs.realpath(filePath),
@@ -309,7 +307,7 @@ describe("detectNpmGlobalInstall", () => {
       installation.packageRoot,
       {
         platform: testPlatform,
-        capture: captureRoot(installation.globalRoot),
+        runCommand: captureRoot(installation.globalRoot),
         fs: {
           readFile: (filePath, encoding) => fs.readFile(filePath, encoding),
           realpath: (filePath) => fs.realpath(filePath),
@@ -332,7 +330,7 @@ describe("detectNpmGlobalInstall", () => {
     await fs.writeFile(path.join(project.prefix, "package.json"), "{}");
     const projectResult = await detectNpmGlobalInstall(project.packageRoot, {
       platform: testPlatform,
-      capture: captureRoot(project.globalRoot),
+      runCommand: captureRoot(project.globalRoot),
     });
     assert.equal(projectResult.supported, false);
     if (!projectResult.supported) assert.equal(projectResult.reason, "project-prefix");
@@ -340,7 +338,7 @@ describe("detectNpmGlobalInstall", () => {
     const installation = await makeGlobalInstall("unwritable");
     const unwritableResult = await detectNpmGlobalInstall(installation.packageRoot, {
       platform: testPlatform,
-      capture: captureRoot(installation.globalRoot),
+      runCommand: captureRoot(installation.globalRoot),
       fs: {
         readFile: (filePath, encoding) => fs.readFile(filePath, encoding),
         realpath: (filePath) => fs.realpath(filePath),
@@ -355,7 +353,7 @@ describe("detectNpmGlobalInstall", () => {
 
     const missingNpm = await detectNpmGlobalInstall(installation.packageRoot, {
       platform: testPlatform,
-      capture: async () => {
+      runCommand: async () => {
         throw Object.assign(new Error("spawn npm ENOENT"), { code: "ENOENT" });
       },
     });

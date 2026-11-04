@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import { runCommand } from "../process/runtime.js";
+import { type CommandResult, runCommand } from "../process/runtime.js";
 import { buildCredentialSafeChildEnv } from "../process/child-env.js";
 import { errnoCode } from "../util.js";
 import { MINICPA_PACKAGE_NAME } from "./minicpa-release.js";
@@ -52,29 +52,10 @@ type FileSystem = {
   access(filePath: string, mode: number): Promise<void>;
 };
 
-type CommandOptions = {
-  shell: false;
-  windowsHide: true;
-  env: NodeJS.ProcessEnv;
-};
-
-export type CapturedCommand = {
-  status: number | null;
-  signal: NodeJS.Signals | null;
-  stdout: string;
-  stderr: string;
-};
-
-export type CaptureCommand = (
-  command: string,
-  args: string[],
-  options: CommandOptions,
-) => Promise<CapturedCommand>;
-
 export type SelfUpgradeDetectionDependencies = {
   platform: Platform;
   fs: FileSystem;
-  capture: CaptureCommand;
+  runCommand: typeof runCommand;
   env: NodeJS.ProcessEnv;
 };
 
@@ -161,20 +142,6 @@ export function inferNpmGlobalRoot(packageRoot: string, platform: Platform): Glo
   return classifyNpmGlobalRoot(globalRoot, platform);
 }
 
-async function defaultCapture(
-  command: string,
-  args: string[],
-  options: CommandOptions,
-): Promise<CapturedCommand> {
-  const result = await runCommand(command, args, { env: options.env, timeoutMs: 10_000 });
-  return {
-    status: result.signal ? null : result.code,
-    signal: result.signal ?? null,
-    stdout: result.stdout,
-    stderr: result.stderr,
-  };
-}
-
 const defaultFileSystem: FileSystem = {
   readFile: (filePath, encoding) => fs.readFile(filePath, encoding),
   realpath: (filePath) => fs.realpath(filePath),
@@ -255,7 +222,7 @@ export async function detectNpmGlobalInstall(
 ): Promise<NpmGlobalInstallDetection> {
   const platform = dependencies.platform ?? process.platform;
   const fileSystem = dependencies.fs ?? defaultFileSystem;
-  const capture = dependencies.capture ?? defaultCapture;
+  const run = dependencies.runCommand ?? runCommand;
   const env = dependencies.env ?? process.env;
   const api = pathApi(platform);
   const resolvedPackageRoot = api.resolve(packageRoot);
@@ -291,12 +258,11 @@ export async function detectNpmGlobalInstall(
   const rootArgs = inferredLayout.supported
     ? ["--prefix", inferredLayout.prefix, "root", "-g"]
     : ["root", "-g"];
-  let rootResult: CapturedCommand;
+  let rootResult: CommandResult;
   try {
-    rootResult = await capture(npmCommand, rootArgs, {
-      shell: false,
-      windowsHide: true,
+    rootResult = await run(npmCommand, rootArgs, {
       env: buildCredentialSafeChildEnv(env),
+      timeoutMs: 10_000,
     });
   } catch (error) {
     if (errnoCode(error) === "ENOENT") {
@@ -307,10 +273,10 @@ export async function detectNpmGlobalInstall(
       `Unable to run ${npmCommand} root -g: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  if (rootResult.status !== 0 || rootResult.signal !== null) {
+  if (rootResult.code !== 0 || rootResult.signal) {
     const outcome = rootResult.signal
       ? `terminated by ${rootResult.signal}`
-      : `exited with status ${String(rootResult.status)}`;
+      : `exited with status ${rootResult.code}`;
     return unsupported("npm-root-failed", `${npmCommand} root -g ${outcome}.`);
   }
 
