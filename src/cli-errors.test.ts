@@ -24,11 +24,26 @@ describe("formatCliError", () => {
     assert.equal(formatCliError(new Error("Missing config")), "Missing config");
   });
 
-  it("routes errors with a cause through the network formatter", () => {
-    const err = new TypeError("fetch failed", { cause: new Error("ECONNREFUSED 127.0.0.1") });
+  it("routes unwrapped transport failures through the network formatter", () => {
+    const err = new TypeError("fetch failed", { cause: new Error("connect refused 127.0.0.1") });
     const message = formatCliError(err);
-    assert.match(message, /fetch failed/);
-    assert.match(message, /ECONNREFUSED/);
+    assert.match(message, /fetch failed ← connect refused/);
+
+    const broken = new TypeError("terminated", {
+      cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }),
+    });
+    assert.match(formatCliError(broken), /terminated ← other side closed \[UND_ERR_SOCKET\]/);
+  });
+
+  it("keeps the message of non-network errors that carry a cause", () => {
+    const lock = new Error("Another cpa update is running (PID=42). Retry after it finishes.", {
+      cause: Object.assign(new Error("listen EADDRINUSE"), { code: "EADDRINUSE" }),
+    });
+    assert.equal(formatCliError(lock), lock.message);
+    const npm = new Error("MiniCPA upgrade failed: npm exited with status 1.", {
+      cause: new Error("network timeout while fetching"),
+    });
+    assert.equal(formatCliError(npm), npm.message);
   });
 
   it("stringifies non-Error values", () => {

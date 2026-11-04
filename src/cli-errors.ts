@@ -1,15 +1,11 @@
-import { formatNetworkError, NetworkError } from "./network-error.js";
+import { formatNetworkError, isNetworkFailure, NetworkError } from "./network-error.js";
 import { BinaryUpdateError } from "./update/binary-error.js";
 
 export function formatCliError(err: unknown): string {
   if (err instanceof BinaryUpdateError) return err.message;
   if (err instanceof NetworkError) return err.message;
   if (err instanceof Error) {
-    const message = err.message || "Error";
-    if (err.cause != null || /fetch failed|network|ECONN|ETIMEDOUT|UND_ERR/i.test(message)) {
-      return formatNetworkError(err);
-    }
-    return message;
+    return isNetworkFailure(err) ? formatNetworkError(err) : err.message || "Error";
   }
   return String(err);
 }
