@@ -1,4 +1,3 @@
-import { apiBaseUrl } from "../api-url.js";
 import { createContext } from "../context.js";
 import { updateBinary, type BinaryUpdateResult } from "../update/binary.js";
 import { consoleUpdateReporter } from "../update/reporter.js";
@@ -60,6 +59,5 @@ export async function runUpdate(
   deps: UpdateDeps = realUpdateDeps,
 ): Promise<void> {
   const ctx = createContext();
-  apiBaseUrl();
   await performUpdate(ctx.home, opts, deps);
 }

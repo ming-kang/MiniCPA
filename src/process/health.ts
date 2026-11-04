@@ -2,8 +2,6 @@ import { Agent, fetch as undiciFetch } from "undici";
 import { apiBaseUrl } from "../api-url.js";
 import { sleep } from "../util.js";
 
-export { apiBaseUrl };
-
 const PANEL_PATH = "/management.html";
 const PROBE_REQUEST_TIMEOUT_MS = 2000;
 const PROBE_PASS_INTERVAL_MS = 300;

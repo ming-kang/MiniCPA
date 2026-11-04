@@ -203,6 +203,13 @@ describe("cli smoke", () => {
     assert.deepEqual(fs.readdirSync(result.root), []);
   });
 
+  it("does not validate the connection URL for commands that never use it", () => {
+    const result = runCli(["logs"], { MINICPA_API_URL: "ftp://example.com" });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /No CLIProxyAPI log/);
+    assert.doesNotMatch(result.stderr, /absolute HTTP\(S\) base URL/);
+  });
+
   for (const flag of ["-v", "--version"]) {
     it(`prints exactly the package version for ${flag}`, () => {
       const { status, stdout, stderr } = runCli([flag]);

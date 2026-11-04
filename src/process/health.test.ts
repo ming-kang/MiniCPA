@@ -3,8 +3,8 @@ import { spawn } from "node:child_process";
 import { afterEach, describe, it } from "node:test";
 import { httpFetch } from "../http.js";
 import { withHttpFixture, withHttpsFixture } from "../test-fixtures/http-server.js";
+import { apiBaseUrl } from "../api-url.js";
 import {
-  apiBaseUrl,
   isLoopbackHostname,
   managementUrl,
   readinessUrls,

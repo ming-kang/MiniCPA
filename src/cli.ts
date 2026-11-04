@@ -4,7 +4,7 @@ import { Argument, Command, CommanderError, Help, Option } from "commander";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_API_URL } from "./api-url.js";
+import { apiBaseUrl, DEFAULT_API_URL } from "./api-url.js";
 import { withCliErrors } from "./cli-errors.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -12,6 +12,9 @@ const packageRoot = path.join(__dirname, "..");
 const pkg = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf8")) as {
   version: string;
 };
+
+/** Commands that probe or print the CPA API URL; the rest never read it. */
+const API_URL_COMMANDS = new Set(["init", "start", "restart", "status", "web", "update"]);
 
 const program = new Command();
 program
@@ -37,8 +40,10 @@ program
   // name, so `cpa update --version 7.2.66` would print MiniCPA's version instead of
   // reaching update's own `--version <ver>` pin.
   .enablePositionalOptions()
-  .hook("preAction", () => {
+  .hook("preAction", (_program, actionCommand) => {
     process.env.MINICPA_API_URL = program.opts<{ apiUrl: string }>().apiUrl;
+    // Reject a bad target before a command that probes or prints it changes anything.
+    if (API_URL_COMMANDS.has(actionCommand.name())) apiBaseUrl();
   })
   .exitOverride();
 

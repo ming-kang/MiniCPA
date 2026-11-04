@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { apiBaseUrl } from "../api-url.js";
 import { openInBrowser } from "../browser.js";
 import { createContext, printRow } from "../context.js";
 import { describeDownloadRoute } from "../http.js";
@@ -9,7 +10,7 @@ import {
   inspectAutostartState,
   type AutostartState,
 } from "../process/autostart.js";
-import { apiBaseUrl, managementUrl, readinessUrls, waitForAnyHttpOk } from "../process/health.js";
+import { managementUrl, readinessUrls, waitForAnyHttpOk } from "../process/health.js";
 import {
   inspectRunning,
   startDaemon,
@@ -38,7 +39,6 @@ function printStarted(result: StartResult, verb: "started" | "restarted"): void 
 
 export async function runStart(opts: { noWait?: boolean }): Promise<void> {
   const ctx = createContext();
-  apiBaseUrl();
   // startDaemon records the outcome; a lock conflict is not a failed start.
   const result = await withMiniCpaLock("start", () =>
     startDaemon(ctx.home, { noWait: opts.noWait }),
@@ -54,7 +54,6 @@ export async function runStop(): Promise<void> {
 
 export async function runRestart(opts: { noWait?: boolean }): Promise<void> {
   const ctx = createContext();
-  apiBaseUrl();
   const result = await withMiniCpaLock("restart", async () => {
     await stopDaemon(ctx.home);
     return startDaemon(ctx.home, { noWait: opts.noWait });

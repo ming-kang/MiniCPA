@@ -13,6 +13,7 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ### Changed
 
+- Validate `--api-url` / `MINICPA_API_URL` once, before any command that probes or prints it (`init`, `start`, `restart`, `status`, `web`, `update`) changes anything. `logs`, `tui`, `auto`, `stop`, and `upgrade` no longer fail because of an unrelated invalid connection URL.
 - Document the residual availability risks of kernel lock leases (macOS port collisions, Windows named-pipe squatting, Linux network namespaces) and how to find the endpoint owner.
 - Skip TLS certificate verification in readiness probes only for loopback `--api-url` targets, where CLIProxyAPI typically uses a self-signed certificate; a remote HTTPS target must now present a valid certificate before `cpa status` reports it reachable.
 - Verify CLIProxyAPI's process ownership once before the graceful stop signal instead of twice back to back; the force signal after the grace period still re-verifies. On Windows each check starts PowerShell, so `cpa stop`, `cpa restart`, and restarting updates finish noticeably sooner.

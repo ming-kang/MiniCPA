@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { apiBaseUrl } from "../api-url.js";
 import { createContext, printRow } from "../context.js";
 import { ensureDir } from "../paths.js";
 import { withMiniCpaLock, withMiniCpaUpdateLock } from "../process/lock.js";
@@ -47,7 +46,6 @@ function createInitialConfig(file: string): boolean {
 
 export async function runInit(updateDeps?: UpdateDeps): Promise<void> {
   const { layout, home } = createContext();
-  apiBaseUrl();
   await withMiniCpaUpdateLock("init", async () => {
     const created = await withMiniCpaLock("init", async () => {
       ensureDir(home);
