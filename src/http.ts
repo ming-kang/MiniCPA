@@ -1,4 +1,4 @@
-import { NetworkError, formatNetworkError } from "./network-error.js";
+import { NetworkError, PROXY_URL_ENV_KEYS, formatNetworkError } from "./network-error.js";
 export { NetworkError, formatNetworkError, hasProxyEnvConfigured } from "./network-error.js";
 import {
   EnvHttpProxyAgent,
@@ -8,16 +8,7 @@ import {
 } from "undici";
 import { formatBytes, sleep } from "./util.js";
 
-const PROXY_ENV_KEYS = [
-  "HTTP_PROXY",
-  "http_proxy",
-  "HTTPS_PROXY",
-  "https_proxy",
-  "ALL_PROXY",
-  "all_proxy",
-  "NO_PROXY",
-  "no_proxy",
-] as const;
+const PROXY_ENV_KEYS = [...PROXY_URL_ENV_KEYS, "NO_PROXY", "no_proxy"] as const;
 
 let sharedProxyAgent: EnvHttpProxyAgent | undefined;
 let sharedProxySignature: string | undefined;

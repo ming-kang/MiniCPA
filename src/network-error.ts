@@ -8,15 +8,18 @@ export class NetworkError extends Error {
   }
 }
 
+/** Proxy URL variables in both cases; NO_PROXY only qualifies them. */
+export const PROXY_URL_ENV_KEYS = [
+  "HTTP_PROXY",
+  "http_proxy",
+  "HTTPS_PROXY",
+  "https_proxy",
+  "ALL_PROXY",
+  "all_proxy",
+] as const;
+
 export function hasProxyEnvConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(
-    env.HTTP_PROXY ||
-      env.HTTPS_PROXY ||
-      env.ALL_PROXY ||
-      env.http_proxy ||
-      env.https_proxy ||
-      env.all_proxy,
-  );
+  return PROXY_URL_ENV_KEYS.some((key) => Boolean(env[key]));
 }
 
 function causeChain(err: unknown): unknown[] {
