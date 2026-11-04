@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it, type TestContext } from "node:test";
 import { activeExecutablePath, backupExecutablePath, cpaLayout, ensureDir } from "../paths.js";
+import { runtimeLogFile } from "../runtime-logs.js";
 import { writePidRecord } from "../state.js";
 import { sleep } from "../util.js";
 import { isProcessAlive } from "./alive.js";
@@ -365,10 +366,10 @@ describe("StartFailure", () => {
     const home = tempHome();
     const layout = cpaLayout(home);
     ensureDir(layout.logsDir);
-    fs.writeFileSync(layout.runtimeLogFile, "[t0] [--------] [info ] [main.go:1] previous run\n");
-    const since = fs.statSync(layout.runtimeLogFile).size;
+    fs.writeFileSync(runtimeLogFile(home), "[t0] [--------] [info ] [main.go:1] previous run\n");
+    const since = fs.statSync(runtimeLogFile(home)).size;
     fs.appendFileSync(
-      layout.runtimeLogFile,
+      runtimeLogFile(home),
       "[t1] [--------] [info ] [main.go:1] starting\n[t2] [--------] [error] [run.go:66] bind: address in use\n",
     );
 
@@ -380,7 +381,7 @@ describe("StartFailure", () => {
         "--- main.log ---",
         "[t1] [--------] [info ] [main.go:1] starting",
         "[t2] [--------] [error] [run.go:66] bind: address in use",
-        `Full log: ${layout.runtimeLogFile}`,
+        `Full log: ${runtimeLogFile(home)}`,
       ].join("\n"),
     );
     assert.equal(failure.summary, "CLIProxyAPI exited immediately. bind: address in use");
@@ -393,11 +394,11 @@ describe("StartFailure", () => {
     const missing = new StartFailure(home, "CLIProxyAPI exited immediately.", 0);
     assert.equal(
       missing.message,
-      `CLIProxyAPI exited immediately.\nFull log: ${layout.runtimeLogFile}`,
+      `CLIProxyAPI exited immediately.\nFull log: ${runtimeLogFile(home)}`,
     );
     assert.equal(missing.summary, "CLIProxyAPI exited immediately.");
 
-    fs.writeFileSync(layout.runtimeLogFile, "fatal: bad config\n");
+    fs.writeFileSync(runtimeLogFile(home), "fatal: bad config\n");
     const rotated = new StartFailure(home, "CLIProxyAPI exited immediately.", 1_000_000);
     assert.match(rotated.message, /--- main\.log ---\nfatal: bad config\n/);
     assert.equal(rotated.summary, "CLIProxyAPI exited immediately. fatal: bad config");
@@ -426,6 +427,21 @@ describe("startDaemon", () => {
     // Without ./logs CPA silently writes to <auth-dir>/logs instead.
     assert.ok(fs.statSync(layout.logsDir).isDirectory());
     assert.deepEqual(fs.readdirSync(layout.logsDir), []);
+  });
+
+  it("creates the WRITABLE_PATH log directory that cpa logs reads", async (t) => {
+    const home = tempHome();
+    const writable = fs.mkdtempSync(path.join(os.tmpdir(), "minicpa-writable-"));
+    const original = process.env.WRITABLE_PATH;
+    process.env.WRITABLE_PATH = writable;
+    t.after(() => {
+      if (original === undefined) delete process.env.WRITABLE_PATH;
+      else process.env.WRITABLE_PATH = original;
+      fs.rmSync(writable, { recursive: true, force: true });
+    });
+    await assert.rejects(() => startDaemon(home, { noWait: true }), /Missing config/);
+    assert.ok(fs.statSync(path.join(writable, "logs")).isDirectory());
+    assert.equal(fs.existsSync(cpaLayout(home).logsDir), false);
   });
 
   it("terminates the new process when its PID record cannot be written", async () => {

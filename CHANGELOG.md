@@ -6,6 +6,7 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ### Fixed
 
+- Create the log directory CLIProxyAPI actually uses before every start: `<WRITABLE_PATH>/logs` when `WRITABLE_PATH` is set, otherwise `<home>/logs`. Previously only `<home>/logs` was created, so with `WRITABLE_PATH` CLIProxyAPI could fall back to `auths/logs` where `cpa logs` and startup failure reports never look.
 - Record the outcome of every CLIProxyAPI start, including `cpa restart` and restarts during `cpa update`, so `cpa status` no longer reports a failed start that a later start already superseded. A `cpa start` that loses the lifecycle lock to another command is no longer recorded as a failed start.
 - Make `cpa upgrade` install the exact latest version it just looked up (`npm install -g @astralyn/minicpa@<version>`) instead of `npm update -g`, whose own version resolution could pick a different version and fail the post-upgrade check.
 

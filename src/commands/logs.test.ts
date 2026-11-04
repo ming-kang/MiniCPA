@@ -17,7 +17,7 @@ function setup(): ReturnType<typeof cpaLayout> {
   env = createIsolatedTestEnv("minicpa-native-logs-");
   const layout = cpaLayout(cpaHome());
   fs.mkdirSync(layout.logsDir, { recursive: true });
-  fs.writeFileSync(layout.runtimeLogFile, "native one\nnative two\n");
+  fs.writeFileSync(path.join(layout.logsDir, "main.log"), "native one\nnative two\n");
   return layout;
 }
 
@@ -44,7 +44,10 @@ describe("native logs", () => {
   it("tails main.log under a file header", async () => {
     const layout = setup();
     const output = await captureConsole(() => runLogs({ lines: 1 }));
-    assert.deepEqual(output.stdout, [`=== ${layout.runtimeLogFile} ===`, "native two"]);
+    assert.deepEqual(output.stdout, [
+      `=== ${path.join(layout.logsDir, "main.log")} ===`,
+      "native two",
+    ]);
   });
 
   it("ignores stdout/stderr captures left by MiniCPA 0.4.3 and earlier", async () => {

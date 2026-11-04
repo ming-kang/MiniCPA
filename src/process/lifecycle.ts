@@ -2,7 +2,12 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { recordMiniCpaEvent } from "../minicpa-log.js";
 import { cpaLayout, ensureDir } from "../paths.js";
-import { recentRuntimeLogs, runtimeLogFile, runtimeLogSize } from "../runtime-logs.js";
+import {
+  recentRuntimeLogs,
+  runtimeLogDirectory,
+  runtimeLogFile,
+  runtimeLogSize,
+} from "../runtime-logs.js";
 import { clearPid, readPidRecord, writePidRecord } from "../state.js";
 import { sleep } from "../util.js";
 import { isProcessAlive } from "./alive.js";
@@ -190,7 +195,7 @@ async function launchDaemon(home: string, options?: StartOptions): Promise<Start
   ensureDir(layout.stateDir);
   // CPA writes to ./logs only if it already exists; otherwise it silently falls back to
   // <auth-dir>/logs, where neither `cpa logs` nor startup failure reports would look.
-  ensureDir(layout.logsDir);
+  ensureDir(runtimeLogDirectory(home));
 
   if (!fs.existsSync(layout.configFile)) {
     throw new Error(`Missing config: ${layout.configFile}. Run: cpa init`);
