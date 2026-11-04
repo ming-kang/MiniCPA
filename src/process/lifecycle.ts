@@ -268,14 +268,13 @@ export async function stopDaemon(home: string): Promise<boolean> {
   }
 
   const pid = running.pid;
+  // This snapshot is fresh; only the force signal, after the grace period, needs another.
   if (running.identityUnknown) {
     throw new Error(
       `Refusing to stop PID=${pid}: MiniCPA cannot verify process ownership. ` +
         "Stop it manually if appropriate, then retry.",
     );
   }
-
-  await assertSafeToStop(home, pid);
 
   if (await signalProcess(pid, false)) {
     await waitForProcessExit(pid, STOP_GRACE_MS, 200);

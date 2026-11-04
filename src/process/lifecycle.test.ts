@@ -259,7 +259,7 @@ describe("stopDaemon phases", () => {
     });
     assert.equal(await stopDaemon(state.home), true);
     assert.deepEqual(state.signals, ["SIGTERM"]);
-    assert.equal(state.probes, 2, "ownership is checked again just before the first signal");
+    assert.equal(state.probes, 1, "the graceful signal reuses the ownership snapshot");
     assert.equal(fs.existsSync(cpaLayout(state.home).pidFile), false);
   });
 
@@ -269,7 +269,7 @@ describe("stopDaemon phases", () => {
     });
     assert.equal(await stopDaemon(state.home), true);
     assert.deepEqual(state.signals, ["SIGTERM", "SIGKILL"]);
-    assert.equal(state.probes, 3, "the force signal needs its own fresh identity snapshot");
+    assert.equal(state.probes, 2, "the force signal needs its own fresh identity snapshot");
   });
 
   it("refuses force-kill and keeps the record if the identity marker degrades", async (t) => {
