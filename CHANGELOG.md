@@ -4,6 +4,8 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-04
+
 ### Fixed
 
 - Format an error as a network failure only when its cause chain carries a transport error code (or undici's `fetch failed`), instead of whenever it has any cause. Lock conflicts and npm upgrade failures now print their own message without an appended cause chain or proxy hint.
