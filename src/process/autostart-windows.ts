@@ -10,6 +10,7 @@ import {
   homeOf,
   nodePathOf,
   cliPathOf,
+  readFileBytesIfExists,
   runAutostartCommand,
 } from "./autostart-shared.js";
 
@@ -128,15 +129,6 @@ function readWindowsLauncher(deps?: AutostartDependencies): string | undefined {
   if (raw === undefined) return undefined;
   const text = raw.toString("utf16le");
   return text.startsWith("\uFEFF") ? text.slice(1) : text;
-}
-
-function readFileBytesIfExists(file: string): Buffer | undefined {
-  try {
-    return fs.readFileSync(file);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw err;
-  }
 }
 
 export async function inspectWindowsAutostart(

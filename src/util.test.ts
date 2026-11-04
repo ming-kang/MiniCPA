@@ -3,7 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { appendPrivateLogLine, formatBytes, rotateFileIfLarge, tailFile } from "./util.js";
+import {
+  appendPrivateLogLine,
+  errnoCode,
+  formatBytes,
+  rotateFileIfLarge,
+  tailFile,
+} from "./util.js";
 
 const temps: string[] = [];
 
@@ -18,6 +24,16 @@ function tempDir(): string {
   temps.push(dir);
   return dir;
 }
+
+describe("errnoCode", () => {
+  it("returns only string codes", () => {
+    assert.equal(errnoCode(Object.assign(new Error("x"), { code: "ENOENT" })), "ENOENT");
+    assert.equal(errnoCode({ code: 42 }), undefined);
+    assert.equal(errnoCode(new Error("x")), undefined);
+    assert.equal(errnoCode(null), undefined);
+    assert.equal(errnoCode("ENOENT"), undefined);
+  });
+});
 
 describe("formatBytes", () => {
   it("formats units", () => {

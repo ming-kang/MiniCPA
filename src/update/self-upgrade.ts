@@ -4,7 +4,7 @@ import path from "node:path";
 import spawn from "cross-spawn";
 import { valid } from "semver";
 import { buildCredentialSafeChildEnv } from "../process/child-env.js";
-import { isExactSemver } from "../util.js";
+import { errnoCode, isExactSemver } from "../util.js";
 import { MINICPA_PACKAGE_NAME, NPM_REGISTRY_BASE_URL } from "./minicpa-release.js";
 import type { SupportedNpmGlobalInstall } from "./npm-global-detection.js";
 
@@ -72,11 +72,6 @@ ${manualRetryCommand(detection, retryVersion)}`,
   );
 }
 
-function errorCode(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
-  return typeof error.code === "string" ? error.code : undefined;
-}
-
 export async function executeMinicpaUpgrade(
   detection: SupportedNpmGlobalInstall,
   version: string,
@@ -105,7 +100,7 @@ export async function executeMinicpaUpgrade(
     });
   } catch (error) {
     const detail =
-      errorCode(error) === "ENOENT"
+      errnoCode(error) === "ENOENT"
         ? `${detection.npmCommand} was not found. Reinstall npm or restore MiniCPA with the command below.`
         : `could not start npm (${error instanceof Error ? error.message : String(error)}).`;
     throw upgradeFailure(detection, version, detail, error);

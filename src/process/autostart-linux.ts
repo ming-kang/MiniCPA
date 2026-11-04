@@ -13,6 +13,7 @@ import {
   registerWithRollback,
   runAutostartCommand,
   readFileIfExists,
+  uidOf,
 } from "./autostart-shared.js";
 
 const SYSTEMD_UNIT_NAME = "minicpa.service";
@@ -31,12 +32,6 @@ function linuxDataHome(deps?: AutostartDependencies): string {
 
 function systemdUnitPath(deps?: AutostartDependencies): string {
   return path.join(homeOf(deps), ".config", "systemd", "user", SYSTEMD_UNIT_NAME);
-}
-
-function uidOf(deps?: AutostartDependencies): number {
-  const uid = deps?.uid ?? process.getuid?.();
-  if (uid === undefined) throw new Error("Could not determine the current user ID for autostart");
-  return uid;
 }
 
 function quoteSystemdValue(value: string, escapeDollar: boolean): string {

@@ -83,13 +83,23 @@ export async function autostartVerdict(registration: {
   return (await registration.osDisabled()) ? "disabled" : "on";
 }
 
-export function readFileIfExists(file: string): string | undefined {
+export function uidOf(deps?: AutostartDependencies): number {
+  const uid = deps?.uid ?? process.getuid?.();
+  if (uid === undefined) throw new Error("Could not determine the current user ID for autostart");
+  return uid;
+}
+
+export function readFileBytesIfExists(file: string): Buffer | undefined {
   try {
-    return fs.readFileSync(file, "utf8");
+    return fs.readFileSync(file);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw err;
   }
+}
+
+export function readFileIfExists(file: string): string | undefined {
+  return readFileBytesIfExists(file)?.toString("utf8");
 }
 
 export async function registerWithRollback(

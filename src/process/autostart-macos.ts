@@ -11,6 +11,7 @@ import {
   registerWithRollback,
   runAutostartCommand,
   readFileIfExists,
+  uidOf,
 } from "./autostart-shared.js";
 
 const LAUNCH_AGENT_LABEL = "com.astralyn.minicpa";
@@ -18,12 +19,6 @@ const LAUNCH_AGENT_NAME = `${LAUNCH_AGENT_LABEL}.plist`;
 
 function launchAgentPath(deps?: AutostartDependencies): string {
   return path.join(homeOf(deps), "Library", "LaunchAgents", LAUNCH_AGENT_NAME);
-}
-
-function uidOf(deps?: AutostartDependencies): number {
-  const uid = deps?.uid ?? process.getuid?.();
-  if (uid === undefined) throw new Error("Could not determine the current user ID for autostart");
-  return uid;
 }
 
 function launchAgentDomain(deps?: AutostartDependencies): string {

@@ -2,6 +2,12 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+/** The string `code` of an errno-style error, if any. */
+export function errnoCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

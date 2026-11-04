@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { runCommand } from "../process/runtime.js";
 import { buildCredentialSafeChildEnv } from "../process/child-env.js";
+import { errnoCode } from "../util.js";
 import { MINICPA_PACKAGE_NAME } from "./minicpa-release.js";
 
 export type SupportedNpmGlobalInstall = {
@@ -188,17 +189,12 @@ function unsupported(
   return { supported: false, reason, message };
 }
 
-function errorCode(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
-  return typeof error.code === "string" ? error.code : undefined;
-}
-
 async function pathExists(filePath: string, fileSystem: FileSystem): Promise<boolean> {
   try {
     await fileSystem.lstat(filePath);
     return true;
   } catch (error) {
-    if (errorCode(error) === "ENOENT") return false;
+    if (errnoCode(error) === "ENOENT") return false;
     throw error;
   }
 }
@@ -303,7 +299,7 @@ export async function detectNpmGlobalInstall(
       env: buildCredentialSafeChildEnv(env),
     });
   } catch (error) {
-    if (errorCode(error) === "ENOENT") {
+    if (errnoCode(error) === "ENOENT") {
       return unsupported("npm-unavailable", `${npmCommand} is unavailable; install npm and retry.`);
     }
     return unsupported(
@@ -356,7 +352,7 @@ export async function detectNpmGlobalInstall(
         }
       }
     } catch (error) {
-      if (errorCode(error) !== "ENOENT") {
+      if (errnoCode(error) !== "ENOENT") {
         return unsupported(
           "filesystem-error",
           `Could not inspect the npm global package path: ${error instanceof Error ? error.message : String(error)}`,
@@ -421,9 +417,9 @@ export async function detectNpmGlobalInstall(
     }
   } catch (error) {
     if (
-      errorCode(error) === "EACCES" ||
-      errorCode(error) === "EPERM" ||
-      errorCode(error) === "EROFS"
+      errnoCode(error) === "EACCES" ||
+      errnoCode(error) === "EPERM" ||
+      errnoCode(error) === "EROFS"
     ) {
       return unsupported(
         "not-writable",
