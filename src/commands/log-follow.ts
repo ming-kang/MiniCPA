@@ -52,9 +52,7 @@ function initialState(file: string, fromStart = false): FollowFileState {
 }
 
 function prefixFor(file: string, count: number): string {
-  if (count <= 1) return "";
-  if (path.basename(file).startsWith("error-")) return `[${path.basename(file)}] `;
-  return `[${file.endsWith(".err.log") ? "err" : "out"}] `;
+  return count <= 1 ? "" : `[${path.basename(file)}] `;
 }
 
 async function writeLines(

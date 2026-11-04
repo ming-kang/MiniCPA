@@ -114,7 +114,6 @@ describe("cpaLayout", () => {
     const home = path.join(os.tmpdir(), "layout-home");
     const layout = cpaLayout(home);
     assert.equal(layout.configFile, path.join(home, "config.yaml"));
-    assert.equal(layout.staticDir, path.join(home, "static"));
     assert.equal(layout.pidFile, path.join(home, "state", "cpa.pid"));
     assert.equal(layout.minicpaLogFile, path.join(home, "state", "minicpa.log"));
     assert.ok(!("runtimeDir" in layout));

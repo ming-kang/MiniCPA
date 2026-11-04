@@ -75,8 +75,8 @@ describe("tailFollowMany", () => {
   });
 
   it("streams an oversized unterminated line before its newline arrives", async () => {
-    const file = tempLog();
-    const err = path.join(path.dirname(file), "cpa.err.log");
+    const file = tempLog("error-a.log");
+    const err = path.join(path.dirname(file), "error-b.log");
     fs.writeFileSync(file, "");
     fs.writeFileSync(err, "");
     const chunks: string[] = [];
@@ -95,7 +95,7 @@ describe("tailFollowMany", () => {
     await ready;
     process.emit("SIGINT", "SIGINT");
     await followed;
-    assert.equal(chunks.join(""), `[out] ${"x".repeat(100000)}\n`);
+    assert.equal(chunks.join(""), `[error-a.log] ${"x".repeat(100000)}\n`);
   });
   it("rejects file access errors through its promise and cleans up listeners", async () => {
     const file = tempLog();
@@ -134,8 +134,8 @@ describe("tailFollowMany", () => {
     assert.equal(writes.join(""), "replacement\n");
   });
   it("preserves partial lines and split UTF-8 characters across polling chunks", async () => {
-    const outFile = tempLog();
-    const errFile = path.join(path.dirname(outFile), "cpa.err.log");
+    const outFile = tempLog("error-a.log");
+    const errFile = path.join(path.dirname(outFile), "error-b.log");
     fs.writeFileSync(outFile, "");
     fs.writeFileSync(errFile, "");
 
@@ -170,8 +170,8 @@ describe("tailFollowMany", () => {
     }
 
     assert.equal(afterFirstPoll, "", "an incomplete line must stay buffered");
-    assert.equal(afterSecondPoll, "[out] partial 世界\n");
-    assert.equal(writes.join(""), "[out] partial 世界\n[out] next\n");
+    assert.equal(afterSecondPoll, "[error-a.log] partial 世界\n");
+    assert.equal(writes.join(""), "[error-a.log] partial 世界\n[error-a.log] next\n");
   });
 
   it("discovers new error-log files and keeps UTF-8/prefix state as the set changes", async () => {

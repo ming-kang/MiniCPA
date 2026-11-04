@@ -49,8 +49,6 @@ export function resolveCpaHome(): string {
 export type CpaLayout = {
   home: string;
   configFile: string;
-  authsDir: string;
-  staticDir: string;
   logsDir: string;
   stateDir: string;
   pidFile: string;
@@ -62,8 +60,6 @@ export function cpaLayout(home: string): CpaLayout {
   return {
     home,
     configFile: path.join(home, "config.yaml"),
-    authsDir: path.join(home, "auths"),
-    staticDir: path.join(home, "static"),
     logsDir: path.join(home, "logs"),
     stateDir: path.join(home, "state"),
     pidFile: path.join(home, "state", "cpa.pid"),

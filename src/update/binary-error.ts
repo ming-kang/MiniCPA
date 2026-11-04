@@ -1,7 +1,6 @@
 export class BinaryUpdateError extends Error {
   readonly previousRestarted: boolean;
   readonly previousRestored: boolean;
-  readonly causeMessage: string;
 
   constructor(
     causeMessage: string,
@@ -23,7 +22,6 @@ export class BinaryUpdateError extends Error {
     }
     super(`${causeMessage}${suffix}`);
     this.name = "BinaryUpdateError";
-    this.causeMessage = causeMessage;
     this.previousRestarted = previousRestarted;
     this.previousRestored = previousRestored;
   }

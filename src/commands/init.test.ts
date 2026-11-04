@@ -69,8 +69,8 @@ describe("runInit", () => {
     assert.match(output.stdout.join("\n"), /^API key\s+sk-cliproxyapi$/m);
     assert.equal(fs.existsSync(path.join(layout.home, ".env")), false);
     assert.equal(fs.existsSync(path.join(layout.home, "backups")), false);
-    assert.equal(fs.existsSync(layout.authsDir), false);
-    assert.equal(fs.existsSync(layout.staticDir), false);
+    assert.equal(fs.existsSync(path.join(layout.home, "auths")), false);
+    assert.equal(fs.existsSync(path.join(layout.home, "static")), false);
     assert.equal(fs.existsSync(layout.logsDir), false);
     assert.ok(fs.existsSync(layout.stateDir));
     if (process.platform !== "win32") {
@@ -84,8 +84,8 @@ describe("runInit", () => {
     const preserved = [
       layout.configFile,
       path.join(layout.home, ".env"),
-      path.join(layout.authsDir, "credential.json"),
-      path.join(layout.staticDir, "management.html"),
+      path.join(layout.home, "auths", "credential.json"),
+      path.join(layout.home, "static", "management.html"),
       path.join(layout.home, "backups", "config", "config.1.yaml"),
       `${layout.configFile}.bak.2026-10-01T12-34-56-789Z`,
       path.join(layout.home, ".config.yaml.replace.bak"),
