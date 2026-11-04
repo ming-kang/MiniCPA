@@ -12,6 +12,7 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ### Changed
 
+- Document the residual availability risks of kernel lock leases (macOS port collisions, Windows named-pipe squatting, Linux network namespaces) and how to find the endpoint owner.
 - Skip TLS certificate verification in readiness probes only for loopback `--api-url` targets, where CLIProxyAPI typically uses a self-signed certificate; a remote HTTPS target must now present a valid certificate before `cpa status` reports it reachable.
 - Verify CLIProxyAPI's process ownership once before the graceful stop signal instead of twice back to back; the force signal after the grace period still re-verifies. On Windows each check starts PowerShell, so `cpa stop`, `cpa restart`, and restarting updates finish noticeably sooner.
 - Document that the bootstrap `config.yaml` selects the auto-updating `seakee/CPA-Manager-Plus` Web panel, what that panel is trusted with, and how to change or pin it.

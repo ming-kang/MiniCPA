@@ -73,3 +73,15 @@ MiniCPA separates mutual exclusion into two distinct leases to maximize service 
 2. **Atomic Commit Handover**: Once download, verification, and staging are complete, the update process briefly acquires the `Lifecycle Lease` to execute the atomic binary replacement and service restart.
 3. **Async Reentrancy**: Leases support controlled in-process reentrancy within the same asynchronous task hierarchy via `AsyncLocalStorage`.
 4. **Upgrade Ordering**: When executing `cpa upgrade`, MiniCPA acquires both the `Update Lease` and the `Lifecycle Lease` in fixed order to prevent replacing CLI modules while an active binary preparation is in flight.
+
+---
+
+## 4. Residual Risks
+
+Kernel leases fail closed: if an endpoint cannot be created, the command refuses to run rather than proceeding without exclusion. They cannot deadlock or be stolen, but the endpoint name is predictable, so another program can keep it occupied:
+
+- **macOS port collision**: The lease port is derived from a hash of the state directory (range `1024`–`65535`). If an unrelated application already listens on that `127.0.0.1` port, every `cpa` command reports `Cannot acquire MiniCPA lock lease (127.0.0.1:<port>)` until that application releases it. Any local user can bind loopback ports, so another account on the same Mac can also occupy it.
+- **Windows named pipe squatting**: Named pipes live in a machine-wide namespace. Another local user who creates `\.\pipe\minicpa-<hash>` first blocks MiniCPA for the account whose state directory produced that hash.
+- **Linux**: Abstract sockets are scoped to the network namespace. Processes in a different namespace (for example, a container sharing the home directory) do not see the same lease and are not excluded.
+
+These are availability issues only: no path lets another process run commands as the user or bypass the lease. The error names the endpoint; identify its owner (`lsof -iTCP:<port>` on macOS, or Sysinternals `handle` / `pipelist` on Windows) and stop it.
