@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import { recordMiniCpaEvent } from "../minicpa-log.js";
 import { cpaLayout, ensureDir } from "../paths.js";
 import { recentRuntimeLogs, runtimeLogFile, runtimeLogSize } from "../runtime-logs.js";
 import { clearPid, readPidRecord, writePidRecord } from "../state.js";
@@ -151,7 +152,24 @@ export type StartOptions = {
 
 export type StartResult = RunningInfo & { alreadyRunning: boolean };
 
+/**
+ * Every start attempt — `cpa start`, `cpa restart`, and update restarts — leaves one
+ * event so `cpa status` never reports a failure that a later start already superseded.
+ */
 export async function startDaemon(home: string, options?: StartOptions): Promise<StartResult> {
+  try {
+    const result = await launchDaemon(home, options);
+    recordMiniCpaEvent(home, "info", `start ok pid=${result.pid}`);
+    return result;
+  } catch (err) {
+    const reason =
+      err instanceof StartFailure ? err.summary : err instanceof Error ? err.message : String(err);
+    recordMiniCpaEvent(home, "error", `start failed: ${reason}`);
+    throw err;
+  }
+}
+
+async function launchDaemon(home: string, options?: StartOptions): Promise<StartResult> {
   const layout = cpaLayout(home);
   const urls = options?.noWait ? [] : readinessUrls();
 

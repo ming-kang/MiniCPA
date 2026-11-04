@@ -4,6 +4,10 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+### Fixed
+
+- Record the outcome of every CLIProxyAPI start, including `cpa restart` and restarts during `cpa update`, so `cpa status` no longer reports a failed start that a later start already superseded. A `cpa start` that loses the lifecycle lock to another command is no longer recorded as a failed start.
+
 ### Changed
 
 - Run the full Ubuntu, Windows, and macOS CI inside the Publish npm workflow on the commit being published, then wait until npm serves the new version, tag that commit, and create the GitHub Release from its CHANGELOG section. Each job holds only the permissions it needs, and a request for an already published version or existing tag fails before anything runs.

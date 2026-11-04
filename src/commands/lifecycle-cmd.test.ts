@@ -13,6 +13,7 @@ import {
 } from "../paths.js";
 import type { AutostartState } from "../process/autostart.js";
 import type { RunningInfo } from "../process/lifecycle.js";
+import { withMiniCpaLock } from "../process/lock.js";
 import { writeInstallState, writePidRecord } from "../state.js";
 import { withHttpFixture, withHttpsFixture } from "../test-fixtures/http-server.js";
 import { captureConsole } from "../test-fixtures/test-env.js";
@@ -20,6 +21,7 @@ import {
   formatLocalTime,
   formatUptime,
   runOpen,
+  runRestart,
   runStart,
   runStatus,
   runTui,
@@ -143,6 +145,46 @@ describe("runStart", () => {
     fs.mkdirSync(cpaLayout(home).minicpaLogFile, { recursive: true });
 
     await assert.rejects(() => runStart({ noWait: true }), /Missing config/);
+  });
+
+  it("does not record a lock conflict as a failed start", async () => {
+    useTempRoot();
+    const home = resolveCpaHome();
+    ensureDir(home);
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const holding = withMiniCpaLock("update", async () => {
+      entered();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    await ready;
+    try {
+      await assert.rejects(() => runStart({ noWait: true }), /Another cpa update|lock lease/i);
+    } finally {
+      release();
+      await holding;
+    }
+    assert.equal(readLastMiniCpaEvent(home), undefined);
+  });
+});
+
+describe("runRestart", () => {
+  it("records its own start attempt instead of leaving an older event in place", async () => {
+    useTempRoot();
+    let closedBase = "";
+    await withHttpFixture({}, async (baseUrl) => {
+      closedBase = baseUrl;
+    });
+    const home = writeHomeForBase(closedBase);
+    recordMiniCpaEvent(home, "error", "start failed: port in use");
+    // No PID record: stop is a no-op; with no binary the start itself fails and records it.
+    await assert.rejects(() => runRestart({ noWait: true }), /binary not found/);
+    assert.match(readLastMiniCpaEvent(home)?.message ?? "", /^start failed: CLIProxyAPI binary/);
   });
 });
 

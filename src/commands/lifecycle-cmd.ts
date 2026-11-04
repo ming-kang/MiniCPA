@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { openInBrowser } from "../browser.js";
 import { createContext, printRow } from "../context.js";
 import { describeDownloadRoute } from "../http.js";
-import { readLastMiniCpaEvent, recordMiniCpaEvent } from "../minicpa-log.js";
+import { readLastMiniCpaEvent } from "../minicpa-log.js";
 import { isProcessAlive } from "../process/alive.js";
 import {
   describeAutostartState,
@@ -12,7 +12,6 @@ import {
 import { apiBaseUrl, managementUrl, readinessUrls, waitForAnyHttpOk } from "../process/health.js";
 import {
   inspectRunning,
-  StartFailure,
   startDaemon,
   stopDaemon,
   type RunningInfo,
@@ -39,17 +38,11 @@ function printStarted(result: StartResult, verb: "started" | "restarted"): void 
 
 export async function runStart(opts: { noWait?: boolean }): Promise<void> {
   const ctx = createContext();
-  let result: StartResult;
-  try {
-    apiBaseUrl();
-    result = await withMiniCpaLock("start", () => startDaemon(ctx.home, { noWait: opts.noWait }));
-  } catch (err) {
-    const reason =
-      err instanceof StartFailure ? err.summary : err instanceof Error ? err.message : String(err);
-    recordMiniCpaEvent(ctx.home, "error", `start failed: ${reason}`);
-    throw err;
-  }
-  recordMiniCpaEvent(ctx.home, "info", `start ok pid=${result.pid}`);
+  apiBaseUrl();
+  // startDaemon records the outcome; a lock conflict is not a failed start.
+  const result = await withMiniCpaLock("start", () =>
+    startDaemon(ctx.home, { noWait: opts.noWait }),
+  );
   printStarted(result, "started");
 }
 
