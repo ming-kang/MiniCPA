@@ -8,12 +8,29 @@ const PANEL_PATH = "/management.html";
 const PROBE_REQUEST_TIMEOUT_MS = 2000;
 const PROBE_PASS_INTERVAL_MS = 300;
 
-// Isolated dispatcher accepts CPA's local self-signed certificates without proxy.
-const loopbackDispatcher = new Agent({
-  connect: {
-    rejectUnauthorized: false,
-  },
-});
+// Probes never use environment proxies. Only loopback targets, where CPA typically
+// serves a self-signed certificate, skip certificate verification; a remote --api-url
+// (for example behind a reverse proxy) must present a valid certificate.
+const loopbackDispatcher = new Agent({ connect: { rejectUnauthorized: false } });
+const remoteDispatcher = new Agent();
+
+export function isLoopbackHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    /^127(?:\.\d{1,3}){3}$/.test(host) ||
+    host === "[::1]"
+  );
+}
+
+function probeDispatcher(url: string): Agent {
+  try {
+    return isLoopbackHostname(new URL(url).hostname) ? loopbackDispatcher : remoteDispatcher;
+  } catch {
+    return remoteDispatcher;
+  }
+}
 
 function isReadyStatus(status: number): boolean {
   return (status >= 200 && status < 300) || status === 304 || status === 401 || status === 403;
@@ -38,7 +55,7 @@ export async function waitForFirstHttpOk(
         const res = await undiciFetch(url, {
           method: "GET",
           signal: AbortSignal.timeout(Math.max(1, Math.min(PROBE_REQUEST_TIMEOUT_MS, budget))),
-          dispatcher: loopbackDispatcher,
+          dispatcher: probeDispatcher(url),
         });
         await res.body?.cancel().catch(() => {});
         if (isReadyStatus(res.status)) return url;

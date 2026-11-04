@@ -12,6 +12,7 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ### Changed
 
+- Skip TLS certificate verification in readiness probes only for loopback `--api-url` targets, where CLIProxyAPI typically uses a self-signed certificate; a remote HTTPS target must now present a valid certificate before `cpa status` reports it reachable.
 - Verify CLIProxyAPI's process ownership once before the graceful stop signal instead of twice back to back; the force signal after the grace period still re-verifies. On Windows each check starts PowerShell, so `cpa stop`, `cpa restart`, and restarting updates finish noticeably sooner.
 - Document that the bootstrap `config.yaml` selects the auto-updating `seakee/CPA-Manager-Plus` Web panel, what that panel is trusted with, and how to change or pin it.
 - Run the full Ubuntu, Windows, and macOS CI inside the Publish npm workflow on the commit being published, then wait until npm serves the new version, tag that commit, and create the GitHub Release from its CHANGELOG section. Each job holds only the permissions it needs, and a request for an already published version or existing tag fails before anything runs.

@@ -58,7 +58,7 @@ MiniCPA distinguishes between local daemon probing and outbound package/release 
 ### Protocol & Security Rules
 
 1. **Proxy Independence for Local Traffic**: Service readiness probes bypass system and environment proxies, ensuring that misconfigured outbound proxies do not intercept or disrupt local loopback communications.
-2. **Local TLS Flexibility**: CLIProxyAPI may be configured with local self-signed TLS certificates. MiniCPA's isolated readiness dispatcher permits local certificates while leaving outbound download client validation untouched.
+2. **Local TLS Flexibility**: CLIProxyAPI may be configured with local self-signed TLS certificates. MiniCPA's isolated readiness dispatcher skips certificate verification only for loopback targets (`localhost`, `*.localhost`, `127.0.0.0/8`, `[::1]`); a remote `--api-url`, such as a reverse proxy, must present a valid certificate. Outbound download client validation is untouched.
 3. **Outbound Domain Boundaries**: Release asset downloads strictly validate destination domains against trusted host whitelists (`github.com`, `api.github.com`, and official GitHub release CDNs), refusing arbitrary redirect targets.
 
 ---
