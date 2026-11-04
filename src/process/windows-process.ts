@@ -5,10 +5,10 @@ import { errnoCode } from "../util.js";
 export type WindowsProcessFacts = { startMarker?: string; executable?: string };
 const PROBE_BUDGET_MS = 10_000;
 
-// Windows PowerShell ships with every supported Windows; PowerShell 7 is the fallback
-// only where the built-in shell has been removed or blocked.
-const POWERSHELL_EXECUTABLES = ["powershell.exe", "pwsh.exe"] as const;
-let preferredShell: (typeof POWERSHELL_EXECUTABLES)[number] = "powershell.exe";
+// PowerShell 7 starts much faster than Windows PowerShell 5.1, which can take seconds
+// under load; the built-in shell is the fallback wherever pwsh is not installed.
+const POWERSHELL_EXECUTABLES = ["pwsh.exe", "powershell.exe"] as const;
+let preferredShell: (typeof POWERSHELL_EXECUTABLES)[number] = "pwsh.exe";
 
 /**
  * Runs one `-Command` script with the first PowerShell that can be started. Only a

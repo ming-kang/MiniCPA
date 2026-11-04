@@ -20,14 +20,14 @@ it("reads the marker and Unicode executable path in one query", async () => {
 
 it("falls back to the next shell only when the shell cannot start", async () => {
   const shells: string[] = [];
-  const missing = Object.assign(new Error("spawn powershell.exe ENOENT"), { code: "ENOENT" });
+  const missing = Object.assign(new Error("spawn pwsh.exe ENOENT"), { code: "ENOENT" });
   const result = await runPowerShell("exit 3", { timeoutMs: 1000 }, async (command) => {
     shells.push(command);
     if (shells.length === 1) throw missing;
     return { code: 3, stdout: "", stderr: "script failed" };
   });
   assert.equal(result.code, 3, "a failing script is reported, not retried");
-  assert.deepEqual(shells, ["powershell.exe", "pwsh.exe"]);
+  assert.deepEqual(shells, ["pwsh.exe", "powershell.exe"]);
 
   // The shell that started is remembered for the next call.
   const next: string[] = [];
@@ -35,9 +35,9 @@ it("falls back to the next shell only when the shell cannot start", async () => 
     next.push(command);
     return { code: 0, stdout: "", stderr: "" };
   });
-  assert.deepEqual(next, ["pwsh.exe"]);
+  assert.deepEqual(next, ["powershell.exe"]);
   await runPowerShell("exit 0", { timeoutMs: 1000 }, async (command) => {
-    if (command === "pwsh.exe") throw missing;
+    if (command === "powershell.exe") throw missing;
     return { code: 0, stdout: "", stderr: "" };
   });
 });

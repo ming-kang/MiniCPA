@@ -183,7 +183,9 @@ describe("Windows autostart", () => {
     assert.equal(fs.existsSync(vbsPath), false, "disabling must remove the launcher");
     assert.equal(await inspectAutostartState(deps), "off");
 
-    assert.ok(calls.every((call) => call.command === "powershell.exe"));
+    assert.ok(
+      calls.every((call) => call.command === "pwsh.exe" || call.command === "powershell.exe"),
+    );
     assert.ok(calls.every((call) => call.args.includes("-NoProfile")));
   });
 
