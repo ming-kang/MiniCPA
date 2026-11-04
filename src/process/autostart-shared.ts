@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeFileAtomic } from "../fs-atomic.js";
 import { type CommandResult, runCommand } from "./runtime.js";
+import { runPowerShell } from "./windows-process.js";
 
 const AUTOSTART_COMMAND_TIMEOUT_MS = 10_000;
 
@@ -71,6 +72,18 @@ export function runAutostartCommand(
     env: { ...envOf(deps), ...extraEnv },
     timeoutMs: AUTOSTART_COMMAND_TIMEOUT_MS,
   });
+}
+
+export function runAutostartPowerShell(
+  deps: AutostartDependencies | undefined,
+  script: string,
+  extraEnv?: NodeJS.ProcessEnv,
+): Promise<CommandResult> {
+  return runPowerShell(
+    script,
+    { timeoutMs: AUTOSTART_COMMAND_TIMEOUT_MS, env: { ...envOf(deps), ...extraEnv } },
+    commandRunnerOf(deps),
+  );
 }
 
 export async function autostartVerdict(registration: {

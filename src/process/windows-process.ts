@@ -1,8 +1,45 @@
+import type { CommandResult } from "./runtime.js";
 import { runCommand } from "./runtime.js";
+import { errnoCode } from "../util.js";
 
 export type WindowsProcessFacts = { startMarker?: string; executable?: string };
 const PROBE_BUDGET_MS = 10_000;
-let preferredShell = "pwsh.exe";
+
+// Windows PowerShell ships with every supported Windows; PowerShell 7 is the fallback
+// only where the built-in shell has been removed or blocked.
+const POWERSHELL_EXECUTABLES = ["powershell.exe", "pwsh.exe"] as const;
+let preferredShell: (typeof POWERSHELL_EXECUTABLES)[number] = "powershell.exe";
+
+/**
+ * Runs one `-Command` script with the first PowerShell that can be started. Only a
+ * failure to start the shell moves on to the next one; a script that runs and fails
+ * is reported as is. Every attempt shares one deadline.
+ */
+export async function runPowerShell(
+  script: string,
+  options: { timeoutMs: number; env?: NodeJS.ProcessEnv },
+  run: typeof runCommand = runCommand,
+): Promise<CommandResult> {
+  const deadline = Date.now() + options.timeoutMs;
+  const order = [preferredShell, ...POWERSHELL_EXECUTABLES.filter((s) => s !== preferredShell)];
+  let lastError: unknown = new Error("PowerShell is unavailable");
+  for (const shell of order) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    try {
+      const result = await run(shell, ["-NoProfile", "-NonInteractive", "-Command", script], {
+        timeoutMs: remaining,
+        env: options.env,
+      });
+      preferredShell = shell;
+      return result;
+    } catch (error) {
+      lastError = error;
+      if (errnoCode(error) !== "ENOENT") throw error;
+    }
+  }
+  throw lastError;
+}
 
 export async function readWindowsProcess(
   pid: number,
@@ -18,33 +55,21 @@ export async function readWindowsProcess(
     "try { if ($p.Path) { $exe = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($p.Path)) } } catch {}",
     "[Console]::Out.Write((ConvertTo-Json @{ marker = $marker; exe = $exe } -Compress))",
   ].join("; ");
-  const deadline = Date.now() + budgetMs;
-  for (const shell of [
-    preferredShell,
-    preferredShell === "pwsh.exe" ? "powershell.exe" : "pwsh.exe",
-  ]) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) break;
-    try {
-      const result = await run(shell, ["-NoProfile", "-NonInteractive", "-Command", script], {
-        timeoutMs: remaining,
-      });
-      if (result.code !== 0) continue;
-      const parsed: unknown = JSON.parse(result.stdout);
-      if (!parsed || typeof parsed !== "object") continue;
-      const facts = parsed as Record<string, unknown>;
-      preferredShell = shell;
-      return {
-        startMarker:
-          typeof facts.marker === "string" && /^\d+$/.test(facts.marker) ? facts.marker : undefined,
-        executable:
-          typeof facts.exe === "string" && facts.exe
-            ? Buffer.from(facts.exe, "base64").toString("utf8")
-            : undefined,
-      };
-    } catch {
-      /* try the other available shell with only the remaining budget */
-    }
+  try {
+    const result = await runPowerShell(script, { timeoutMs: budgetMs }, run);
+    if (result.code !== 0) return {};
+    const parsed: unknown = JSON.parse(result.stdout);
+    if (!parsed || typeof parsed !== "object") return {};
+    const facts = parsed as Record<string, unknown>;
+    return {
+      startMarker:
+        typeof facts.marker === "string" && /^\d+$/.test(facts.marker) ? facts.marker : undefined,
+      executable:
+        typeof facts.exe === "string" && facts.exe
+          ? Buffer.from(facts.exe, "base64").toString("utf8")
+          : undefined,
+    };
+  } catch {
+    return {};
   }
-  return {};
 }

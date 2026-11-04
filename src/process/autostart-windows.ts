@@ -11,7 +11,7 @@ import {
   nodePathOf,
   cliPathOf,
   readFileBytesIfExists,
-  runAutostartCommand,
+  runAutostartPowerShell,
 } from "./autostart-shared.js";
 
 const WINDOWS_RUN_SUBKEY = String.raw`Software\Microsoft\Windows\CurrentVersion\Run`;
@@ -134,12 +134,7 @@ function readWindowsLauncher(deps?: AutostartDependencies): string | undefined {
 export async function inspectWindowsAutostart(
   deps?: AutostartDependencies,
 ): Promise<AutostartState> {
-  const result = await runAutostartCommand(deps, "powershell.exe", [
-    "-NoProfile",
-    "-NonInteractive",
-    "-Command",
-    WINDOWS_INSPECT_SCRIPT,
-  ]);
+  const result = await runAutostartPowerShell(deps, WINDOWS_INSPECT_SCRIPT);
   if (result.code !== 0) throw commandFailure("inspect", result);
   const facts = parseWindowsRegistryFacts(result);
   const runValue = decodeBase64Utf8(facts.run);
@@ -160,15 +155,10 @@ export async function setWindowsAutostart(
 ): Promise<void> {
   const vbsPath = windowsVbsPath(deps);
   const register = async (): Promise<void> => {
-    const result = await runAutostartCommand(
-      deps,
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_SET_SCRIPT],
-      {
-        [WINDOWS_MODE_ENV]: enabled ? "on" : "off",
-        ...(enabled ? { [WINDOWS_EXPECTED_ENV]: windowsLauncherCommand(deps) } : {}),
-      },
-    );
+    const result = await runAutostartPowerShell(deps, WINDOWS_SET_SCRIPT, {
+      [WINDOWS_MODE_ENV]: enabled ? "on" : "off",
+      ...(enabled ? { [WINDOWS_EXPECTED_ENV]: windowsLauncherCommand(deps) } : {}),
+    });
     if (result.code !== 0) throw commandFailure(enabled ? "enable" : "disable", result);
   };
   if (enabled) {
