@@ -1,5 +1,7 @@
+import fs from "node:fs";
+import path from "node:path";
 import { cpaLayout } from "./paths.js";
-import { appendPrivateLogLine, tailFile } from "./util.js";
+import { tailFile } from "./util.js";
 
 export type MiniCpaEventLevel = "info" | "error";
 
@@ -12,6 +14,38 @@ export type MiniCpaEvent = {
 const MAX_MESSAGE_LENGTH = 400;
 const RECORD_PATTERN = /^(\S+) (info|error) ?(.*)$/;
 const SCAN_LINES = 20;
+const MINICPA_LOG_ROTATE_BYTES = 1024 * 1024;
+
+function rotateFileIfLarge(file: string): boolean {
+  try {
+    if (fs.statSync(file).size < MINICPA_LOG_ROTATE_BYTES) return false;
+    fs.renameSync(file, `${file}.1`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function appendPrivateLogLine(file: string, line: string): boolean {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    const rotated = rotateFileIfLarge(file);
+    if (!rotated && fs.existsSync(file) && fs.statSync(file).size >= MINICPA_LOG_ROTATE_BYTES) {
+      // Prevent unlimited log growth if rename/rotation is blocked.
+      return false;
+    }
+    const fd = fs.openSync(file, "a", 0o600);
+    try {
+      fs.writeFileSync(fd, `${line}\n`);
+    } finally {
+      fs.closeSync(fd);
+    }
+    if (process.platform !== "win32") fs.chmodSync(file, 0o600);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export function condenseEventMessage(message: string): string {
   const flattened = message.replace(/\s+/g, " ").trim();

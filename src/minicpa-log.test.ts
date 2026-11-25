@@ -89,4 +89,74 @@ describe("recordMiniCpaEvent / readLastMiniCpaEvent", () => {
     assert.equal(readLastMiniCpaEvent(home), undefined);
     assert.equal(recordMiniCpaEvent(home, "info", "start ok pid=1"), false);
   });
+
+  it("keeps the log private on POSIX", { skip: process.platform === "win32" }, () => {
+    const home = tempHome();
+    const file = cpaLayout(home).minicpaLogFile;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "pre-existing\n", { mode: 0o644 });
+    fs.chmodSync(file, 0o644);
+    assert.equal(recordMiniCpaEvent(home, "info", "start ok pid=1"), true);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  });
+});
+
+describe("log rotation", () => {
+  const OVERSIZED = 1024 * 1024;
+
+  function seedOversizedLog(home: string): string {
+    const file = cpaLayout(home).minicpaLogFile;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "x".repeat(OVERSIZED));
+    return file;
+  }
+
+  it("rotates an oversized log into a single retained generation", () => {
+    const home = tempHome();
+    const file = seedOversizedLog(home);
+    const at = new Date("2026-08-26T03:04:05.000Z");
+
+    assert.equal(recordMiniCpaEvent(home, "info", "start ok pid=7", at), true);
+
+    assert.equal(fs.readFileSync(file, "utf8"), "2026-08-26T03:04:05.000Z info start ok pid=7\n");
+    assert.equal(fs.statSync(`${file}.1`).size, OVERSIZED);
+    assert.equal(fs.existsSync(`${file}.2`), false);
+  });
+
+  it("replaces the previous retained generation instead of accumulating rotations", () => {
+    const home = tempHome();
+    const file = seedOversizedLog(home);
+    fs.writeFileSync(`${file}.1`, "old-1");
+
+    assert.equal(recordMiniCpaEvent(home, "info", "start ok pid=7"), true);
+
+    assert.equal(fs.statSync(`${file}.1`).size, OVERSIZED);
+    assert.equal(fs.existsSync(`${file}.2`), false);
+  });
+
+  it("refuses to grow the log and preserves both generations when rotation is blocked", () => {
+    const home = tempHome();
+    const file = seedOversizedLog(home);
+    fs.writeFileSync(`${file}.1`, "old-1");
+
+    const originalRename = fs.renameSync;
+    fs.renameSync = (): never => {
+      throw new Error("EPERM: operation not permitted, rename");
+    };
+    try {
+      assert.equal(recordMiniCpaEvent(home, "info", "start ok pid=7"), false);
+    } finally {
+      fs.renameSync = originalRename;
+    }
+
+    assert.equal(fs.statSync(file).size, OVERSIZED);
+    assert.equal(fs.readFileSync(`${file}.1`, "utf8"), "old-1");
+  });
+
+  it("keeps a small log unrotated", () => {
+    const home = tempHome();
+    assert.equal(recordMiniCpaEvent(home, "info", "start ok pid=7"), true);
+    const file = cpaLayout(home).minicpaLogFile;
+    assert.equal(fs.existsSync(`${file}.1`), false);
+  });
 });

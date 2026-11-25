@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import path from "node:path";
 
 /** The string `code` of an errno-style error, if any. */
 export function errnoCode(error: unknown): string | undefined {
@@ -18,50 +17,11 @@ export function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export const MINICPA_LOG_ROTATE_BYTES = 1024 * 1024;
-
 const EXACT_SEMVER_REGEX =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 export function isExactSemver(version: string): boolean {
   return EXACT_SEMVER_REGEX.test(version);
-}
-
-export function rotateFileIfLarge(file: string, options?: { maxBytes?: number }): boolean {
-  const maxBytes = options?.maxBytes ?? MINICPA_LOG_ROTATE_BYTES;
-  try {
-    if (maxBytes < 1 || fs.statSync(file).size < maxBytes) return false;
-    fs.renameSync(file, `${file}.1`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function appendPrivateLogLine(
-  file: string,
-  line: string,
-  options?: { maxBytes?: number },
-): boolean {
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    const maxBytes = options?.maxBytes ?? MINICPA_LOG_ROTATE_BYTES;
-    const rotated = rotateFileIfLarge(file, { maxBytes });
-    if (!rotated && fs.existsSync(file) && fs.statSync(file).size >= maxBytes) {
-      // Prevent unlimited log growth if rename/rotation is blocked.
-      return false;
-    }
-    const fd = fs.openSync(file, "a", 0o600);
-    try {
-      fs.writeFileSync(fd, `${line}\n`);
-    } finally {
-      fs.closeSync(fd);
-    }
-    if (process.platform !== "win32") fs.chmodSync(file, 0o600);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export function tailFile(file: string, maxLines = 40, maxBytes = 8 * 1024 * 1024): string {
