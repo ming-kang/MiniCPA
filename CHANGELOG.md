@@ -4,6 +4,10 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+### Changed
+
+- Trim `RELEASING.md` to the release procedure and failure recovery, and slim `docs/` to design rationale, risk analysis, and trust decisions. Mechanisms, file layouts, and protocols are no longer narrated there; the source code is their reference.
+
 ## [0.5.1] - 2026-11-04
 
 ### Fixed

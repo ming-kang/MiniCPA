@@ -1,81 +1,14 @@
-# Security & Boundary Isolation
+# Security & Trust Boundaries
 
-MiniCPA enforces defense-in-depth boundaries across process execution, filesystem operations, and network communications.
+## Isolation boundaries
 
----
+MiniCPA treats three inputs as hostile by default, for reasons the mechanisms alone do not explain:
 
-## 1. Process Environment Sanitization
+- **Child processes**: CLIProxyAPI is a third-party binary, npm is network-facing tooling, and probes invoke platform commands — all spawned inside a user session that may carry GitHub or npm tokens for unrelated work. A token inherited by any of them can leave the machine without MiniCPA ever reading it. Credential stripping is therefore a blanket policy applied to every spawn, not a per-child audit of who might look.
+- **Filesystem**: anything in a shared writable location can be pre-created or swapped by another local user, so state, staging, and extraction never leave user-private storage. Archives are hostile input regardless of source: traversal entries, symlink payloads, and decompression bombs are standard abuse, which is why extraction enforces hard bounds instead of trusting upstream release hygiene.
+- **Network**: loopback probing and outbound distribution have opposite trust requirements. Probes must tolerate CLIProxyAPI's self-signed localhost certificates and must ignore environment proxies, because a misconfigured proxy must never be able to interfere with — or observe — local service checks. Downloads are remote data end to end: asset URLs come from API responses, so destination hosts are confined to GitHub-controlled infrastructure rather than trusted blindly, and TLS validation is never relaxed.
 
-MiniCPA interacts with external registries and APIs that may require authentication tokens (such as `GITHUB_TOKEN`, `GH_TOKEN`, or npm tokens).
-
-To prevent unintended credential leakage:
-- **Child Environment Filtering**: Whenever MiniCPA spawns a child process—including the managed CLIProxyAPI daemon, diagnostic commands, and npm subcommands—it sanitizes the child environment.
-- **Case-Insensitive Normalization**: Environment variable filtering strips known credential keys across all case variations, neutralizing platform-specific case insensitivity (such as Windows environment blocks).
-
-```
-   Parent Process (MiniCPA)
-   [ GITHUB_TOKEN, NPM_TOKEN, ... ]
-                 |
-                 v
-   +------------------------------------+
-   |   buildCredentialSafeChildEnv()    |
-   +------------------------------------+
-                 | (Tokens Stripped)
-                 v
-   Child Process (CLIProxyAPI / npm / probes)
-```
-
----
-
-## 2. Filesystem Boundaries & Symlink Protection
-
-- **Private Workspace Storage**: All runtime state, configuration, and temporary staging trees are created inside user-private application directories (`%LOCALAPPDATA%` on Windows, `~/Library/Application Support` on macOS, and `$XDG_DATA_HOME` on Linux).
-- **POSIX Mode Hardening**: Directories and state files are created with private permissions (`0700` and `0600` on POSIX systems), preventing unauthorized multi-user access.
-- **Shared `/tmp` Avoidance**: Ephemeral download and extraction files reside in private storage (`<root>/temp`) rather than shared system temporary directories (such as `/tmp` or `C:\Temp`), eliminating vulnerability to symlink replacement and race attacks.
-- **Symlink Escape Refusal**: Cleanup routines and path resolvers verify boundaries and refuse to traverse symbolic links or junctions pointing outside authorized staging roots.
-
----
-
-## 3. Network & Transport Isolation
-
-MiniCPA distinguishes between local daemon probing and outbound package/release distribution:
-
-```
-                            +--------------------------+
-                            |     Network Clients      |
-                            +------------+-------------+
-                                         |
-                 +-----------------------+-----------------------+
-                 |                                               |
-                 v                                               v
-    [ Local Readiness Probes ]                      [ Outbound Downloads ]
-    - Target: Local CLIProxyAPI (127.0.0.1)          - Target: GitHub, npm registry
-    - Isolated dispatcher                           - Strict TLS / CA verification
-    - Accepts local self-signed TLS certificates    - Strict allowed host whitelisting
-    - Bypasses environment proxies                  - Honors HTTP(S)_PROXY & NO_PROXY
-```
-
-### Protocol & Security Rules
-
-1. **Proxy Independence for Local Traffic**: Service readiness probes bypass system and environment proxies, ensuring that misconfigured outbound proxies do not intercept or disrupt local loopback communications.
-2. **Local TLS Flexibility**: CLIProxyAPI may be configured with local self-signed TLS certificates. MiniCPA's isolated readiness dispatcher skips certificate verification only for loopback targets (`localhost`, `*.localhost`, `127.0.0.0/8`, `[::1]`); a remote `--api-url`, such as a reverse proxy, must present a valid certificate. Outbound download client validation is untouched.
-3. **Outbound Domain Boundaries**: Release asset downloads strictly validate destination domains against trusted host whitelists (`github.com`, `api.github.com`, and official GitHub release CDNs), refusing arbitrary redirect targets.
-
----
-
-## 4. Archive Extraction Security
-
-Binary updates accept compressed archives (`.zip`, `.tar.gz`) from upstream releases. MiniCPA mitigates archive-based vulnerabilities during extraction:
-
-- **Path Traversal Defense**: All archive entry filenames are normalized and verified. Any entry containing directory traversal elements (`../`, `..\`) or absolute paths is rejected before extraction.
-- **Resource Limits**:
-  - Entry count bounding (preventing zip bomb metadata exhaustion).
-  - Path depth bounding (preventing deeply nested directory recursion).
-  - Decompressed byte bounding (limiting actual decompressed stream size regardless of declared entry header sizes).
-
----
-
-## 5. Bootstrap Configuration & Web Panel Source
+## Bootstrap Configuration & Web Panel Source
 
 `cpa init` writes a minimal `config.yaml` once. Two of its defaults are trust decisions rather than plain settings:
 
