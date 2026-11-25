@@ -33,7 +33,6 @@ export function startPreconditionNotes(): string[] {
   if (!fs.existsSync(ctx.layout.configFile)) {
     notes.push("no config.yaml yet, so a login start would fail — run: cpa init");
   }
-  // Use read-only inspection: resolveRunnableExecutable performs crash recovery.
   if (!inspectRunnableExecutable(ctx.home)) {
     notes.push("no CLIProxyAPI binary yet, so a login start would fail — run: cpa update");
   }

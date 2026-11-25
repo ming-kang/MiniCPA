@@ -327,8 +327,10 @@ describe("inspectRunning", () => {
     assert.deepEqual(snapshotHome(home), before);
 
     assert.equal(await resolveRunning(home), undefined);
-    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "rollback-binary");
     assert.equal(fs.existsSync(cpaLayout(home).pidFile), false);
+    // Only the stale pid record is repaired; binary recovery belongs to startDaemon.
+    assert.equal(fs.existsSync(activeExecutablePath(home)), false);
+    assert.equal(fs.readFileSync(backupExecutablePath(home), "utf8"), "rollback-binary");
   });
 
   it("reports a dead PID without clearing the record", async () => {
@@ -406,6 +408,27 @@ describe("StartFailure", () => {
 });
 
 describe("startDaemon", () => {
+  it("recovers the backup binary left by an interrupted update before launching", async () => {
+    const home = tempHome();
+    const layout = cpaLayout(home);
+    fs.writeFileSync(layout.configFile, "port: 8317\n");
+    installFakeRuntime(home, path.join(home, "pid-marker"));
+    // Interrupted update: the active binary was renamed aside and never replaced.
+    fs.renameSync(activeExecutablePath(home), backupExecutablePath(home));
+
+    let started: Awaited<ReturnType<typeof startDaemon>> | undefined;
+    try {
+      started = await startDaemon(home, { noWait: true });
+      childPids.push(started.pid);
+    } catch (error) {
+      // The Windows stand-in exits on the unknown flag, but recovery has already happened.
+      assert.match(String(error), /exited immediately/);
+    }
+    assert.equal(fs.existsSync(activeExecutablePath(home)), true);
+    assert.equal(fs.existsSync(backupExecutablePath(home)), false);
+    if (started) assert.equal(started.exe, activeExecutablePath(home));
+  });
+
   it("creates logs/ before spawning and does not capture detached stdout/stderr", async () => {
     const home = tempHome();
     const layout = cpaLayout(home);

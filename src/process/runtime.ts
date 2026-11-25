@@ -256,10 +256,14 @@ export async function runRuntimeAttached(
   });
 }
 
+// An update interrupted mid-replace can leave only the .bak; a surviving active binary always wins.
+export function recoverInterruptedReplacement(home: string): boolean {
+  if (fs.existsSync(activeExecutablePath(home))) return false;
+  return restoreRuntimeBinaryFromBackup(home);
+}
+
 export function resolveRunnableExecutable(home: string): string {
   const active = activeExecutablePath(home);
   if (fs.existsSync(active)) return active;
-  // Interrupted replace can leave only .bak; recover from it.
-  if (restoreRuntimeBinaryFromBackup(home) && fs.existsSync(active)) return active;
   throw new Error(`CLIProxyAPI binary not found under ${home}. Run: cpa update`);
 }

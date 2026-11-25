@@ -18,7 +18,11 @@ import {
   compareStartMarkers,
   readProcessStartMarker,
 } from "./pid-identity.js";
-import { findRunnableExecutable, resolveRunnableExecutable } from "./runtime.js";
+import {
+  findRunnableExecutable,
+  recoverInterruptedReplacement,
+  resolveRunnableExecutable,
+} from "./runtime.js";
 
 const DEFAULT_READY_MS = 15_000;
 const STOP_GRACE_MS = 5_000;
@@ -40,16 +44,7 @@ async function evaluateRunning(home: string, repair: boolean): Promise<RunningIn
     return undefined;
   }
 
-  let exe: string;
-  if (repair) {
-    try {
-      exe = resolveRunnableExecutable(home);
-    } catch {
-      exe = record.exe;
-    }
-  } else {
-    exe = findRunnableExecutable(home) ?? record.exe;
-  }
+  const exe = findRunnableExecutable(home) ?? record.exe;
 
   const { currentMarker, identity } = await inspectProcessIdentity(record.pid, exe);
   const marker = compareStartMarkers(record.startMarker, currentMarker);
@@ -201,6 +196,7 @@ async function launchDaemon(home: string, options?: StartOptions): Promise<Start
     throw new Error(`Missing config: ${layout.configFile}. Run: cpa init`);
   }
 
+  recoverInterruptedReplacement(home);
   const exe = resolveRunnableExecutable(home);
   const logsSince = runtimeLogSize(home);
   const child = spawn(exe, ["-config", layout.configFile], {

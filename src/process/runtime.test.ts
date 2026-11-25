@@ -11,6 +11,7 @@ import {
   inspectRunnableExecutable,
   parseCpaVersionFromHelp,
   readCurrentRuntimeVersion,
+  recoverInterruptedReplacement,
   resolveRunnableExecutable,
   restoreRuntimeBinaryFromBackup,
   RuntimeBinaryTransaction,
@@ -246,16 +247,52 @@ describe("clearRuntimeBinaryBackup", () => {
 });
 
 describe("resolveRunnableExecutable", () => {
-  it("auto-restores from .bak when the active binary is missing", () => {
+  it("returns the active binary when it exists", () => {
+    const home = tempHome();
+    fs.writeFileSync(activeExecutablePath(home), "active-binary");
+    assert.equal(resolveRunnableExecutable(home), activeExecutablePath(home));
+  });
+
+  it("throws when only the backup binary survives, without restoring it", () => {
     const home = tempHome();
     fs.writeFileSync(backupExecutablePath(home), "rollback-binary");
-    const resolved = resolveRunnableExecutable(home);
-    assert.equal(resolved, activeExecutablePath(home));
-    assert.equal(fs.readFileSync(resolved, "utf8"), "rollback-binary");
+    const before = snapshotHome(home);
+
+    assert.throws(() => resolveRunnableExecutable(home), /Run: cpa update/);
+    assert.deepEqual(snapshotHome(home), before, "the read must not restore the backup");
   });
 
   it("throws when neither active nor backup exists", () => {
     assert.throws(() => resolveRunnableExecutable(tempHome()), /Run: cpa update/);
+  });
+});
+
+describe("recoverInterruptedReplacement", () => {
+  it("restores the backup onto the active path when the active binary is missing", () => {
+    const home = tempHome();
+    fs.writeFileSync(backupExecutablePath(home), "rollback-binary");
+
+    assert.equal(recoverInterruptedReplacement(home), true);
+    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "rollback-binary");
+    assert.equal(fs.existsSync(backupExecutablePath(home)), false);
+  });
+
+  it("never overwrites a surviving active binary", () => {
+    const home = tempHome();
+    fs.writeFileSync(activeExecutablePath(home), "active-binary");
+    fs.writeFileSync(backupExecutablePath(home), "rollback-binary");
+
+    assert.equal(recoverInterruptedReplacement(home), false);
+    assert.equal(fs.readFileSync(activeExecutablePath(home), "utf8"), "active-binary");
+    assert.equal(fs.readFileSync(backupExecutablePath(home), "utf8"), "rollback-binary");
+  });
+
+  it("does nothing when there is no backup to recover from", () => {
+    const home = tempHome();
+    const before = snapshotHome(home);
+
+    assert.equal(recoverInterruptedReplacement(home), false);
+    assert.deepEqual(snapshotHome(home), before);
   });
 });
 
