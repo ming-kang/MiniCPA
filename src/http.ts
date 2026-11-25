@@ -79,6 +79,16 @@ export function redactProxyUrl(proxyUrl: string): string {
   }
 }
 
+export function isLoopbackHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    /^127(?:\.\d{1,3}){3}$/.test(host) ||
+    host === "[::1]"
+  );
+}
+
 export type HttpFetchInit = UndiciRequestInit;
 
 export class HttpStatusError extends Error {

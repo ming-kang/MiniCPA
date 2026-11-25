@@ -9,6 +9,7 @@ import {
   httpFetch,
   HttpStatusError,
   isAbortLikeError,
+  isLoopbackHostname,
   readHttpTextBounded,
   isRetryableHttpStatus,
   isRetryableNetworkError,
@@ -67,6 +68,31 @@ describe("describeDownloadRoute", () => {
       describeDownloadRoute({ ALL_PROXY: "socks5://localhost:7890" }),
       "Direct · ALL_PROXY scheme not supported",
     );
+  });
+});
+
+describe("isLoopbackHostname", () => {
+  it("accepts only hosts that cannot leave this machine", () => {
+    for (const host of [
+      "localhost",
+      "LOCALHOST",
+      "cpa.localhost",
+      "127.0.0.1",
+      "127.8.9.10",
+      "[::1]",
+    ]) {
+      assert.equal(isLoopbackHostname(host), true, host);
+    }
+    for (const host of [
+      "example.com",
+      "localhost.example.com",
+      "10.0.0.1",
+      "128.0.0.1",
+      "[::2]",
+      "0.0.0.0",
+    ]) {
+      assert.equal(isLoopbackHostname(host), false, host);
+    }
   });
 });
 

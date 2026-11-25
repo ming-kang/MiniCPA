@@ -4,7 +4,7 @@ import path from "node:path";
 import { type CommandResult, runCommand } from "../process/runtime.js";
 import { buildCredentialSafeChildEnv } from "../process/child-env.js";
 import { errnoCode } from "../util.js";
-import { MINICPA_PACKAGE_NAME } from "./minicpa-release.js";
+import { MINICPA_PACKAGE_NAME, parsePackageManifest } from "./minicpa-release.js";
 
 export type SupportedNpmGlobalInstall = {
   supported: true;
@@ -170,10 +170,7 @@ async function readManifest(
   manifestPath: string,
   fileSystem: Pick<FileSystem, "readFile">,
 ): Promise<{ name?: unknown; version?: unknown }> {
-  const raw = await fileSystem.readFile(manifestPath, "utf8");
-  const parsed: unknown = JSON.parse(raw);
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
-  return parsed as { name?: unknown; version?: unknown };
+  return parsePackageManifest(await fileSystem.readFile(manifestPath, "utf8"));
 }
 
 function oneOutputLine(stdout: string): string | undefined {

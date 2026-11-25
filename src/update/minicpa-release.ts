@@ -1,5 +1,5 @@
 import { compare, valid } from "semver";
-import { httpFetch, HttpStatusError, readHttpTextBounded } from "../http.js";
+import { httpFetch, HttpStatusError, isLoopbackHostname, readHttpTextBounded } from "../http.js";
 import { isExactSemver } from "../util.js";
 
 export const MINICPA_PACKAGE_NAME = "@astralyn/minicpa";
@@ -16,9 +16,10 @@ type NpmLatestMetadata = {
   version?: unknown;
 };
 
-function isLoopbackHostname(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "[::1]";
+export function parsePackageManifest(raw: string): { name?: unknown; version?: unknown } {
+  const parsed: unknown = JSON.parse(raw);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+  return parsed as { name?: unknown; version?: unknown };
 }
 
 export function minicpaLatestMetadataUrl(registryBaseUrl: string = NPM_REGISTRY_BASE_URL): string {
@@ -57,15 +58,15 @@ export function minicpaLatestMetadataUrl(registryBaseUrl: string = NPM_REGISTRY_
   return `${base}/${encodedPackageName}/latest`;
 }
 
-function assertExactSemver(version: unknown, source: "current" | "latest"): string {
+export function assertExactSemver(version: unknown, context: string): string {
   if (typeof version !== "string" || version.length === 0) {
     throw new Error(
-      `${source === "latest" ? "npm registry metadata is missing a string version" : "Current MiniCPA version is missing"}. Expected an exact semver such as 1.2.3.`,
+      `${context}: the version is missing or not a string. Expected a canonical exact semver such as 1.2.3 or 1.2.3-beta.1.`,
     );
   }
   if (!isExactSemver(version) || valid(version) === null) {
     throw new Error(
-      `Invalid ${source} MiniCPA version "${version}". Expected a canonical exact semver such as 1.2.3 or 1.2.3-beta.1.`,
+      `${context}: "${version}" is not a canonical exact semver such as 1.2.3 or 1.2.3-beta.1.`,
     );
   }
   return version;
@@ -128,15 +129,15 @@ export async function fetchLatestMinicpaVersion(
       `npm registry package name mismatch: expected "${MINICPA_PACKAGE_NAME}", received ${actualName}. Refusing to use this metadata.`,
     );
   }
-  return assertExactSemver(latest.version, "latest");
+  return assertExactSemver(latest.version, "Invalid latest MiniCPA version");
 }
 
 export function compareMinicpaVersions(
   currentVersion: string,
   latestVersion: string,
 ): MinicpaVersionStatus {
-  const current = assertExactSemver(currentVersion, "current");
-  const latest = assertExactSemver(latestVersion, "latest");
+  const current = assertExactSemver(currentVersion, "Invalid current MiniCPA version");
+  const latest = assertExactSemver(latestVersion, "Invalid latest MiniCPA version");
   const ordering = compare(current, latest);
   if (ordering < 0) return "outdated";
   if (ordering > 0) return "ahead";

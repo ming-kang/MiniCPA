@@ -4,13 +4,7 @@ import { afterEach, describe, it } from "node:test";
 import { httpFetch } from "../http.js";
 import { withHttpFixture, withHttpsFixture } from "../test-fixtures/http-server.js";
 import { apiBaseUrl } from "../api-url.js";
-import {
-  isLoopbackHostname,
-  managementUrl,
-  readinessUrls,
-  waitForAnyHttpOk,
-  waitForFirstHttpOk,
-} from "./health.js";
+import { managementUrl, readinessUrls, waitForAnyHttpOk, waitForFirstHttpOk } from "./health.js";
 
 const PROBE_CHILD_SOURCE = [
   "const [, moduleUrl, targetUrl] = process.argv;",
@@ -234,31 +228,6 @@ describe("waitForAnyHttpOk", () => {
         assert.equal(await probeInChildProcess(`${base}/`, {}), "READY");
       },
     );
-  });
-});
-
-describe("isLoopbackHostname", () => {
-  it("accepts only hosts that cannot leave this machine", () => {
-    for (const host of [
-      "localhost",
-      "LOCALHOST",
-      "cpa.localhost",
-      "127.0.0.1",
-      "127.8.9.10",
-      "[::1]",
-    ]) {
-      assert.equal(isLoopbackHostname(host), true, host);
-    }
-    for (const host of [
-      "example.com",
-      "localhost.example.com",
-      "10.0.0.1",
-      "128.0.0.1",
-      "[::2]",
-      "0.0.0.0",
-    ]) {
-      assert.equal(isLoopbackHostname(host), false, host);
-    }
   });
 });
 

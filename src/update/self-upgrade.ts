@@ -2,10 +2,14 @@ import type { SpawnOptions } from "node:child_process";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import spawn from "cross-spawn";
-import { valid } from "semver";
 import { buildCredentialSafeChildEnv } from "../process/child-env.js";
-import { errnoCode, isExactSemver } from "../util.js";
-import { MINICPA_PACKAGE_NAME, NPM_REGISTRY_BASE_URL } from "./minicpa-release.js";
+import { errnoCode } from "../util.js";
+import {
+  assertExactSemver,
+  MINICPA_PACKAGE_NAME,
+  NPM_REGISTRY_BASE_URL,
+  parsePackageManifest,
+} from "./minicpa-release.js";
 import type { SupportedNpmGlobalInstall } from "./npm-global-detection.js";
 
 interface SpawnedCommand {
@@ -27,14 +31,6 @@ export type SelfUpgradeInstallDependencies = {
   readFile(filePath: string, encoding: "utf8"): Promise<string>;
   env: NodeJS.ProcessEnv;
 };
-
-function assertCanonicalExactVersion(version: string): void {
-  if (!isExactSemver(version) || valid(version) === null) {
-    throw new Error(
-      `Refusing non-canonical MiniCPA version "${version}". Expected an exact version such as 1.2.3.`,
-    );
-  }
-}
 
 // Always an exact `install`: `npm update -g` resolves its own "wanted" version, which
 // can differ from the one fetched (0.x ranges, or a publish in between) and then fails
@@ -77,7 +73,7 @@ export async function executeMinicpaUpgrade(
   version: string,
   dependencies: Partial<SelfUpgradeInstallDependencies> = {},
 ): Promise<void> {
-  assertCanonicalExactVersion(version);
+  assertExactSemver(version, "Refusing non-canonical MiniCPA version");
   const spawnCommand = dependencies.spawn ?? (spawn as SpawnCommand);
   const readFile = dependencies.readFile ?? fs.readFile;
   const env = dependencies.env ?? process.env;
@@ -120,11 +116,7 @@ export async function executeMinicpaUpgrade(
       installPathApi.join(detection.expectedPackageRoot, "package.json"),
       "utf8",
     );
-    const parsed: unknown = JSON.parse(raw);
-    installedManifest =
-      typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-        ? (parsed as { name?: unknown; version?: unknown })
-        : {};
+    installedManifest = parsePackageManifest(raw);
   } catch (error) {
     throw upgradeFailure(
       detection,

@@ -41,6 +41,14 @@ describe("MiniCPA npm registry metadata", () => {
       minicpaLatestMetadataUrl("http://127.0.0.1:12345"),
       "http://127.0.0.1:12345/@astralyn%2Fminicpa/latest",
     );
+    assert.equal(
+      minicpaLatestMetadataUrl("http://127.8.9.10:12345"),
+      "http://127.8.9.10:12345/@astralyn%2Fminicpa/latest",
+    );
+    assert.equal(
+      minicpaLatestMetadataUrl("http://registry.localhost:12345"),
+      "http://registry.localhost:12345/@astralyn%2Fminicpa/latest",
+    );
     assert.throws(
       () => minicpaLatestMetadataUrl("https://registry.example.test"),
       /Refusing untrusted npm registry/,
