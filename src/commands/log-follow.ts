@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { setTimeout as delay } from "node:timers/promises";
+import { errnoCode } from "../util.js";
 
 export function readLogChunk(
   file: string | number,
@@ -41,7 +42,7 @@ function initialState(file: string, fromStart = false): FollowFileState {
   try {
     stat = fs.statSync(file);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if (errnoCode(error) !== "ENOENT") throw error;
   }
   return {
     position: fromStart ? 0 : (stat?.size ?? 0),
@@ -49,10 +50,6 @@ function initialState(file: string, fromStart = false): FollowFileState {
     decoder: new StringDecoder("utf8"),
     pendingLine: "",
   };
-}
-
-function prefixFor(file: string, count: number): string {
-  return count <= 1 ? "" : `[${path.basename(file)}] `;
 }
 
 async function writeLines(
@@ -87,11 +84,12 @@ export async function tailFollowMany(
   files: string[] | (() => string[]),
   deps?: TailFollowDeps,
 ): Promise<void> {
-  const listFiles = typeof files === "function" ? files : () => files;
+  const dynamic = typeof files === "function";
+  const listFiles = dynamic ? files : () => files;
   const initialFiles = listFiles();
+  const usePrefix = dynamic || initialFiles.length > 1;
+  const filePrefix = (file: string): string => (usePrefix ? `[${path.basename(file)}] ` : "");
   const states = new Map(initialFiles.map((file) => [file, initialState(file)]));
-  const filePrefix = (file: string): string =>
-    prefixFor(file, typeof files === "function" ? 2 : states.size);
   const write: FollowWriter =
     deps?.write ??
     ((chunk) =>
@@ -115,17 +113,15 @@ export async function tailFollowMany(
         throw error;
       }
       backlog = false;
-      if (typeof files === "function") {
-        const currentFiles = new Set(listFiles());
-        for (const [file, state] of states) {
-          if (!currentFiles.has(file)) {
-            await flush(state, filePrefix(file), write);
-            states.delete(file);
-          }
+      const currentFiles = new Set(listFiles());
+      for (const [file, state] of states) {
+        if (!currentFiles.has(file)) {
+          await flush(state, filePrefix(file), write);
+          states.delete(file);
         }
-        for (const file of currentFiles) {
-          if (!states.has(file)) states.set(file, initialState(file, true));
-        }
+      }
+      for (const file of currentFiles) {
+        if (!states.has(file)) states.set(file, initialState(file, true));
       }
       for (const [file, state] of states) {
         if (controller.signal.aborted) break;
@@ -134,7 +130,7 @@ export async function tailFollowMany(
         try {
           fd = fs.openSync(file, "r");
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+          if (errnoCode(error) === "ENOENT") continue;
           throw error;
         }
         let data: Buffer;

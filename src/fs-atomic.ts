@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { errnoCode } from "./util.js";
 
 const PRIVATE_FILE_MODE = 0o600;
 
@@ -36,7 +37,7 @@ export function renameWithWindowsRetry(
       fs.renameSync(from, to);
       return;
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
+      const code = errnoCode(err);
       const delay = RENAME_RETRY_DELAYS_MS[attempt];
       if (platform !== "win32" || delay === undefined || !code || !RETRYABLE_RENAME_CODES.has(code))
         throw err;

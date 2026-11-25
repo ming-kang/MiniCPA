@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { ensureDir, miniCpaRoot } from "../paths.js";
+import { errnoCode } from "../util.js";
 import { isProcessAlive } from "./alive.js";
 import { acquireLockLease } from "./lock-lease.js";
 
@@ -47,7 +48,7 @@ function inspectLock(lockPath: string): LockInspection {
   try {
     raw = fs.readFileSync(lockPath, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "absent" };
+    if (errnoCode(error) === "ENOENT") return { kind: "absent" };
     throw error;
   }
   const record = parseLockRecord(raw);
@@ -138,7 +139,6 @@ async function withLock<T>(
       fs.rmSync(key, { force: true });
     }
   } finally {
-    owner.active = false;
     await releaseLease();
   }
 }

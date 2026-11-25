@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createContext, printRow } from "../context.js";
 import { ensureDir } from "../paths.js";
 import { withMiniCpaLock, withMiniCpaUpdateLock } from "../process/lock.js";
+import { errnoCode } from "../util.js";
 import { performUpdate, type UpdateDeps } from "./update-cmd.js";
 
 const INITIAL_API_KEY = "sk-cliproxyapi";
@@ -32,7 +33,7 @@ function createInitialConfig(file: string): boolean {
   try {
     fd = fs.openSync(file, "wx", 0o600);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    if (errnoCode(error) === "EEXIST") return false;
     throw error;
   }
   try {

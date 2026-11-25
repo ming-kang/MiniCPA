@@ -26,6 +26,7 @@ import {
   type RuntimeInstallationInspection,
 } from "../process/runtime.js";
 import { readPidRecord } from "../state.js";
+import { errnoCode } from "../util.js";
 
 function printStarted(result: StartResult, verb: "started" | "restarted"): void {
   console.log(
@@ -178,11 +179,12 @@ export async function runStatus(cliVersion: string, deps?: StatusDependencies): 
 }
 
 function missingBrowserCommand(err: unknown): string | undefined {
-  const errno = err as NodeJS.ErrnoException;
-  const message = typeof errno?.message === "string" ? errno.message : "";
+  const message = err instanceof Error ? err.message : "";
   const match = /^spawn (.+) ENOENT$/.exec(message);
   if (match?.[1]) return match[1];
-  if (errno?.code === "ENOENT") return errno.path || "browser launcher";
+  if (errnoCode(err) === "ENOENT") {
+    return (err as NodeJS.ErrnoException).path || "browser launcher";
+  }
   return undefined;
 }
 

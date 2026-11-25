@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 
-/** The string `code` of an errno-style error, if any. */
 export function errnoCode(error: unknown): string | undefined {
   if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
   return typeof error.code === "string" ? error.code : undefined;

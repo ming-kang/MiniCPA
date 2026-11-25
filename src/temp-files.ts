@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { miniCpaTempRoot } from "./paths.js";
+import { errnoCode } from "./util.js";
 
 export const TEMP_MIN_AGE_MS = 60 * 60 * 1000;
 
@@ -77,7 +78,7 @@ export async function cleanupTempFiles(options?: {
     try {
       stat = fs.lstatSync(file);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      if (errnoCode(error) === "ENOENT") continue;
       result.failures.push(`${file}: ${String(error)}`);
       continue;
     }

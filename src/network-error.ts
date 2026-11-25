@@ -1,3 +1,5 @@
+import { errnoCode } from "./util.js";
+
 export class NetworkError extends Error {
   readonly url?: string;
 
@@ -49,7 +51,7 @@ const NETWORK_ERROR_CODE =
 export function isNetworkFailure(err: unknown): boolean {
   return causeChain(err).some((item) => {
     if (!(item instanceof Error)) return false;
-    const code = (item as NodeJS.ErrnoException).code;
+    const code = errnoCode(item);
     return (
       (typeof code === "string" && NETWORK_ERROR_CODE.test(code)) ||
       (item instanceof TypeError && item.message === "fetch failed")

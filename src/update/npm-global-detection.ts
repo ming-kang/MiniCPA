@@ -348,27 +348,20 @@ export async function detectNpmGlobalInstall(
       );
     }
 
-    const markerPaths = [
-      api.join(layout.prefix, "package.json"),
-      api.join(layout.prefix, "pnpm-lock.yaml"),
-      api.join(layout.prefix, "yarn.lock"),
-      api.join(layout.prefix, "bun.lock"),
-      api.join(layout.prefix, "bun.lockb"),
-      api.join(layout.globalRoot, ".pnpm"),
-      api.join(expectedPackageRoot, ".git"),
+    const markers: { path: string; reason: UnsupportedNpmGlobalInstall["reason"] }[] = [
+      { path: api.join(layout.prefix, "package.json"), reason: "project-prefix" },
+      { path: api.join(layout.prefix, "pnpm-lock.yaml"), reason: "other-package-manager" },
+      { path: api.join(layout.prefix, "yarn.lock"), reason: "other-package-manager" },
+      { path: api.join(layout.prefix, "bun.lock"), reason: "other-package-manager" },
+      { path: api.join(layout.prefix, "bun.lockb"), reason: "other-package-manager" },
+      { path: api.join(layout.globalRoot, ".pnpm"), reason: "other-package-manager" },
+      { path: api.join(expectedPackageRoot, ".git"), reason: "source-install" },
     ];
-    for (const markerPath of markerPaths) {
-      if (await pathExists(markerPath, fileSystem)) {
-        const markerName = api.basename(markerPath);
-        const reason =
-          markerName === "package.json"
-            ? "project-prefix"
-            : markerName === ".git"
-              ? "source-install"
-              : "other-package-manager";
+    for (const marker of markers) {
+      if (await pathExists(marker.path, fileSystem)) {
         return unsupported(
-          reason,
-          `Refusing an ambiguous project or non-npm global prefix (${markerPath}).`,
+          marker.reason,
+          `Refusing an ambiguous project or non-npm global prefix (${marker.path}).`,
         );
       }
     }

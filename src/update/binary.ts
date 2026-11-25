@@ -93,7 +93,7 @@ async function downloadFirstAvailableAsset(
       lastError = error;
     }
   }
-  throw lastError;
+  throw lastError ?? new Error("No CLIProxyAPI release asset could be downloaded");
 }
 
 export async function updateBinary(

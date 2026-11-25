@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeFileAtomic } from "../fs-atomic.js";
+import { errnoCode } from "../util.js";
 import { type CommandResult, runCommand } from "./runtime.js";
 import { runPowerShell } from "./windows-process.js";
 
@@ -106,7 +107,7 @@ export function readFileBytesIfExists(file: string): Buffer | undefined {
   try {
     return fs.readFileSync(file);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    if (errnoCode(err) === "ENOENT") return undefined;
     throw err;
   }
 }
@@ -137,7 +138,7 @@ export async function withRegistrationFile(
   try {
     previous = { bytes: fs.readFileSync(file), mode: fs.statSync(file).mode & 0o777 };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if (errnoCode(error) !== "ENOENT") throw error;
   }
   try {
     writeFileAtomic(file, contents, { hardenDirectory: false });

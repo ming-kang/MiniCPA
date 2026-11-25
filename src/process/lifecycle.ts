@@ -9,7 +9,7 @@ import {
   runtimeLogSize,
 } from "../runtime-logs.js";
 import { clearPid, readPidRecord, writePidRecord } from "../state.js";
-import { sleep } from "../util.js";
+import { errnoCode, sleep } from "../util.js";
 import { isProcessAlive } from "./alive.js";
 import { buildCredentialSafeChildEnv } from "./child-env.js";
 import { readinessUrls, waitForAnyHttpOk } from "./health.js";
@@ -113,7 +113,7 @@ async function signalProcess(pid: number, force: boolean): Promise<boolean> {
     process.kill(pid, force ? "SIGKILL" : "SIGTERM");
     return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    if (errnoCode(error) !== "ESRCH") throw error;
     return false;
   }
 }

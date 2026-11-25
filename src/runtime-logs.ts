@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { cpaLayout } from "./paths.js";
-import { tailFile } from "./util.js";
+import { errnoCode, tailFile } from "./util.js";
 
 // CLIProxyAPI honors WRITABLE_PATH; otherwise writes relative to its home/cwd.
 export function runtimeLogDirectory(home: string): string {
@@ -26,7 +26,7 @@ export function runtimeErrorLogFiles(home: string): string[] {
         try {
           return [{ file, modified: fs.statSync(file).mtimeMs }];
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+          if (errnoCode(error) === "ENOENT") return [];
           throw error;
         }
       })
@@ -34,7 +34,7 @@ export function runtimeErrorLogFiles(home: string): string[] {
       .slice(-10)
       .map(({ file }) => file);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if (errnoCode(error) === "ENOENT") return [];
     throw error;
   }
 }
@@ -47,10 +47,9 @@ export function runtimeLogSize(home: string): number {
   }
 }
 
-/** The last main.log lines, limited to what was written after byte offset `since`. */
-export function recentRuntimeLogs(home: string, since = 0): string {
+export function recentRuntimeLogs(home: string, sinceByteOffset = 0): string {
   const size = runtimeLogSize(home);
-  // A file smaller than `since` was rotated in between, so all of it is new.
-  const fresh = size >= since ? size - since : size;
+  // A file smaller than `sinceByteOffset` was rotated in between, so all of it is new.
+  const fresh = size >= sinceByteOffset ? size - sinceByteOffset : size;
   return fresh > 0 ? tailFile(runtimeLogFile(home), 30, fresh) : "";
 }

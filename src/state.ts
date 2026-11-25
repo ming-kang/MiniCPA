@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { writeFileAtomic } from "./fs-atomic.js";
+import { errnoCode } from "./util.js";
 import { cpaLayout, ensureDir } from "./paths.js";
 
 export type InstallState = {
@@ -30,7 +31,7 @@ export function readInstallState(home: string): InstallState {
     }
     return { runtimeVersion: parsed.runtimeVersion };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    if (errnoCode(error) === "ENOENT") return {};
     throw error;
   }
 }

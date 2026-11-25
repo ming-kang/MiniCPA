@@ -6,7 +6,7 @@ import {
   type RequestInit as UndiciRequestInit,
   type Response as UndiciResponse,
 } from "undici";
-import { formatBytes, sleep } from "./util.js";
+import { errnoCode, formatBytes, sleep } from "./util.js";
 
 const PROXY_ENV_KEYS = [...PROXY_URL_ENV_KEYS, "NO_PROXY", "no_proxy"] as const;
 
@@ -160,7 +160,7 @@ const RETRYABLE_NETWORK_CODES = new Set([
 export function isRetryableNetworkError(err: unknown): boolean {
   if (isAbortLikeError(err)) return false;
   for (let current = err; current instanceof Error; current = current.cause) {
-    const code = (current as NodeJS.ErrnoException).code;
+    const code = errnoCode(current);
     if (code && RETRYABLE_NETWORK_CODES.has(code)) return true;
   }
   return false;

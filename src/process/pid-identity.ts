@@ -1,3 +1,4 @@
+import { errnoCode } from "../util.js";
 import { runCommand } from "./runtime.js";
 import { readWindowsProcess } from "./windows-process.js";
 import fs from "node:fs";
@@ -58,7 +59,7 @@ async function probeLinuxExecutable(pid: number): Promise<IdentityFacts> {
   try {
     return { kind: "executable", executable: fs.readlinkSync(`/proc/${pid}/exe`) };
   } catch (error) {
-    return { kind: "executable", errorCode: (error as NodeJS.ErrnoException).code };
+    return { kind: "executable", errorCode: errnoCode(error) };
   }
 }
 
