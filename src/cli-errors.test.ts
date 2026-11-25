@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { formatCliError } from "./cli-errors.js";
 import { NetworkError } from "./http.js";
-import { BinaryUpdateError } from "./update/binary.js";
+import { BinaryUpdateError } from "./update/binary-error.js";
 
 describe("formatCliError", () => {
   it("passes NetworkError messages through untouched", () => {

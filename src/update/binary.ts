@@ -31,14 +31,6 @@ import { downloadToFile } from "./download.js";
 import { fetchLatestRelease, normalizeTagVersion } from "./github-client.js";
 import { silentUpdateReporter, type UpdateReporter } from "./reporter.js";
 
-export {
-  extractArchive,
-  findSafeExtractedExecutable,
-  isUnsafeArchiveEntryName,
-} from "./archive.js";
-export { installBinaryPhase, type BinaryUpdateDeps } from "./binary-install.js";
-export { BinaryUpdateError } from "./binary-error.js";
-
 const MAX_BINARY_ARCHIVE_BYTES = 512 * 1024 * 1024;
 
 export async function verifyArchiveChecksum(

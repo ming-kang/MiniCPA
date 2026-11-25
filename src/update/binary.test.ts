@@ -7,7 +7,8 @@ import { activeExecutablePath, backupExecutablePath } from "../paths.js";
 import { RuntimeBinaryTransaction } from "../process/runtime.js";
 import { readInstallState, writeInstallState } from "../state.js";
 import { silentUpdateReporter } from "./reporter.js";
-import { BinaryUpdateError, installBinaryPhase, type BinaryUpdateDeps } from "./binary.js";
+import { BinaryUpdateError } from "./binary-error.js";
+import { installBinaryPhase, type BinaryUpdateDeps } from "./binary-install.js";
 
 const temps: string[] = [];
 

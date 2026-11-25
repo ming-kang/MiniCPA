@@ -7,7 +7,11 @@ import { afterEach, describe, it } from "node:test";
 import zlib from "node:zlib";
 import * as tar from "tar";
 import { executableName } from "../paths.js";
-import { extractArchive, findSafeExtractedExecutable, isUnsafeArchiveEntryName } from "./binary.js";
+import {
+  extractArchive,
+  findSafeExtractedExecutable,
+  isUnsafeArchiveEntryName,
+} from "./archive.js";
 
 const temps: string[] = [];
 

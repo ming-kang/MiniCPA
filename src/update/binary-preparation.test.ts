@@ -14,7 +14,8 @@ import { withMiniCpaLock } from "../process/lock.js";
 import { readInstallState, writeInstallState } from "../state.js";
 import { createIsolatedTestEnv } from "../test-fixtures/test-env.js";
 import { HttpStatusError } from "../http.js";
-import { updateBinary, type BinaryPrepareDeps, type BinaryUpdateDeps } from "./binary.js";
+import { updateBinary, type BinaryPrepareDeps } from "./binary.js";
+import type { BinaryUpdateDeps } from "./binary-install.js";
 
 let env: ReturnType<typeof createIsolatedTestEnv> | undefined;
 afterEach(() => {
