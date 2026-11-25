@@ -1,9 +1,16 @@
-# Repository Guidelines
+# Development Rules
 
-## Git and release
+## Code
 
-- Stage explicit paths and review the staged diff.
-- Never run `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, or `--no-verify`; the pre-commit hook is the check gate.
+- Use clear names and structure to carry intent.
+- Don't use comments. Unless code can't express something non-obvious (a why or an external constraint), and keep it short.
+
+## Docs
+
+- `CHANGELOG.md`: Log only user-visible changes since the last release under `## [Unreleased]`.
+
+## Git
+
+- Commit only when the user asks. Stage explicit paths; check `git status` and the staged diff before committing.
 - Use Conventional Commits: `<type>[(scope)]: <summary>`.
-- Add user-visible changes to `CHANGELOG.md` under `## [Unreleased]`.
-- Follow `RELEASING.md`
+- Never run `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, or `--no-verify`.
