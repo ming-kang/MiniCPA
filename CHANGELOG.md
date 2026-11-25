@@ -4,6 +4,8 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-25
+
 ### Changed
 
 - Probe the independent `cpa status` checks concurrently — process identity and HTTP readiness now run in parallel with the autostart inspection instead of after it, so `cpa status` no longer waits for an extra shell or PowerShell probe before answering. Output and exit-code semantics are unchanged.
