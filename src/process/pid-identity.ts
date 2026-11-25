@@ -37,41 +37,62 @@ export function classifyDarwinComm(commOutput: string, expectedExe: string): Pro
   return imageMatchesExpectedExe(out, expectedExe) ? "unknown" : "mismatch";
 }
 
-export async function classifyProcessIdentity(
-  pid: number,
-  expectedExe: string,
-): Promise<ProcessIdentity> {
-  const expected = expectedExe || "";
-  if (!expected) return "unknown";
+export type IdentityFacts =
+  | { kind: "executable"; executable?: string; errorCode?: string }
+  | { kind: "comm"; comm?: string };
 
-  try {
-    if (process.platform === "linux") {
-      try {
-        const exeLink = fs.readlinkSync(`/proc/${pid}/exe`);
-        return exePathsMatch(exeLink, expected) ? "match" : "mismatch";
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        return code === "ENOENT" ? "mismatch" : "unknown";
-      }
-    }
-
-    if (process.platform === "win32") {
-      const { executable } = await readWindowsProcess(pid);
-      return executable ? (exePathsMatch(executable, expected) ? "match" : "mismatch") : "unknown";
-    }
-
-    if (process.platform === "darwin") {
-      // -ww sets unlimited termwidth; without it BSD ps truncates to 79 cols in pipes.
-      const result = await runCommand("ps", ["-ww", "-p", String(pid), "-o", "comm="], {
-        timeoutMs: 3000,
-      });
-      return result.code === 0 ? classifyDarwinComm(result.stdout, expected) : "unknown";
-    }
-  } catch {
-    return "unknown";
+export function classifyIdentity(facts: IdentityFacts, expectedExe: string): ProcessIdentity {
+  if (!expectedExe) return "unknown";
+  if (facts.kind === "comm") {
+    // A failed ps probe is unknown; empty output is an observed fact and stays mismatch.
+    return facts.comm === undefined ? "unknown" : classifyDarwinComm(facts.comm, expectedExe);
   }
+  if (facts.executable) {
+    return exePathsMatch(facts.executable, expectedExe) ? "match" : "mismatch";
+  }
+  // ENOENT means the /proc/<pid>/exe entry is gone with the process, so it cannot be the expected exe.
+  return facts.errorCode === "ENOENT" ? "mismatch" : "unknown";
+}
 
-  return "unknown";
+async function probeLinuxExecutable(pid: number): Promise<IdentityFacts> {
+  try {
+    return { kind: "executable", executable: fs.readlinkSync(`/proc/${pid}/exe`) };
+  } catch (error) {
+    return { kind: "executable", errorCode: (error as NodeJS.ErrnoException).code };
+  }
+}
+
+async function probeDarwinComm(pid: number): Promise<IdentityFacts> {
+  try {
+    // -ww sets unlimited termwidth; without it BSD ps truncates to 79 cols in pipes.
+    const result = await runCommand("ps", ["-ww", "-p", String(pid), "-o", "comm="], {
+      timeoutMs: 3000,
+    });
+    return result.code === 0 ? { kind: "comm", comm: result.stdout } : { kind: "comm" };
+  } catch {
+    return { kind: "comm" };
+  }
+}
+
+function probeIdentityFacts(pid: number): Promise<IdentityFacts> {
+  if (process.platform === "linux") return probeLinuxExecutable(pid);
+  if (process.platform === "darwin") return probeDarwinComm(pid);
+  return Promise.resolve({ kind: "executable" });
+}
+
+async function probeProcessFacts(
+  pid: number,
+): Promise<{ startMarker?: string; identityFacts: IdentityFacts }> {
+  if (process.platform === "win32") {
+    // One PowerShell probe yields both facts; probing them separately would double its cost.
+    const { startMarker, executable } = await readWindowsProcess(pid);
+    return { startMarker, identityFacts: { kind: "executable", executable } };
+  }
+  const [startMarker, identityFacts] = await Promise.all([
+    readProcessStartMarker(pid),
+    probeIdentityFacts(pid),
+  ]);
+  return { startMarker, identityFacts };
 }
 
 export async function readProcessStartMarker(pid: number): Promise<string | undefined> {
@@ -197,21 +218,6 @@ export async function inspectProcessIdentity(
   currentMarker?: string;
   identity: ProcessIdentity;
 }> {
-  if (process.platform === "win32") {
-    const facts = await readWindowsProcess(pid);
-    return {
-      currentMarker: facts.startMarker,
-      identity:
-        expectedExe && facts.executable
-          ? exePathsMatch(facts.executable, expectedExe)
-            ? "match"
-            : "mismatch"
-          : "unknown",
-    };
-  }
-  const [currentMarker, identity] = await Promise.all([
-    readProcessStartMarker(pid),
-    classifyProcessIdentity(pid, expectedExe),
-  ]);
-  return { currentMarker, identity };
+  const { startMarker, identityFacts } = await probeProcessFacts(pid);
+  return { currentMarker: startMarker, identity: classifyIdentity(identityFacts, expectedExe) };
 }

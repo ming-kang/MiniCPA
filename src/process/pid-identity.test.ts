@@ -3,17 +3,76 @@ import { describe, it } from "node:test";
 import {
   canonicalizeStartMarker,
   classifyDarwinComm,
-  classifyProcessIdentity,
+  classifyIdentity,
   compareStartMarkers,
   exePathsMatch,
   imageMatchesExpectedExe,
+  inspectProcessIdentity,
   isTaggedStartMarker,
   readProcessStartMarker,
 } from "./pid-identity.js";
 
-describe("classifyProcessIdentity", () => {
+describe("inspectProcessIdentity", () => {
   it("recognizes the current executable by exact path", async () => {
-    assert.equal(await classifyProcessIdentity(process.pid, process.execPath), "match");
+    const { identity } = await inspectProcessIdentity(process.pid, process.execPath);
+    assert.equal(identity, "match");
+  });
+});
+
+describe("classifyIdentity", () => {
+  it("matches when the probed executable resolves to the expected path", () => {
+    assert.equal(
+      classifyIdentity({ kind: "executable", executable: process.execPath }, process.execPath),
+      "match",
+    );
+  });
+
+  it("mismatches when the probed executable is a different binary", () => {
+    assert.equal(
+      classifyIdentity(
+        { kind: "executable", executable: process.execPath },
+        "/definitely/not/the-expected-binary",
+      ),
+      "mismatch",
+    );
+  });
+
+  it("treats ENOENT from the executable probe as mismatch", () => {
+    assert.equal(
+      classifyIdentity({ kind: "executable", errorCode: "ENOENT" }, process.execPath),
+      "mismatch",
+    );
+  });
+
+  it("treats other probe errors and missing facts as unknown", () => {
+    for (const errorCode of ["EACCES", "EIO", undefined]) {
+      assert.equal(
+        classifyIdentity({ kind: "executable", errorCode }, process.execPath),
+        "unknown",
+      );
+    }
+    assert.equal(classifyIdentity({ kind: "executable" }, process.execPath), "unknown");
+  });
+
+  it("fails closed to unknown for an empty expected exe", () => {
+    assert.equal(
+      classifyIdentity({ kind: "executable", executable: process.execPath }, ""),
+      "unknown",
+    );
+    assert.equal(classifyIdentity({ kind: "comm", comm: process.execPath }, ""), "unknown");
+  });
+
+  it("treats a failed comm probe as unknown", () => {
+    assert.equal(classifyIdentity({ kind: "comm" }, process.execPath), "unknown");
+  });
+
+  it("classifies comm output with darwin semantics", () => {
+    assert.equal(
+      classifyIdentity({ kind: "comm", comm: process.execPath }, process.execPath),
+      "match",
+    );
+    assert.equal(classifyIdentity({ kind: "comm", comm: "" }, process.execPath), "mismatch");
+    assert.equal(classifyIdentity({ kind: "comm", comm: "sshd" }, process.execPath), "mismatch");
   });
 });
 
