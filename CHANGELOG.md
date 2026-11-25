@@ -6,6 +6,7 @@ This file records MiniCPA npm releases beginning with 0.1.3. Earlier repository 
 
 ### Changed
 
+- Probe the independent `cpa status` checks concurrently — process identity and HTTP readiness now run in parallel with the autostart inspection instead of after it, so `cpa status` no longer waits for an extra shell or PowerShell probe before answering. Output and exit-code semantics are unchanged.
 - Trim `RELEASING.md` to the release procedure and failure recovery, and slim `docs/` to design rationale, risk analysis, and trust decisions. Mechanisms, file layouts, and protocols are no longer narrated there; the source code is their reference.
 
 ## [0.5.1] - 2026-11-04

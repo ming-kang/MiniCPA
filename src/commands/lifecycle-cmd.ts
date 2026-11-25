@@ -125,20 +125,36 @@ export type StatusDependencies = {
   inspectAutostartState?: () => Promise<AutostartState>;
 };
 
-export async function runStatus(cliVersion: string, deps?: StatusDependencies): Promise<void> {
-  const ctx = createContext();
-  // Read-only: an unlocked command must not repair (or race) the instance home.
-  const running = await inspectRunning(ctx.home);
-  const installed = inspectRuntimeInstallation(ctx.home);
-  const initialized = fs.existsSync(ctx.layout.configFile);
-  let autostart: AutostartState | undefined;
+async function probeRuntimeStatus(
+  home: string,
+): Promise<{ running: RunningInfo | undefined; reachable: boolean }> {
+  const running = await inspectRunning(home);
+  // Probing a stopped service would spin for the full deadline: the probe retries even on connection-refused.
+  const reachable = running ? await waitForAnyHttpOk(readinessUrls(), 2000) : false;
+  return { running, reachable };
+}
+
+async function probeAutostartStatus(
+  deps?: StatusDependencies,
+): Promise<AutostartState | undefined> {
   try {
-    autostart = await (deps?.inspectAutostartState ?? inspectAutostartState)();
+    return await (deps?.inspectAutostartState ?? inspectAutostartState)();
   } catch (err) {
     const reason = err instanceof Error && err.message ? err.message : String(err);
     console.error(`Warning: could not inspect autostart: ${reason}`);
+    return undefined;
   }
-  const reachable = running ? await waitForAnyHttpOk(readinessUrls(), 2000) : false;
+}
+
+export async function runStatus(cliVersion: string, deps?: StatusDependencies): Promise<void> {
+  const ctx = createContext();
+  // Read-only: an unlocked command must not repair (or race) the instance home.
+  const [{ running, reachable }, autostart] = await Promise.all([
+    probeRuntimeStatus(ctx.home),
+    probeAutostartStatus(deps),
+  ]);
+  const installed = inspectRuntimeInstallation(ctx.home);
+  const initialized = fs.existsSync(ctx.layout.configFile);
   const version =
     installed.executable?.kind === "active" ? installed.state.runtimeVersion : undefined;
 
@@ -205,7 +221,7 @@ export type TuiDeps = {
   runRuntimeAttached?: typeof runRuntimeAttached;
 };
 
-// cpa tui holds no lock, so it must not trigger repairing resolvers.
+// cpa tui holds no lock, so it must stay with read-only inspections.
 export async function runTui(deps?: TuiDeps): Promise<void> {
   const ctx = createContext();
   const inspect = deps?.inspectRunning ?? inspectRunning;

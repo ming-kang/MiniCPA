@@ -17,6 +17,7 @@ import { withMiniCpaLock } from "../process/lock.js";
 import { writeInstallState, writePidRecord } from "../state.js";
 import { withHttpFixture, withHttpsFixture } from "../test-fixtures/http-server.js";
 import { captureConsole } from "../test-fixtures/test-env.js";
+import { sleep } from "../util.js";
 import {
   formatLocalTime,
   formatUptime,
@@ -461,9 +462,8 @@ describe("runStatus", () => {
     const home = writeHomeForBase(closedBase);
     // Crash residue from an interrupted update: only the rollback binary is left.
     fs.writeFileSync(backupExecutablePath(home), "rollback-binary");
-    // A record for a live process is what makes the repairing lookup act: it
-    // resolves the executable (restoring the `.bak` over the active name) before
-    // it can decide whether the PID really is the managed CPA.
+    // A record for a live process makes the status lookup resolve the executable
+    // before it can decide whether the PID really is the managed CPA.
     writePidRecord(home, {
       pid: process.pid,
       exe: process.execPath,
@@ -494,6 +494,52 @@ describe("runStatus", () => {
       "Warning: could not inspect autostart: user manager unavailable",
     ]);
     assert.equal(process.exitCode, 1);
+  });
+
+  it("probes HTTP readiness while the autostart inspection is still pending", async () => {
+    useTempRoot();
+    let hits = 0;
+    await withHttpFixture(
+      {
+        "/": (_req, res) => {
+          hits++;
+          res.end("ok");
+        },
+        "/management.html": (_req, res) => {
+          hits++;
+          res.end("ok");
+        },
+      },
+      async (baseUrl) => {
+        const home = writeHomeForBase(baseUrl);
+        writePidRecord(home, {
+          pid: process.pid,
+          exe: process.execPath,
+          startedAt: new Date().toISOString(),
+        });
+        let release!: () => void;
+        const gate = new Promise<AutostartState>((resolve) => {
+          release = () => resolve("off");
+        });
+        // A serial probe order would deadlock here: the HTTP probe could never fire
+        // while the autostart gate stays closed.
+        const pending = captureConsole(() =>
+          runStatus("0.4.3", { inspectAutostartState: () => gate }),
+        );
+        try {
+          for (let attempt = 0; attempt < 100 && hits === 0; attempt++) await sleep(50);
+          assert.ok(hits > 0, "the HTTP probe must not wait for the autostart inspection");
+        } finally {
+          release();
+        }
+        const output = await pending;
+        assert.ok(output.stdout.includes("Autostart    off"), output.stdout.join("\n"));
+        assert.ok(
+          output.stdout.includes(`API          ${baseUrl} (reachable)`),
+          output.stdout.join("\n"),
+        );
+      },
+    );
   });
 
   it("reports the recorded version without executing the active binary", async () => {
